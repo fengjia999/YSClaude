@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { View, FlatList, Text, Pressable, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, FlatList, Text, Pressable, StyleSheet, KeyboardAvoidingView, Platform, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { colors } from '../src/theme/colors';
 import { useChatStore } from '../src/stores/chat';
@@ -64,27 +64,12 @@ export default function ChatScreen() {
         ListEmptyComponent={<EmptyState />}
       />
 
-      {/* Stop button */}
-      {isStreaming && (
-        <Pressable style={styles.stopButton} onPress={stopStreaming}>
-          <Text style={styles.stopText}>■ 停止生成</Text>
-        </Pressable>
-      )}
-
-      {/* Disclaimer */}
-      {messages.length > 0 && !isStreaming && (
-        <View style={styles.disclaimer}>
-          <Text style={styles.disclaimerLogo}>✺</Text>
-          <Text style={styles.disclaimerText}>
-            Claude is AI and can make mistakes.{'\n'}Please double-check responses.
-          </Text>
-        </View>
-      )}
-
       {/* Input */}
       <ChatInput
         onSend={sendMessage}
         disabled={isStreaming}
+        isStreaming={isStreaming}
+        onStop={stopStreaming}
         onModelPress={() => setShowModelSelector(true)}
       />
 
@@ -98,7 +83,7 @@ export default function ChatScreen() {
 function EmptyState() {
   return (
     <View style={styles.emptyContainer}>
-      <Text style={styles.emptyLogo}>✺</Text>
+      <Image source={require('../assets/claudelogo.png')} style={styles.emptyLogo} resizeMode="contain" />
       <Text style={styles.emptyText}>有什么我可以帮你的吗？</Text>
     </View>
   );
@@ -151,35 +136,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     flexGrow: 1,
   },
-  stopButton: {
-    alignSelf: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 16,
-    backgroundColor: colors.surface,
-    marginBottom: 4,
-  },
-  stopText: {
-    fontSize: 13,
-    color: colors.textSecondary,
-  },
-  disclaimer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 6,
-    gap: 8,
-  },
-  disclaimerLogo: {
-    fontSize: 20,
-    color: colors.primary,
-  },
-  disclaimerText: {
-    fontSize: 12,
-    color: colors.disclaimer,
-    textAlign: 'right',
-    lineHeight: 16,
-  },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -187,8 +143,8 @@ const styles = StyleSheet.create({
     paddingTop: 120,
   },
   emptyLogo: {
-    fontSize: 48,
-    color: colors.primary,
+    width: 64,
+    height: 64,
     marginBottom: 16,
   },
   emptyText: {

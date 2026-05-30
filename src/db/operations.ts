@@ -78,6 +78,11 @@ export async function updateMessageContent(id: string, content: string): Promise
   await db.runAsync('UPDATE messages SET content = ? WHERE id = ?', [content, id]);
 }
 
+export async function deleteMessage(id: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('DELETE FROM messages WHERE id = ?', [id]);
+}
+
 export async function getMessagesByConversation(conversationId: string): Promise<Message[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<{

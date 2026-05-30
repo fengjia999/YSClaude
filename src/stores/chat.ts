@@ -8,6 +8,7 @@ import {
   updateConversation,
   insertMessage,
   updateMessageContent,
+  deleteMessage,
   getMessagesByConversation,
 } from '../db/operations';
 
@@ -22,6 +23,9 @@ interface ChatState {
   newConversation: () => void;
   loadConversation: (id: string) => Promise<void>;
   setError: (error: string | null) => void;
+  editMessage: (id: string, content: string) => Promise<void>;
+  removeMessage: (id: string) => Promise<void>;
+  regenerate: () => Promise<void>;
 }
 
 let abortController: AbortController | null = null;
@@ -93,6 +97,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const apiMessages = allMessages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .slice(0, -1)
+      .filter((_, index) => {
+        const msgNum = index + 1;
+        return !settings.hiddenRanges.some(
+          (r) => msgNum >= r.from && msgNum <= r.to
+        );
+      })
       .map((m) => ({ role: m.role, content: m.content }));
 
     abortController = new AbortController();
@@ -107,6 +117,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             { role: 'system', content: settings.systemPrompt },
             ...apiMessages,
           ],
+          maxTokens: settings.maxOutputTokens || undefined,
         },
         (token) => {
           set((state) => {
@@ -159,4 +170,118 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setError: (error) => set({ error }),
+
+  editMessage: async (id: string, content: string) => {
+    await updateMessageContent(id, content);
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === id ? { ...m, content } : m
+      ),
+    }));
+  },
+
+  removeMessage: async (id: string) => {
+    await deleteMessage(id);
+    set((state) => ({
+      messages: state.messages.filter((m) => m.id !== id),
+    }));
+  },
+
+  regenerate: async () => {
+    const { messages, conversationId, isStreaming } = get();
+    if (isStreaming || !conversationId) return;
+
+    const lastUserIndex = [...messages].reverse().findIndex((m) => m.role === 'user');
+    if (lastUserIndex === -1) return;
+    const userMsg = messages[messages.length - 1 - lastUserIndex];
+
+    const lastAssistant = messages[messages.length - 1];
+    if (lastAssistant && lastAssistant.role === 'assistant') {
+      await deleteMessage(lastAssistant.id);
+      set((state) => ({
+        messages: state.messages.filter((m) => m.id !== lastAssistant.id),
+      }));
+    }
+
+    const settings = useSettingsStore.getState();
+    const config = settings.apiConfigs[settings.activeConfigIndex];
+    if (!config || !config.baseUrl || !config.apiKey) {
+      set({ error: '请先在设置中配置 API' });
+      return;
+    }
+
+    const assistantMessage: Message = {
+      id: randomUUID(),
+      role: 'assistant',
+      content: '',
+      createdAt: Date.now(),
+    };
+
+    set((state) => ({
+      messages: [...state.messages, assistantMessage],
+      isStreaming: true,
+      error: null,
+    }));
+
+    await insertMessage(conversationId, assistantMessage);
+
+    const allMessages = get().messages;
+    const apiMessages = allMessages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .slice(0, -1)
+      .filter((_, index) => {
+        const msgNum = index + 1;
+        return !settings.hiddenRanges.some(
+          (r) => msgNum >= r.from && msgNum <= r.to
+        );
+      })
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    abortController = new AbortController();
+
+    try {
+      await streamChat(
+        {
+          baseUrl: config.baseUrl,
+          apiKey: config.apiKey,
+          model: config.model,
+          messages: [
+            { role: 'system', content: settings.systemPrompt },
+            ...apiMessages,
+          ],
+          maxTokens: settings.maxOutputTokens || undefined,
+        },
+        (token) => {
+          set((state) => {
+            const msgs = [...state.messages];
+            const last = msgs[msgs.length - 1];
+            if (last && last.role === 'assistant') {
+              msgs[msgs.length - 1] = { ...last, content: last.content + token };
+            }
+            return { messages: msgs };
+          });
+        },
+        abortController.signal
+      );
+
+      const finalMessages = get().messages;
+      const lastMsg = finalMessages[finalMessages.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant') {
+        await updateMessageContent(lastMsg.id, lastMsg.content);
+      }
+      await updateConversation(conversationId, { updatedAt: Date.now() });
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        set({ error: err.message || '请求失败' });
+      }
+      const finalMessages = get().messages;
+      const lastMsg = finalMessages[finalMessages.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant') {
+        await updateMessageContent(lastMsg.id, lastMsg.content);
+      }
+    } finally {
+      set({ isStreaming: false });
+      abortController = null;
+    }
+  },
 }));

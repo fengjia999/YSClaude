@@ -1,18 +1,18 @@
 # YSClaude
 
-精简版 Claude 客户端，React Native + Expo 构建，打包为 Android APK。
+精简版 Claude 客户端，React Native + Expo 构建，打包为 Android APK。个人使用。
 
 ## 技术栈
 
 | 层面 | 选型 |
 |------|------|
-| 框架 | React Native + Expo (SDK 52) |
+| 框架 | React Native + Expo (SDK 56) |
 | 路由 | expo-router |
 | 状态管理 | Zustand (persist) |
 | 本地存储 | expo-sqlite |
 | API 格式 | OpenAI 兼容 (`/v1/chat/completions`) |
 | Markdown | @ronradtke/react-native-markdown-display |
-| TTS | expo-speech |
+| TTS | MiniMax T2A (expo-audio + expo-file-system) |
 | 打包 | EAS Build → APK |
 
 ## 功能
@@ -24,15 +24,29 @@
 - 对话历史管理（SQLite 持久化、恢复、删除、重命名）
 - 多 API 配置管理（命名保存、同名覆盖、拉取模型列表、测试连接）
 - 多模型随时切换
+- TTS 语音播放（MiniMax 语音合成，支持自定义 Voice ID）
+- System Prompt 自定义
+- 消息隐藏（节省 token）
+- AI 输出长度限制
 
 ### 扩展（规划中）
-- TTS 语音播放
 - MCP Tool 调用
   - Memory Vault 记忆库检索
   - Tavily 联网搜索
   - 文生图（OpenAI 格式）
   - 本地文件管理
-- System Prompt 预设管理
+
+## TTS 配置
+
+使用 MiniMax 语音合成服务，需在设置 > TTS 配置中填写：
+
+- **Group ID** — MiniMax 控制台获取
+- **API Key** — MiniMax API 密钥
+- **Voice ID** — 音色 ID（如 `male-qn-qingse`、`Wise_Woman` 等）
+- **模型** — `speech-02-hd` / `speech-02-turbo` / `speech-2.8-hd`
+- 语速、音量、音调可调
+
+配置完成后可点击「测试播放」验证，保存后持久化到本地。
 
 ## 运行
 
@@ -66,7 +80,8 @@ src/
 │   ├── ChatInput.tsx       # 输入框 + 工具栏
 │   └── ModelSelector.tsx   # 模型切换弹窗
 ├── services/
-│   └── api.ts              # 流式 API 调用（SSE）
+│   ├── api.ts              # 流式 API 调用（SSE）
+│   └── tts.ts              # MiniMax TTS 语音合成
 ├── stores/
 │   ├── chat.ts             # 对话状态 + 持久化
 │   └── settings.ts         # 配置状态（zustand persist + sqlite）
@@ -86,9 +101,9 @@ src/
 |------|------|------|
 | P0 | 项目骨架 + 对话 + 流式 + Markdown | ✅ |
 | P1 | SQLite 持久化 + 历史管理 + 多配置 | ✅ |
-| P2 | MCP Tool 框架 + Memory Vault | - |
-| P3 | Tavily 搜索 + 文生图 | - |
-| P4 | TTS + System Prompt 管理 | - |
+| P2 | TTS 语音合成 + System Prompt + 对话设置 | ✅ |
+| P3 | MCP Tool 框架 + Memory Vault | - |
+| P4 | Tavily 搜索 + 文生图 | - |
 | P5 | EAS Build 打包 APK | - |
 
 ## UI 设计
@@ -97,7 +112,7 @@ src/
 - 顶栏：☰ 历史 / ✎ 新建 / ⋯ 设置
 - 对话气泡：用户右对齐浅棕色，助手左对齐无背景 + Markdown
 - 底部输入框：大圆角，内嵌模型选择器 pill
-- 助手消息下方操作图标行
+- 助手消息下方操作图标行（复制 / 删除 / TTS 播放）
 
 ## License
 

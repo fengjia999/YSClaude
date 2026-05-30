@@ -7,18 +7,41 @@ export interface NamedAPIConfig extends APIConfig {
   name: string;
 }
 
+export interface HiddenRange {
+  from: number;
+  to: number;
+}
+
+export interface TTSConfig {
+  groupId: string;
+  apiKey: string;
+  model: string;
+  voiceId: string;
+  speed: number;
+  vol: number;
+  pitch: number;
+}
+
 interface SettingsState {
   _hydrated: boolean;
   apiConfigs: NamedAPIConfig[];
   activeConfigIndex: number;
   systemPrompt: string;
   systemPrompts: { name: string; content: string }[];
+  hiddenRanges: HiddenRange[];
+  maxOutputTokens: number | null;
+  ttsConfig: TTSConfig;
 
   setActiveConfig: (index: number) => void;
   saveAPIConfig: (config: NamedAPIConfig) => void;
   removeAPIConfig: (index: number) => void;
   setSystemPrompt: (prompt: string) => void;
   setSystemPrompts: (prompts: { name: string; content: string }[]) => void;
+  setHiddenRanges: (ranges: HiddenRange[]) => void;
+  addHiddenRange: (range: HiddenRange) => void;
+  removeHiddenRange: (index: number) => void;
+  setMaxOutputTokens: (tokens: number | null) => void;
+  setTTSConfig: (config: Partial<TTSConfig>) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -31,6 +54,17 @@ export const useSettingsStore = create<SettingsState>()(
       systemPrompts: [
         { name: '默认', content: 'You are a helpful assistant.' },
       ],
+      hiddenRanges: [],
+      maxOutputTokens: null,
+      ttsConfig: {
+        groupId: '',
+        apiKey: '',
+        model: 'speech-02-hd',
+        voiceId: '',
+        speed: 1,
+        vol: 1,
+        pitch: 0,
+      },
 
       setActiveConfig: (index) => set({ activeConfigIndex: index }),
 
@@ -55,8 +89,18 @@ export const useSettingsStore = create<SettingsState>()(
         })),
 
       setSystemPrompt: (prompt) => set({ systemPrompt: prompt }),
-
       setSystemPrompts: (prompts) => set({ systemPrompts: prompts }),
+
+      setHiddenRanges: (ranges) => set({ hiddenRanges: ranges }),
+      addHiddenRange: (range) =>
+        set((state) => ({ hiddenRanges: [...state.hiddenRanges, range] })),
+      removeHiddenRange: (index) =>
+        set((state) => ({
+          hiddenRanges: state.hiddenRanges.filter((_, i) => i !== index),
+        })),
+      setMaxOutputTokens: (tokens) => set({ maxOutputTokens: tokens }),
+      setTTSConfig: (config) =>
+        set((state) => ({ ttsConfig: { ...state.ttsConfig, ...config } })),
     }),
     {
       name: 'ysclaude-settings',
@@ -66,6 +110,9 @@ export const useSettingsStore = create<SettingsState>()(
         activeConfigIndex: state.activeConfigIndex,
         systemPrompt: state.systemPrompt,
         systemPrompts: state.systemPrompts,
+        hiddenRanges: state.hiddenRanges,
+        maxOutputTokens: state.maxOutputTokens,
+        ttsConfig: state.ttsConfig,
       }),
       onRehydrateStorage: () => () => {
         useSettingsStore.setState({ _hydrated: true });

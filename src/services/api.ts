@@ -3,6 +3,7 @@ interface ChatRequest {
   apiKey: string;
   model: string;
   messages: { role: string; content: string }[];
+  maxTokens?: number;
 }
 
 export async function streamChat(
@@ -10,9 +11,18 @@ export async function streamChat(
   onToken: (token: string) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const { baseUrl, apiKey, model, messages } = request;
+  const { baseUrl, apiKey, model, messages, maxTokens } = request;
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
+
+  const body: Record<string, any> = {
+    model,
+    messages,
+    stream: true,
+  };
+  if (maxTokens) {
+    body.max_tokens = maxTokens;
+  }
 
   const response = await fetch(url, {
     method: 'POST',
@@ -20,11 +30,7 @@ export async function streamChat(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey.trim()}`,
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: true,
-    }),
+    body: JSON.stringify(body),
     signal,
   });
 

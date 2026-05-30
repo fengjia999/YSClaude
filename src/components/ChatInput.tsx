@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
-import { View, TextInput, Pressable, Text, StyleSheet } from 'react-native';
+import { View, TextInput, Pressable, Text, StyleSheet, Image } from 'react-native';
 import { colors } from '../theme/colors';
 import { useSettingsStore } from '../stores/settings';
 
 interface Props {
   onSend: (text: string) => void;
   disabled?: boolean;
+  isStreaming?: boolean;
+  onStop?: () => void;
   onModelPress?: () => void;
 }
 
-export function ChatInput({ onSend, disabled, onModelPress }: Props) {
+export function ChatInput({ onSend, disabled, isStreaming, onStop, onModelPress }: Props) {
   const [text, setText] = useState('');
   const { apiConfigs, activeConfigIndex } = useSettingsStore();
   const current = apiConfigs[activeConfigIndex];
@@ -20,6 +22,20 @@ export function ChatInput({ onSend, disabled, onModelPress }: Props) {
     if (!trimmed || disabled) return;
     onSend(trimmed);
     setText('');
+  };
+
+  const handleStopOrSend = () => {
+    if (isStreaming) {
+      onStop?.();
+    } else if (text.trim()) {
+      handleSend();
+    }
+  };
+
+  const getSendIcon = () => {
+    if (isStreaming) return require('../../assets/stopsend.png');
+    if (text.trim()) return require('../../assets/send2.png');
+    return require('../../assets/send1.png');
   };
 
   return (
@@ -36,8 +52,8 @@ export function ChatInput({ onSend, disabled, onModelPress }: Props) {
           editable={!disabled}
         />
         <View style={styles.toolbar}>
-          <Pressable style={styles.plusButton}>
-            <Text style={styles.plusIcon}>＋</Text>
+          <Pressable style={styles.optionsButton}>
+            <Image source={require('../../assets/optionsbutton.png')} style={styles.optionsImage} resizeMode="contain" />
           </Pressable>
 
           <Pressable style={styles.modelPill} onPress={onModelPress}>
@@ -45,20 +61,12 @@ export function ChatInput({ onSend, disabled, onModelPress }: Props) {
           </Pressable>
 
           <View style={styles.rightButtons}>
-            {text.trim() ? (
-              <Pressable style={styles.sendButton} onPress={handleSend} disabled={disabled}>
-                <Text style={styles.sendIcon}>↑</Text>
-              </Pressable>
-            ) : (
-              <>
-                <Pressable style={styles.iconButton}>
-                  <Text style={styles.micIcon}>🎙</Text>
-                </Pressable>
-                <Pressable style={styles.voiceButton}>
-                  <Text style={styles.voiceIcon}>⦿</Text>
-                </Pressable>
-              </>
-            )}
+            <Pressable style={styles.voiceButton}>
+              <Image source={require('../../assets/voice.png')} style={styles.voiceImage} resizeMode="contain" />
+            </Pressable>
+            <Pressable style={styles.sendButton} onPress={handleStopOrSend}>
+              <Image source={getSendIcon()} style={styles.sendImage} resizeMode="contain" />
+            </Pressable>
           </View>
         </View>
       </View>
@@ -92,19 +100,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
   },
-  plusButton: {
+  optionsButton: {
     width: 32,
     height: 32,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: colors.iconGray,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  plusIcon: {
-    fontSize: 16,
-    color: colors.iconGray,
-    marginTop: -1,
+  optionsImage: {
+    width: 28,
+    height: 28,
   },
   modelPill: {
     backgroundColor: colors.surfaceHover,
@@ -125,41 +129,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  iconButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 1.5,
-    borderColor: colors.iconGray,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  micIcon: {
-    fontSize: 16,
-  },
   voiceButton: {
     width: 36,
     height: 36,
-    borderRadius: 18,
-    backgroundColor: '#1A1A1A',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  voiceIcon: {
-    fontSize: 16,
-    color: '#FFFFFF',
+  voiceImage: {
+    width: 30,
+    height: 30,
   },
   sendButton: {
     width: 36,
     height: 36,
-    borderRadius: 18,
-    backgroundColor: '#1A1A1A',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  sendIcon: {
-    fontSize: 18,
-    color: '#FFFFFF',
-    fontWeight: '700',
+  sendImage: {
+    width: 30,
+    height: 30,
   },
 });
