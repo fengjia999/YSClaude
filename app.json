@@ -1,11 +1,12 @@
 {
   "expo": {
-    "name": "YSClaude_temp",
-    "slug": "YSClaude_temp",
+    "name": "YSClaude",
+    "slug": "YSClaude",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "scheme": "ysclaude",
     "ios": {
       "supportsTablet": true
     },
@@ -16,10 +17,12 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "package": "com.ysclaude.app"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
-    }
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": ["expo-router"]
   }
 }

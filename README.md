@@ -1,0 +1,104 @@
+# YSClaude
+
+精简版 Claude 客户端，React Native + Expo 构建，打包为 Android APK。
+
+## 技术栈
+
+| 层面 | 选型 |
+|------|------|
+| 框架 | React Native + Expo (SDK 52) |
+| 路由 | expo-router |
+| 状态管理 | Zustand (persist) |
+| 本地存储 | expo-sqlite |
+| API 格式 | OpenAI 兼容 (`/v1/chat/completions`) |
+| Markdown | @ronradtke/react-native-markdown-display |
+| TTS | expo-speech |
+| 打包 | EAS Build → APK |
+
+## 功能
+
+### 核心（已完成）
+- 文本对话（OpenAI 兼容格式）
+- 流式输出（SSE 逐 token 渲染）
+- Markdown 渲染（代码块深色高亮）
+- 对话历史管理（SQLite 持久化、恢复、删除、重命名）
+- 多 API 配置管理（命名保存、同名覆盖、拉取模型列表、测试连接）
+- 多模型随时切换
+
+### 扩展（规划中）
+- TTS 语音播放
+- MCP Tool 调用
+  - Memory Vault 记忆库检索
+  - Tavily 联网搜索
+  - 文生图（OpenAI 格式）
+  - 本地文件管理
+- System Prompt 预设管理
+
+## 运行
+
+```bash
+# 安装依赖
+npm install
+
+# 启动开发服务器
+npx expo start
+
+# 手机测试（Expo Go 扫码）
+npx expo start --tunnel
+
+# 浏览器预览
+npx expo start --web
+```
+
+## 项目结构
+
+```
+app/                        # expo-router 页面
+├── _layout.tsx             # 根布局（Stack）
+├── index.tsx               # 对话主界面
+├── history.tsx             # 对话历史（☰ 触发）
+├── settings.tsx            # 设置页（⋯ 触发）
+└── chat/[id].tsx           # 历史对话详情
+
+src/
+├── components/
+│   ├── ChatBubble.tsx      # 消息气泡 + 操作图标
+│   ├── ChatInput.tsx       # 输入框 + 工具栏
+│   └── ModelSelector.tsx   # 模型切换弹窗
+├── services/
+│   └── api.ts              # 流式 API 调用（SSE）
+├── stores/
+│   ├── chat.ts             # 对话状态 + 持久化
+│   └── settings.ts         # 配置状态（zustand persist + sqlite）
+├── db/
+│   ├── database.ts         # SQLite 初始化 + schema
+│   ├── operations.ts       # 对话/消息 CRUD
+│   └── kv-storage.ts       # KV 存储适配器
+├── types/
+│   └── index.ts            # TypeScript 类型定义
+└── theme/
+    └── colors.ts           # 主题配色
+```
+
+## 开发阶段
+
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| P0 | 项目骨架 + 对话 + 流式 + Markdown | ✅ |
+| P1 | SQLite 持久化 + 历史管理 + 多配置 | ✅ |
+| P2 | MCP Tool 框架 + Memory Vault | - |
+| P3 | Tavily 搜索 + 文生图 | - |
+| P4 | TTS + System Prompt 管理 | - |
+| P5 | EAS Build 打包 APK | - |
+
+## UI 设计
+
+- 浅色暖米色主题，参考 Claude 官方客户端
+- 顶栏：☰ 历史 / ✎ 新建 / ⋯ 设置
+- 对话气泡：用户右对齐浅棕色，助手左对齐无背景 + Markdown
+- 底部输入框：大圆角，内嵌模型选择器 pill
+- 助手消息下方操作图标行
+
+## License
+
+MIT
