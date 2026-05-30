@@ -1,7 +1,10 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { View, FlatList, Text, Pressable, StyleSheet, KeyboardAvoidingView, Platform, Image } from 'react-native';
+import { View, FlatList, Text, Pressable, StyleSheet, Image } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useKeyboardHeight } from '../src/hooks/useKeyboardHeight';
 import { colors } from '../src/theme/colors';
+import { fonts } from '../src/theme/fonts';
 import { useChatStore } from '../src/stores/chat';
 import { ChatBubble } from '../src/components/ChatBubble';
 import { ChatInput } from '../src/components/ChatInput';
@@ -10,7 +13,9 @@ import { Message } from '../src/types';
 
 export default function ChatScreen() {
   const router = useRouter();
-  const { messages, isStreaming, error, sendMessage, stopStreaming } = useChatStore();
+  const insets = useSafeAreaInsets();
+  const keyboardHeight = useKeyboardHeight();
+  const { messages, isStreaming, error, addUserMessage, triggerResponse, stopStreaming } = useChatStore();
   const [showModelSelector, setShowModelSelector] = useState(false);
   const flatListRef = useRef<FlatList<Message>>(null);
 
@@ -22,19 +27,20 @@ export default function ChatScreen() {
     }
   }, [messages]);
 
-  return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={0}
-    >
+  // 页面主体内容。iOS 与 Android 共用，区别只在外层是否包 KeyboardAvoidingView。
+  const content = (
+    <>
       {/* Header */}
       <View style={styles.header}>
         <Pressable style={styles.headerButton} onPress={() => router.push('/history')}>
-          <Text style={styles.hamburgerIcon}>☰</Text>
+          <View style={styles.hamburgerLines}>
+            <View style={styles.hamburgerLine} />
+            <View style={styles.hamburgerLine} />
+            <View style={[styles.hamburgerLine, styles.hamburgerLineShort]} />
+          </View>
         </Pressable>
         <Pressable style={styles.headerButton} onPress={() => router.push('/settings')}>
-          <Text style={styles.menuIcon}>⋯</Text>
+          <Image source={require('../assets/setting.png')} style={styles.settingIcon} resizeMode="contain" />
         </Pressable>
       </View>
 
@@ -66,7 +72,8 @@ export default function ChatScreen() {
 
       {/* Input */}
       <ChatInput
-        onSend={sendMessage}
+        onSend={addUserMessage}
+        onTriggerResponse={triggerResponse}
         disabled={isStreaming}
         isStreaming={isStreaming}
         onStop={stopStreaming}
@@ -76,7 +83,23 @@ export default function ChatScreen() {
       {showModelSelector && (
         <ModelSelector onClose={() => setShowModelSelector(false)} />
       )}
-    </KeyboardAvoidingView>
+    </>
+  );
+
+  // SDK 54+ 起 Android 强制开启 edge-to-edge：窗口绘制到键盘后面，
+  // adjustResize 不再缩小 RN 根视图，KeyboardAvoidingView 也常拿不到正确的
+  // 键盘高度 —— 所以输入框不被顶起。改为直接监听 Keyboard 事件，自己给容器
+  // 底部加 paddingBottom 把内容顶上去，最可靠、零原生改动。
+  //
+  // keyboardHeight 是从窗口底部算起的完整高度（edge-to-edge 下含手势条区域）。
+  // ChatInput 自身已经垫了 insets.bottom 的底部安全区，键盘弹起时这块被键盘
+  // 盖住，所以容器只需顶起「键盘高度 - 底部安全区」，避免顶过头。
+  const liftHeight = keyboardHeight > 0 ? Math.max(keyboardHeight - insets.bottom, 0) : 0;
+
+  return (
+    <View style={[styles.container, { paddingBottom: liftHeight }]}>
+      {content}
+    </View>
   );
 }
 
@@ -109,14 +132,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 8,
   },
-  hamburgerIcon: {
-    fontSize: 22,
-    color: colors.text,
+  hamburgerLines: {
+    width: 20,
+    height: 16,
+    justifyContent: 'space-between',
   },
-  menuIcon: {
-    fontSize: 22,
-    color: colors.text,
-    fontWeight: '700',
+  hamburgerLine: {
+    width: 18,
+    height: 2,
+    backgroundColor: colors.text,
+    borderRadius: 1,
+  },
+  hamburgerLineShort: {
+    width: 9,
+  },
+  settingIcon: {
+    width: 22,
+    height: 22,
   },
   errorBanner: {
     backgroundColor: '#FEF2F2',

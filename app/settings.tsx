@@ -1,15 +1,16 @@
 import { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable,
-  ActivityIndicator, Alert, Modal, FlatList,
+  ActivityIndicator, Alert, Modal, FlatList, Switch,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { colors } from '../src/theme/colors';
-import { useSettingsStore, NamedAPIConfig, HiddenRange, TTSConfig } from '../src/stores/settings';
+import { fonts } from '../src/theme/fonts';
+import { useSettingsStore, NamedAPIConfig, HiddenRange, TTSConfig, MemoryVaultConfig, WebSearchConfig } from '../src/stores/settings';
 import { useChatStore } from '../src/stores/chat';
 import { playTTS, stopTTS } from '../src/services/tts';
 
-const TABS = ['API 配置', '对话设置', 'TTS 配置'] as const;
+const TABS = ['API 配置', '对话设置', 'TTS 配置', 'Tool 设置'] as const;
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -26,7 +27,7 @@ export default function SettingsScreen() {
       </View>
 
       {/* Tab Bar */}
-      <View style={styles.tabBar}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabBar} contentContainerStyle={styles.tabBarContent}>
         {TABS.map((tab, i) => (
           <Pressable
             key={tab}
@@ -38,11 +39,12 @@ export default function SettingsScreen() {
             </Text>
           </Pressable>
         ))}
-      </View>
+      </ScrollView>
 
       {activeTab === 0 && <APIConfigTab />}
       {activeTab === 1 && <ChatSettingsTab />}
       {activeTab === 2 && <TTSConfigTab />}
+      {activeTab === 3 && <ToolConfigTab />}
     </View>
   );
 }
@@ -501,6 +503,158 @@ function TTSConfigTab() {
   );
 }
 
+/* ==================== Tool 设置 Tab ==================== */
+
+function ToolConfigTab() {
+  const { memoryVaultConfig, webSearchConfig, setMemoryVaultConfig, setWebSearchConfig } = useSettingsStore();
+
+  // 记忆库本地 state
+  const [mvEnabled, setMvEnabled] = useState(memoryVaultConfig.enabled);
+  const [mvBaseUrl, setMvBaseUrl] = useState(memoryVaultConfig.baseUrl);
+  const [mvTopK, setMvTopK] = useState(String(memoryVaultConfig.topK));
+  const [mvTokenBudget, setMvTokenBudget] = useState(String(memoryVaultConfig.tokenBudget));
+  const [mvMaxCalls, setMvMaxCalls] = useState(String(memoryVaultConfig.maxToolCalls));
+  const [mvTesting, setMvTesting] = useState(false);
+
+  // 联网搜索本地 state
+  const [wsEnabled, setWsEnabled] = useState(webSearchConfig.enabled);
+  const [wsApiKey, setWsApiKey] = useState(webSearchConfig.tavilyApiKey);
+  const [wsMaxResults, setWsMaxResults] = useState(String(webSearchConfig.maxResults));
+
+  function handleSaveMemory() {
+    const topK = parseInt(mvTopK, 10);
+    const tokenBudget = parseInt(mvTokenBudget, 10);
+    const maxToolCalls = parseInt(mvMaxCalls, 10);
+    if (mvEnabled && !mvBaseUrl.trim()) {
+      Alert.alert('提示', '启用记忆库时请填写记忆库地址');
+      return;
+    }
+    setMemoryVaultConfig({
+      enabled: mvEnabled,
+      baseUrl: mvBaseUrl.trim(),
+      topK: isNaN(topK) || topK <= 0 ? 5 : topK,
+      tokenBudget: isNaN(tokenBudget) || tokenBudget <= 0 ? 2000 : tokenBudget,
+      maxToolCalls: isNaN(maxToolCalls) || maxToolCalls <= 0 ? 3 : maxToolCalls,
+    });
+    Alert.alert('已保存', '记忆库配置已保存');
+  }
+
+  async function handleTestMemory() {
+    if (!mvBaseUrl.trim()) {
+      Alert.alert('提示', '请先填写记忆库地址');
+      return;
+    }
+    setMvTesting(true);
+    try {
+      const url = `${mvBaseUrl.trim().replace(/\/$/, '')}/health`;
+      const resp = await fetch(url, { method: 'GET' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      Alert.alert('连接成功', '记忆库服务正常');
+    } catch (e: any) {
+      Alert.alert('连接失败', e.message);
+    } finally {
+      setMvTesting(false);
+    }
+  }
+
+  function handleSaveWebSearch() {
+    const maxResults = parseInt(wsMaxResults, 10);
+    if (wsEnabled && !wsApiKey.trim()) {
+      Alert.alert('提示', '启用联网搜索时请填写 Tavily API Key');
+      return;
+    }
+    setWebSearchConfig({
+      enabled: wsEnabled,
+      tavilyApiKey: wsApiKey.trim(),
+      maxResults: isNaN(maxResults) || maxResults <= 0 ? 5 : maxResults,
+    });
+    Alert.alert('已保存', '联网搜索配置已保存');
+  }
+
+  return (
+    <ScrollView style={styles.content}>
+      {/* ===== 记忆库 Memory Vault ===== */}
+      <Text style={styles.sectionTitle}>记忆库 Memory Vault</Text>
+      <Text style={styles.hint}>AI 可自主调用记忆库进行语义搜索和日记查询</Text>
+
+      <View style={styles.switchRow}>
+        <Text style={styles.label}>启用记忆库</Text>
+        <Switch
+          value={mvEnabled}
+          onValueChange={setMvEnabled}
+          trackColor={{ true: colors.primary }}
+        />
+      </View>
+
+      <View style={styles.field}>
+        <Text style={styles.label}>记忆库地址</Text>
+        <TextInput style={styles.input} value={mvBaseUrl} onChangeText={setMvBaseUrl}
+          placeholder="https://your-memory-vault.com" placeholderTextColor={colors.textTertiary}
+          autoCapitalize="none" />
+      </View>
+
+      <View style={styles.field}>
+        <Text style={styles.label}>返回条数 (top_k)</Text>
+        <TextInput style={styles.input} value={mvTopK} onChangeText={setMvTopK}
+          keyboardType="number-pad" placeholder="5" placeholderTextColor={colors.textTertiary} />
+      </View>
+
+      <View style={styles.field}>
+        <Text style={styles.label}>Token 预算</Text>
+        <TextInput style={styles.input} value={mvTokenBudget} onChangeText={setMvTokenBudget}
+          keyboardType="number-pad" placeholder="2000" placeholderTextColor={colors.textTertiary} />
+      </View>
+
+      <View style={styles.field}>
+        <Text style={styles.label}>最大查询次数（每轮）</Text>
+        <TextInput style={styles.input} value={mvMaxCalls} onChangeText={setMvMaxCalls}
+          keyboardType="number-pad" placeholder="3" placeholderTextColor={colors.textTertiary} />
+      </View>
+
+      <View style={styles.actions}>
+        <Pressable style={styles.testButton} onPress={handleTestMemory} disabled={mvTesting}>
+          {mvTesting ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.testButtonText}>测试连接</Text>}
+        </Pressable>
+        <Pressable style={styles.saveButton} onPress={handleSaveMemory}>
+          <Text style={styles.saveButtonText}>保存配置</Text>
+        </Pressable>
+      </View>
+
+      {/* ===== 联网搜索 Web Search ===== */}
+      <Text style={styles.sectionTitle}>联网搜索 Web Search</Text>
+      <Text style={styles.hint}>AI 可自主调用 Tavily 搜索互联网获取实时信息</Text>
+
+      <View style={styles.switchRow}>
+        <Text style={styles.label}>启用联网搜索</Text>
+        <Switch
+          value={wsEnabled}
+          onValueChange={setWsEnabled}
+          trackColor={{ true: colors.primary }}
+        />
+      </View>
+
+      <View style={styles.field}>
+        <Text style={styles.label}>Tavily API Key</Text>
+        <TextInput style={styles.input} value={wsApiKey} onChangeText={setWsApiKey}
+          placeholder="tvly-..." placeholderTextColor={colors.textTertiary}
+          secureTextEntry autoCapitalize="none" />
+      </View>
+
+      <View style={styles.field}>
+        <Text style={styles.label}>搜索结果数量</Text>
+        <TextInput style={styles.input} value={wsMaxResults} onChangeText={setWsMaxResults}
+          keyboardType="number-pad" placeholder="5" placeholderTextColor={colors.textTertiary} />
+      </View>
+
+      <View style={styles.actions}>
+        <Pressable style={styles.saveButton} onPress={handleSaveWebSearch}>
+          <Text style={styles.saveButtonText}>保存配置</Text>
+        </Pressable>
+      </View>
+    </ScrollView>
+  );
+}
+
 /* ==================== Styles ==================== */
 
 const styles = StyleSheet.create({
@@ -514,7 +668,10 @@ const styles = StyleSheet.create({
   backIcon: { fontSize: 22, color: colors.text },
   title: { flex: 1, fontSize: 18, fontWeight: '600', color: colors.text, textAlign: 'center' },
   tabBar: {
-    flexDirection: 'row', paddingHorizontal: 16, paddingTop: 12, gap: 4,
+    flexGrow: 0, paddingTop: 12,
+  },
+  tabBarContent: {
+    paddingHorizontal: 16, gap: 4,
   },
   tab: {
     paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, backgroundColor: colors.surface,
@@ -522,6 +679,10 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: colors.primary },
   tabText: { fontSize: 14, fontWeight: '500', color: colors.textSecondary },
   tabTextActive: { color: '#FFFFFF' },
+  switchRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 14,
+  },
   content: { flex: 1, padding: 20 },
   sectionTitle: {
     fontSize: 13, fontWeight: '600', color: colors.textSecondary,

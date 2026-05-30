@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Image, Alert, TextInput, Modal } from 'react-native';
+import React, { useState, useRef } from 'react';
+import { View, Text, StyleSheet, Pressable, Image, Alert, TextInput, Modal, Dimensions } from 'react-native';
 import Markdown from '@ronradtke/react-native-markdown-display';
 import { Message } from '../types';
 import { colors } from '../theme/colors';
+import { fonts } from '../theme/fonts';
 import { useChatStore } from '../stores/chat';
 import { useSettingsStore } from '../stores/settings';
 import { playTTS, stopTTS } from '../services/tts';
@@ -26,14 +27,96 @@ export function ChatBubble({ message, isLastAssistant }: Props) {
   const { messages, editMessage, removeMessage, regenerate } = useChatStore();
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editText, setEditText] = useState('');
-  const [editTarget, setEditTarget] = useState<'assistant' | 'user'>('assistant');
+  // 当前编辑目标消息的 id
+  const [editTargetId, setEditTargetId] = useState<string | null>(null);
+  // 用户气泡长按浮出的操作菜单是否显示
+  const [menuVisible, setMenuVisible] = useState(false);
+  // 长按时测量得到的气泡屏幕坐标，用于把菜单锚定到气泡上方
+  const [menuAnchor, setMenuAnchor] = useState({ x: 0, y: 0, width: 0 });
+  const bubbleRef = useRef<View>(null);
+
+  function handleUserLongPress() {
+    // 测量气泡在屏幕中的位置，再据此定位菜单
+    bubbleRef.current?.measureInWindow((x, y, width) => {
+      setMenuAnchor({ x, y, width });
+      setMenuVisible(true);
+    });
+  }
+
+  function openUserEdit() {
+    setMenuVisible(false);
+    setEditTargetId(message.id);
+    setEditText(message.content);
+    setEditModalVisible(true);
+  }
+
+  function deleteUserMessage() {
+    setMenuVisible(false);
+    removeMessage(message.id);
+  }
+
+  // 编辑弹窗（两个分支共用）
+  const editModal = (
+    <Modal visible={editModalVisible} transparent animationType="fade">
+      <Pressable style={styles.overlay} onPress={() => setEditModalVisible(false)}>
+        <View style={styles.modal} onStartShouldSetResponder={() => true}>
+          <Text style={styles.modalTitle}>
+            {editTargetId === message.id && !isUser ? '编辑 AI 消息' : '编辑用户消息'}
+          </Text>
+          <TextInput
+            style={styles.modalInput}
+            value={editText}
+            onChangeText={setEditText}
+            multiline
+            autoFocus
+          />
+          <View style={styles.modalButtons}>
+            <Pressable style={styles.modalCancel} onPress={() => setEditModalVisible(false)}>
+              <Text style={styles.modalCancelText}>取消</Text>
+            </Pressable>
+            <Pressable style={styles.modalConfirm} onPress={handleSaveEdit}>
+              <Text style={styles.modalConfirmText}>保存</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Pressable>
+    </Modal>
+  );
 
   if (isUser) {
+    // 菜单宽度估算，用于让菜单右对齐气泡右缘
+    const MENU_WIDTH = 140;
+    const MENU_HEIGHT = 44;
+    const menuLeft = Math.max(8, menuAnchor.x + menuAnchor.width - MENU_WIDTH);
+    const menuTop = Math.max(8, menuAnchor.y - MENU_HEIGHT - 8);
+
     return (
       <View style={styles.userRow}>
-        <View style={styles.userBubble}>
+        <Pressable
+          ref={bubbleRef}
+          onLongPress={handleUserLongPress}
+          style={styles.userBubble}
+        >
           <Text style={styles.userText}>{message.content}</Text>
-        </View>
+        </Pressable>
+
+        {/* 长按操作菜单：用 Modal 渲染，全屏透明层捕获外部点击关闭，
+            菜单按测量到的气泡坐标锚定在气泡正上方。 */}
+        <Modal transparent visible={menuVisible} animationType="fade" onRequestClose={() => setMenuVisible(false)}>
+          <Pressable style={styles.menuDismissOverlay} onPress={() => setMenuVisible(false)}>
+            <View style={[styles.bubbleMenu, { left: menuLeft, top: menuTop }]}>
+              <Pressable style={styles.bubbleMenuItem} onPress={openUserEdit}>
+                <Text style={styles.bubbleMenuText}>编辑</Text>
+              </Pressable>
+              <View style={styles.bubbleMenuDivider} />
+              <Pressable style={styles.bubbleMenuItem} onPress={deleteUserMessage}>
+                <Text style={[styles.bubbleMenuText, styles.bubbleMenuTextDanger]}>删除</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Modal>
+
+        {editModal}
       </View>
     );
   }
@@ -47,7 +130,7 @@ export function ChatBubble({ message, isLastAssistant }: Props) {
   function handleAction(index: number) {
     switch (index) {
       case 0: // 编辑 AI 消息
-        setEditTarget('assistant');
+        setEditTargetId(message.id);
         setEditText(message.content);
         setEditModalVisible(true);
         break;
@@ -69,7 +152,7 @@ export function ChatBubble({ message, isLastAssistant }: Props) {
         break;
       case 3: // 编辑用户消息
         if (userMsgBefore) {
-          setEditTarget('user');
+          setEditTargetId(userMsgBefore.id);
           setEditText(userMsgBefore.content);
           setEditModalVisible(true);
         }
@@ -89,11 +172,11 @@ export function ChatBubble({ message, isLastAssistant }: Props) {
   }
 
   function handleSaveEdit() {
-    const targetId = editTarget === 'assistant' ? message.id : userMsgBefore?.id;
-    if (targetId && editText.trim()) {
-      editMessage(targetId, editText.trim());
+    if (editTargetId && editText.trim()) {
+      editMessage(editTargetId, editText.trim());
     }
     setEditModalVisible(false);
+    setEditTargetId(null);
   }
 
   return (
@@ -119,31 +202,7 @@ export function ChatBubble({ message, isLastAssistant }: Props) {
         </>
       )}
 
-      {/* Edit Modal */}
-      <Modal visible={editModalVisible} transparent animationType="fade">
-        <Pressable style={styles.overlay} onPress={() => setEditModalVisible(false)}>
-          <View style={styles.modal} onStartShouldSetResponder={() => true}>
-            <Text style={styles.modalTitle}>
-              {editTarget === 'assistant' ? '编辑 AI 消息' : '编辑用户消息'}
-            </Text>
-            <TextInput
-              style={styles.modalInput}
-              value={editText}
-              onChangeText={setEditText}
-              multiline
-              autoFocus
-            />
-            <View style={styles.modalButtons}>
-              <Pressable style={styles.modalCancel} onPress={() => setEditModalVisible(false)}>
-                <Text style={styles.modalCancelText}>取消</Text>
-              </Pressable>
-              <Pressable style={styles.modalConfirm} onPress={handleSaveEdit}>
-                <Text style={styles.modalConfirmText}>保存</Text>
-              </Pressable>
-            </View>
-          </View>
-        </Pressable>
-      </Modal>
+      {editModal}
     </View>
   );
 }
@@ -154,6 +213,40 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     paddingHorizontal: 16,
     marginVertical: 8,
+  },
+  // 长按菜单：全屏透明关闭层 + 锚定气泡上方的菜单
+  menuDismissOverlay: {
+    flex: 1,
+  },
+  bubbleMenu: {
+    position: 'absolute',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingHorizontal: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  bubbleMenuItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+  },
+  bubbleMenuText: {
+    fontSize: 15,
+    color: colors.text,
+    fontWeight: '500',
+  },
+  bubbleMenuTextDanger: {
+    color: colors.danger,
+  },
+  bubbleMenuDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 20,
+    backgroundColor: colors.inputBorder,
   },
   userBubble: {
     backgroundColor: colors.userBubble,

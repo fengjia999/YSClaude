@@ -22,6 +22,20 @@ export interface TTSConfig {
   pitch: number;
 }
 
+export interface MemoryVaultConfig {
+  enabled: boolean;
+  baseUrl: string;
+  topK: number;
+  tokenBudget: number;
+  maxToolCalls: number;
+}
+
+export interface WebSearchConfig {
+  enabled: boolean;
+  tavilyApiKey: string;
+  maxResults: number;
+}
+
 interface SettingsState {
   _hydrated: boolean;
   apiConfigs: NamedAPIConfig[];
@@ -31,6 +45,8 @@ interface SettingsState {
   hiddenRanges: HiddenRange[];
   maxOutputTokens: number | null;
   ttsConfig: TTSConfig;
+  memoryVaultConfig: MemoryVaultConfig;
+  webSearchConfig: WebSearchConfig;
 
   setActiveConfig: (index: number) => void;
   saveAPIConfig: (config: NamedAPIConfig) => void;
@@ -42,6 +58,8 @@ interface SettingsState {
   removeHiddenRange: (index: number) => void;
   setMaxOutputTokens: (tokens: number | null) => void;
   setTTSConfig: (config: Partial<TTSConfig>) => void;
+  setMemoryVaultConfig: (config: Partial<MemoryVaultConfig>) => void;
+  setWebSearchConfig: (config: Partial<WebSearchConfig>) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -64,6 +82,18 @@ export const useSettingsStore = create<SettingsState>()(
         speed: 1,
         vol: 1,
         pitch: 0,
+      },
+      memoryVaultConfig: {
+        enabled: false,
+        baseUrl: '',
+        topK: 5,
+        tokenBudget: 2000,
+        maxToolCalls: 3,
+      },
+      webSearchConfig: {
+        enabled: false,
+        tavilyApiKey: '',
+        maxResults: 5,
       },
 
       setActiveConfig: (index) => set({ activeConfigIndex: index }),
@@ -101,6 +131,10 @@ export const useSettingsStore = create<SettingsState>()(
       setMaxOutputTokens: (tokens) => set({ maxOutputTokens: tokens }),
       setTTSConfig: (config) =>
         set((state) => ({ ttsConfig: { ...state.ttsConfig, ...config } })),
+      setMemoryVaultConfig: (config) =>
+        set((state) => ({ memoryVaultConfig: { ...state.memoryVaultConfig, ...config } })),
+      setWebSearchConfig: (config) =>
+        set((state) => ({ webSearchConfig: { ...state.webSearchConfig, ...config } })),
     }),
     {
       name: 'ysclaude-settings',
@@ -113,6 +147,8 @@ export const useSettingsStore = create<SettingsState>()(
         hiddenRanges: state.hiddenRanges,
         maxOutputTokens: state.maxOutputTokens,
         ttsConfig: state.ttsConfig,
+        memoryVaultConfig: state.memoryVaultConfig,
+        webSearchConfig: state.webSearchConfig,
       }),
       onRehydrateStorage: () => () => {
         useSettingsStore.setState({ _hydrated: true });

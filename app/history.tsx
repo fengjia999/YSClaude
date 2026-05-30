@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, FlatList, Alert, TextInput, Modal } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { colors } from '../src/theme/colors';
+import { fonts } from '../src/theme/fonts';
 import { Conversation } from '../src/types';
 import { getAllConversations, deleteConversation, updateConversation } from '../src/db/operations';
 import { useChatStore } from '../src/stores/chat';

@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { Message, Conversation } from '../types';
 import { randomUUID } from 'expo-crypto';
-import { streamChat } from '../services/api';
+import { streamChat, chatCompletion } from '../services/api';
 import { useSettingsStore } from './settings';
+import { getToolDefinitions, executeTool } from '../services/tools';
 import {
   createConversation,
   updateConversation,
@@ -19,6 +20,8 @@ interface ChatState {
   error: string | null;
 
   sendMessage: (content: string) => Promise<void>;
+  addUserMessage: (content: string) => Promise<void>;
+  triggerResponse: () => Promise<void>;
   stopStreaming: () => void;
   newConversation: () => void;
   loadConversation: (id: string) => Promise<void>;
@@ -30,13 +33,213 @@ interface ChatState {
 
 let abortController: AbortController | null = null;
 
+/**
+ * Tool Use 循环。
+ * 返回最终的 assistant 文本内容；若没有启用任何工具则返回 null（调用方走流式路径）。
+ */
+async function runToolLoop(
+  config: { baseUrl: string; apiKey: string; model: string },
+  systemPrompt: string,
+  apiMessages: { role: string; content: string }[],
+  maxTokens: number | undefined
+): Promise<string | null> {
+  const settings = useSettingsStore.getState();
+  const memoryEnabled = settings.memoryVaultConfig.enabled && !!settings.memoryVaultConfig.baseUrl;
+  const webEnabled = settings.webSearchConfig.enabled && !!settings.webSearchConfig.tavilyApiKey;
+
+  const tools = getToolDefinitions({ memoryVault: memoryEnabled, webSearch: webEnabled });
+  if (tools.length === 0) {
+    return null; // 无工具 → 走原有流式路径
+  }
+
+  // 每轮最大工具调用次数（记忆库配置；联网搜索复用同一上限）
+  const maxToolCalls = Math.max(1, settings.memoryVaultConfig.maxToolCalls || 3);
+
+  // 构建对话消息（含 system）
+  const messages: any[] = [
+    { role: 'system', content: systemPrompt },
+    ...apiMessages,
+  ];
+
+  let toolCallCount = 0;
+
+  while (true) {
+    const resp = await chatCompletion({
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      model: config.model,
+      messages,
+      maxTokens,
+      tools,
+    });
+
+    const choice = resp.choices?.[0];
+    if (!choice) {
+      return '';
+    }
+
+    const message = choice.message;
+    const toolCalls = message.tool_calls;
+
+    // 没有工具调用，或已达上限 → 返回最终内容
+    if (!toolCalls || toolCalls.length === 0 || toolCallCount >= maxToolCalls) {
+      return message.content || '';
+    }
+
+    // 将 assistant 的 tool_calls 消息追加到上下文
+    messages.push({
+      role: 'assistant',
+      content: message.content || '',
+      tool_calls: toolCalls,
+    });
+
+    // 依次执行每个工具调用，结果作为 tool message 追加
+    for (const tc of toolCalls) {
+      toolCallCount++;
+      let args: Record<string, any> = {};
+      try {
+        args = JSON.parse(tc.function.arguments || '{}');
+      } catch {
+        args = {};
+      }
+      const result = await executeTool(tc.function.name, args, {
+        memoryVaultConfig: settings.memoryVaultConfig,
+        webSearchConfig: settings.webSearchConfig,
+      });
+      messages.push({
+        role: 'tool',
+        tool_call_id: tc.id,
+        content: result,
+      });
+    }
+    // 继续循环，让模型基于工具结果生成回复
+  }
+}
+
+/**
+ * 共享的流式回复逻辑。
+ * 前提：调用方已经把要回复的上下文消息放进了 state.messages。
+ * 本函数负责：创建空 assistant 消息 → 持久化 → 构建 apiMessages
+ * → 走 tool-loop 或流式 → 落库收尾。
+ */
+async function streamAssistantResponse(
+  get: () => ChatState,
+  set: (partial: Partial<ChatState> | ((s: ChatState) => Partial<ChatState>)) => void,
+  conversationId: string
+): Promise<void> {
+  const settings = useSettingsStore.getState();
+  const config = settings.apiConfigs[settings.activeConfigIndex];
+  if (!config || !config.baseUrl || !config.apiKey) {
+    set({ error: '请先在设置中配置 API', isStreaming: false });
+    return;
+  }
+
+  const assistantMessage: Message = {
+    id: randomUUID(),
+    role: 'assistant',
+    content: '',
+    createdAt: Date.now(),
+  };
+
+  set((state) => ({
+    messages: [...state.messages, assistantMessage],
+  }));
+
+  await insertMessage(conversationId, assistantMessage);
+
+  const allMessages = get().messages;
+  const apiMessages = allMessages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .slice(0, -1)
+    .filter((_, index) => {
+      const msgNum = index + 1;
+      return !settings.hiddenRanges.some(
+        (r) => msgNum >= r.from && msgNum <= r.to
+      );
+    })
+    .map((m) => ({ role: m.role, content: m.content }));
+
+  abortController = new AbortController();
+
+  const onToken = (token: string) => {
+    set((state) => {
+      const msgs = [...state.messages];
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === 'assistant') {
+        msgs[msgs.length - 1] = { ...last, content: last.content + token };
+      }
+      return { messages: msgs };
+    });
+  };
+
+  const setAssistantContent = (content: string) => {
+    set((state) => {
+      const msgs = [...state.messages];
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === 'assistant') {
+        msgs[msgs.length - 1] = { ...last, content };
+      }
+      return { messages: msgs };
+    });
+  };
+
+  try {
+    const finalContent = await runToolLoop(
+      { baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model },
+      settings.systemPrompt,
+      apiMessages,
+      settings.maxOutputTokens || undefined
+    );
+
+    if (finalContent !== null) {
+      setAssistantContent(finalContent);
+    } else {
+      await streamChat(
+        {
+          baseUrl: config.baseUrl,
+          apiKey: config.apiKey,
+          model: config.model,
+          messages: [
+            { role: 'system', content: settings.systemPrompt },
+            ...apiMessages,
+          ],
+          maxTokens: settings.maxOutputTokens || undefined,
+        },
+        onToken,
+        abortController.signal
+      );
+    }
+
+    const finalMessages = get().messages;
+    const lastMsg = finalMessages[finalMessages.length - 1];
+    if (lastMsg && lastMsg.role === 'assistant') {
+      await updateMessageContent(lastMsg.id, lastMsg.content);
+    }
+
+    await updateConversation(conversationId, { updatedAt: Date.now() });
+  } catch (err: any) {
+    if (err.name !== 'AbortError') {
+      set({ error: err.message || '请求失败' });
+    }
+    const finalMessages = get().messages;
+    const lastMsg = finalMessages[finalMessages.length - 1];
+    if (lastMsg && lastMsg.role === 'assistant') {
+      await updateMessageContent(lastMsg.id, lastMsg.content);
+    }
+  } finally {
+    set({ isStreaming: false });
+    abortController = null;
+  }
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   conversationId: null,
   messages: [],
   isStreaming: false,
   error: null,
 
-  sendMessage: async (content: string) => {
+  // 仅把用户消息加入列表并持久化，不触发 AI 回复。
+  addUserMessage: async (content: string) => {
     const { isStreaming } = get();
     if (isStreaming) return;
 
@@ -74,85 +277,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     set((state) => ({
       messages: [...state.messages, userMessage],
-      isStreaming: true,
       error: null,
     }));
 
     await insertMessage(conversationId, userMessage);
+    await updateConversation(conversationId, { updatedAt: Date.now() });
+  },
 
-    const assistantMessage: Message = {
-      id: randomUUID(),
-      role: 'assistant',
-      content: '',
-      createdAt: Date.now(),
-    };
+  // 仅触发 AI 回复（针对当前历史消息），不新增用户消息。
+  triggerResponse: async () => {
+    const { conversationId, messages, isStreaming } = get();
+    if (isStreaming || !conversationId || messages.length === 0) return;
 
-    set((state) => ({
-      messages: [...state.messages, assistantMessage],
-    }));
+    // 防止重复：如果最后一条已经是空的 assistant 消息，不重复创建
+    const last = messages[messages.length - 1];
+    if (last.role === 'assistant' && last.content === '') return;
 
-    await insertMessage(conversationId, assistantMessage);
+    const settings = useSettingsStore.getState();
+    if (!settings._hydrated) return;
 
-    const allMessages = get().messages;
-    const apiMessages = allMessages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(0, -1)
-      .filter((_, index) => {
-        const msgNum = index + 1;
-        return !settings.hiddenRanges.some(
-          (r) => msgNum >= r.from && msgNum <= r.to
-        );
-      })
-      .map((m) => ({ role: m.role, content: m.content }));
+    set({ isStreaming: true, error: null });
+    await streamAssistantResponse(get, set, conversationId);
+  },
 
-    abortController = new AbortController();
-
-    try {
-      await streamChat(
-        {
-          baseUrl: config.baseUrl,
-          apiKey: config.apiKey,
-          model: config.model,
-          messages: [
-            { role: 'system', content: settings.systemPrompt },
-            ...apiMessages,
-          ],
-          maxTokens: settings.maxOutputTokens || undefined,
-        },
-        (token) => {
-          set((state) => {
-            const msgs = [...state.messages];
-            const last = msgs[msgs.length - 1];
-            if (last && last.role === 'assistant') {
-              msgs[msgs.length - 1] = { ...last, content: last.content + token };
-            }
-            return { messages: msgs };
-          });
-        },
-        abortController.signal
-      );
-
-      const finalMessages = get().messages;
-      const lastMsg = finalMessages[finalMessages.length - 1];
-      if (lastMsg && lastMsg.role === 'assistant') {
-        await updateMessageContent(lastMsg.id, lastMsg.content);
-      }
-
-      await updateConversation(conversationId, { updatedAt: Date.now() });
-
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
-        set({ error: err.message || '请求失败' });
-      }
-      const finalMessages = get().messages;
-      const lastMsg = finalMessages[finalMessages.length - 1];
-      if (lastMsg && lastMsg.role === 'assistant') {
-        await updateMessageContent(lastMsg.id, lastMsg.content);
-      }
-    } finally {
-      set({ isStreaming: false });
-      abortController = null;
-    }
+  // 一体化发送：加用户消息 + 触发 AI 回复（向后兼容）。
+  sendMessage: async (content: string) => {
+    const { isStreaming } = get();
+    if (isStreaming) return;
+    await get().addUserMessage(content);
+    // addUserMessage 可能因为缺少配置而设置 error 并提前返回，
+    // 此时不应继续触发回复。
+    if (get().error) return;
+    await get().triggerResponse();
   },
 
   stopStreaming: () => {
@@ -191,10 +347,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { messages, conversationId, isStreaming } = get();
     if (isStreaming || !conversationId) return;
 
-    const lastUserIndex = [...messages].reverse().findIndex((m) => m.role === 'user');
-    if (lastUserIndex === -1) return;
-    const userMsg = messages[messages.length - 1 - lastUserIndex];
+    // 必须存在至少一条 user 消息才能重新生成
+    const hasUser = messages.some((m) => m.role === 'user');
+    if (!hasUser) return;
 
+    // 删除末尾的 assistant 消息（如果有），然后基于剩余历史重新生成
     const lastAssistant = messages[messages.length - 1];
     if (lastAssistant && lastAssistant.role === 'assistant') {
       await deleteMessage(lastAssistant.id);
@@ -203,85 +360,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }));
     }
 
-    const settings = useSettingsStore.getState();
-    const config = settings.apiConfigs[settings.activeConfigIndex];
-    if (!config || !config.baseUrl || !config.apiKey) {
-      set({ error: '请先在设置中配置 API' });
-      return;
-    }
-
-    const assistantMessage: Message = {
-      id: randomUUID(),
-      role: 'assistant',
-      content: '',
-      createdAt: Date.now(),
-    };
-
-    set((state) => ({
-      messages: [...state.messages, assistantMessage],
-      isStreaming: true,
-      error: null,
-    }));
-
-    await insertMessage(conversationId, assistantMessage);
-
-    const allMessages = get().messages;
-    const apiMessages = allMessages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(0, -1)
-      .filter((_, index) => {
-        const msgNum = index + 1;
-        return !settings.hiddenRanges.some(
-          (r) => msgNum >= r.from && msgNum <= r.to
-        );
-      })
-      .map((m) => ({ role: m.role, content: m.content }));
-
-    abortController = new AbortController();
-
-    try {
-      await streamChat(
-        {
-          baseUrl: config.baseUrl,
-          apiKey: config.apiKey,
-          model: config.model,
-          messages: [
-            { role: 'system', content: settings.systemPrompt },
-            ...apiMessages,
-          ],
-          maxTokens: settings.maxOutputTokens || undefined,
-        },
-        (token) => {
-          set((state) => {
-            const msgs = [...state.messages];
-            const last = msgs[msgs.length - 1];
-            if (last && last.role === 'assistant') {
-              msgs[msgs.length - 1] = { ...last, content: last.content + token };
-            }
-            return { messages: msgs };
-          });
-        },
-        abortController.signal
-      );
-
-      const finalMessages = get().messages;
-      const lastMsg = finalMessages[finalMessages.length - 1];
-      if (lastMsg && lastMsg.role === 'assistant') {
-        await updateMessageContent(lastMsg.id, lastMsg.content);
-      }
-      await updateConversation(conversationId, { updatedAt: Date.now() });
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
-        set({ error: err.message || '请求失败' });
-      }
-      const finalMessages = get().messages;
-      const lastMsg = finalMessages[finalMessages.length - 1];
-      if (lastMsg && lastMsg.role === 'assistant') {
-        await updateMessageContent(lastMsg.id, lastMsg.content);
-      }
-    } finally {
-      set({ isStreaming: false });
-      abortController = null;
-    }
+    set({ isStreaming: true, error: null });
+    await streamAssistantResponse(get, set, conversationId);
   },
 }));

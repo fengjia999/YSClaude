@@ -33,6 +33,8 @@
 - MCP Tool 调用
   - Memory Vault 记忆库检索
   - Tavily 联网搜索
+
+### 未来规划：
   - 文生图（OpenAI 格式）
   - 本地文件管理
 
@@ -89,10 +91,13 @@ src/
 │   ├── database.ts         # SQLite 初始化 + schema
 │   ├── operations.ts       # 对话/消息 CRUD
 │   └── kv-storage.ts       # KV 存储适配器
+├── hooks/
+│   └── useKeyboardHeight.ts # 软键盘高度监听（edge-to-edge 输入框避让）
 ├── types/
 │   └── index.ts            # TypeScript 类型定义
 └── theme/
-    └── colors.ts           # 主题配色
+    ├── colors.ts           # 主题配色
+    └── fonts.ts            # 字体配置
 ```
 
 ## 开发阶段
@@ -102,8 +107,8 @@ src/
 | P0 | 项目骨架 + 对话 + 流式 + Markdown | ✅ |
 | P1 | SQLite 持久化 + 历史管理 + 多配置 | ✅ |
 | P2 | TTS 语音合成 + System Prompt + 对话设置 | ✅ |
-| P3 | MCP Tool 框架 + Memory Vault | - |
-| P4 | Tavily 搜索 + 文生图 | - |
+| P3 | MCP Tool 框架 | - |
+| P4 | Memory Vault + Tavily 搜索 | - |
 | P5 | EAS Build 打包 APK | - |
 
 ## UI 设计

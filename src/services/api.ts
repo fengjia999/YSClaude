@@ -1,9 +1,74 @@
+import { ToolDefinition } from './tools';
+
 interface ChatRequest {
   baseUrl: string;
   apiKey: string;
   model: string;
-  messages: { role: string; content: string }[];
+  messages: { role: string; content: string; tool_calls?: any[]; tool_call_id?: string }[];
   maxTokens?: number;
+}
+
+interface ChatRequestWithTools extends ChatRequest {
+  tools?: ToolDefinition[];
+}
+
+interface ChatCompletionChoice {
+  message: {
+    role: string;
+    content: string | null;
+    tool_calls?: {
+      id: string;
+      type: 'function';
+      function: {
+        name: string;
+        arguments: string;
+      };
+    }[];
+  };
+  finish_reason: string;
+}
+
+export interface ChatCompletionResponse {
+  choices: ChatCompletionChoice[];
+}
+
+/**
+ * 非流式 chat completions（Tool Use 阶段使用）
+ */
+export async function chatCompletion(
+  request: ChatRequestWithTools
+): Promise<ChatCompletionResponse> {
+  const { baseUrl, apiKey, model, messages, maxTokens, tools } = request;
+
+  const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
+
+  const body: Record<string, any> = {
+    model,
+    messages,
+    stream: false,
+  };
+  if (maxTokens) {
+    body.max_tokens = maxTokens;
+  }
+  if (tools && tools.length > 0) {
+    body.tools = tools;
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey.trim()}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`API Error ${response.status}: ${errorText}`);
+  }
+
+  return await response.json();
 }
 
 export async function streamChat(
