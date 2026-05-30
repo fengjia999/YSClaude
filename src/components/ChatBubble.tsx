@@ -23,6 +23,76 @@ interface Props {
   isHidden?: boolean;
 }
 
+// 工具名 → 中文动作描述
+const TOOL_LABELS: Record<string, string> = {
+  search_memory_vault: '搜索记忆库',
+  query_diary: '查询日记',
+  web_search: '联网搜索',
+};
+
+// 把一次工具调用格式化成「动作描述 + 参数」的单行文字。
+// 参数取第一个有意义的字段（query/date 等），解析失败时仅显示动作描述。
+function formatToolInvocation(name: string, rawArgs: string): string {
+  const label = TOOL_LABELS[name] || name;
+  let detail = '';
+  try {
+    const args = JSON.parse(rawArgs || '{}');
+    detail = args.query ?? args.date ?? '';
+    if (detail && typeof detail !== 'string') detail = String(detail);
+  } catch {
+    detail = '';
+  }
+  return detail ? `${label}：${detail}` : label;
+}
+
+// 思维链胶囊：白底灰边圆角，左侧 clock 图标 + "Thought process"，点击展开/收起内容。
+function ThinkingBlock({ thinking }: { thinking: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <View style={styles.thinkingWrap}>
+      <Pressable style={styles.thinkingPill} onPress={() => setExpanded((v) => !v)}>
+        <Image
+          source={require('../../assets/clock.png')}
+          style={styles.thinkingIcon}
+          resizeMode="contain"
+        />
+        <Text style={styles.thinkingLabel}>Thought process</Text>
+      </Pressable>
+      {expanded && (
+        <View style={styles.thinkingContent}>
+          <Markdown style={thinkingMarkdownStyles}>{thinking}</Markdown>
+        </View>
+      )}
+    </View>
+  );
+}
+
+// 从 AI 输出中拆出思维链与剩余正文。
+// 只处理「第一个」<thinking>，之后正文里再出现的 <thinking> 标签原样保留，
+// 避免正文中出现的标签被误当成思维链而吞掉后续文字。
+function splitThinking(raw: string): { thinking: string; body: string } {
+  if (!raw) return { thinking: '', body: '' };
+  const openIdx = raw.search(/<thinking>/i);
+  if (openIdx === -1) return { thinking: '', body: raw.trim() };
+
+  const afterOpen = raw.slice(openIdx).replace(/<thinking>/i, '');
+  const closeMatch = afterOpen.match(/<\/thinking>/i);
+
+  let thinking: string;
+  let body: string;
+  if (closeMatch && closeMatch.index !== undefined) {
+    // 已闭合：思维链取首个标签对内部，正文为标签前 + 标签后（含其中可能的其它 <thinking>）
+    thinking = afterOpen.slice(0, closeMatch.index);
+    const tail = afterOpen.slice(closeMatch.index + closeMatch[0].length);
+    body = raw.slice(0, openIdx) + tail;
+  } else {
+    // 流式中尚未闭合：剩余全部视为思维链，正文为标签前部分
+    thinking = afterOpen;
+    body = raw.slice(0, openIdx);
+  }
+  return { thinking: thinking.trim(), body: body.trim() };
+}
+
 export function ChatBubble({ message, isLastAssistant, isHidden }: Props) {
   const isUser = message.role === 'user';
   const { messages, editMessage, removeMessage, regenerate } = useChatStore();
@@ -131,6 +201,9 @@ export function ChatBubble({ message, isLastAssistant, isHidden }: Props) {
     return null;
   })();
 
+  // 拆分思维链与正文：<thinking> 内容进胶囊，正文只渲染剩余部分
+  const { thinking, body } = splitThinking(message.content);
+
   function handleAction(index: number) {
     switch (index) {
       case 0: // 编辑 AI 消息
@@ -186,8 +259,32 @@ export function ChatBubble({ message, isLastAssistant, isHidden }: Props) {
   return (
     <View style={[styles.assistantRow, isHidden && styles.hiddenBubble]}>
       {isHidden && <Text style={styles.hiddenLabelLeft}>已隐藏</Text>}
+      {/* 工具调用记录：显示在 AI 回复文字上方，每次调用一行 */}
+      {message.toolInvocations && message.toolInvocations.length > 0 && (
+        <View style={styles.toolList}>
+          {message.toolInvocations.map((inv, i) => (
+            <View key={i} style={styles.toolRow}>
+              <Image
+                source={require('../../assets/clock.png')}
+                style={styles.toolIconLeft}
+                resizeMode="contain"
+              />
+              <Text style={styles.toolText} numberOfLines={1}>
+                {formatToolInvocation(inv.name, inv.args)}
+              </Text>
+              <Image
+                source={require('../../assets/rightarrow.png')}
+                style={styles.toolIconRight}
+                resizeMode="contain"
+              />
+            </View>
+          ))}
+        </View>
+      )}
+      {/* 思维链：<thinking> 包裹的内容拆出，正文只渲染剩余部分 */}
+      {thinking.length > 0 && <ThinkingBlock thinking={thinking} />}
       <View style={styles.assistantContent}>
-        <Markdown style={markdownStyles}>{message.content || ' '}</Markdown>
+        <Markdown style={markdownStyles}>{body || ' '}</Markdown>
       </View>
       {message.content.length > 0 && (
         <>
@@ -295,6 +392,65 @@ const styles = StyleSheet.create({
   assistantContent: {
     maxWidth: '100%',
   },
+  // 工具调用记录列表（位于回复文字上方）
+  toolList: {
+    marginBottom: 8,
+    gap: 6,
+  },
+  // 单行工具调用：左图标 + 中间文字 + 右箭头，左对齐
+  toolRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  toolIconLeft: {
+    width: 13,
+    height: 13,
+    marginRight: 8,
+  },
+  toolText: {
+    flexShrink: 1,
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  toolIconRight: {
+    width: 11,
+    height: 11,
+    marginLeft: 4,
+  },
+  // 思维链：胶囊 + 展开内容
+  thinkingWrap: {
+    marginBottom: 10,
+    alignItems: 'flex-start',
+  },
+  // 白底灰边圆角胶囊，左侧 clock 图标 + 文字
+  thinkingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 16,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+  },
+  thinkingIcon: {
+    width: 14,
+    height: 14,
+    marginRight: 7,
+  },
+  thinkingLabel: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  // 展开后的思维链内容容器
+  thinkingContent: {
+    marginTop: 6,
+    paddingLeft: 4,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
   actions: {
     flexDirection: 'row',
     marginTop: 4,
@@ -351,6 +507,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, backgroundColor: colors.primary,
   },
   modalConfirmText: { fontSize: 15, color: '#FFFFFF', fontWeight: '500' },
+});
+
+const thinkingMarkdownStyles = StyleSheet.create({
+  body: { fontSize: 14, color: colors.textSecondary, lineHeight: 21 },
+  code_inline: {
+    backgroundColor: colors.surface, color: colors.primary,
+    paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, fontSize: 13, fontFamily: 'monospace',
+  },
+  fence: { backgroundColor: colors.codeBlock, borderRadius: 10, padding: 12, marginVertical: 8 },
+  code_block: { color: colors.codeText, fontSize: 12, fontFamily: 'monospace' },
+  link: { color: colors.primary },
 });
 
 const markdownStyles = StyleSheet.create({

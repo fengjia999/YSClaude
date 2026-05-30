@@ -1,5 +1,5 @@
 import { getDatabase } from './database';
-import { Conversation, Message, Diary, HiddenRange } from '../types';
+import { Conversation, Message, Diary, HiddenRange, ToolInvocation } from '../types';
 
 export async function createConversation(conv: Conversation): Promise<void> {
   const db = await getDatabase();
@@ -105,8 +105,8 @@ export async function updateHiddenRanges(
 export async function insertMessage(conversationId: string, msg: Message): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    `INSERT OR REPLACE INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_invocations, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       msg.id,
       conversationId,
@@ -114,6 +114,7 @@ export async function insertMessage(conversationId: string, msg: Message): Promi
       msg.content,
       msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
       msg.toolCallId || null,
+      msg.toolInvocations && msg.toolInvocations.length > 0 ? JSON.stringify(msg.toolInvocations) : null,
       msg.createdAt,
     ]
   );
@@ -122,6 +123,18 @@ export async function insertMessage(conversationId: string, msg: Message): Promi
 export async function updateMessageContent(id: string, content: string): Promise<void> {
   const db = await getDatabase();
   await db.runAsync('UPDATE messages SET content = ? WHERE id = ?', [content, id]);
+}
+
+// 把某条消息的工具调用记录落库（流式收尾时调用）。空数组写 null。
+export async function updateMessageToolInvocations(
+  id: string,
+  invocations: ToolInvocation[] | undefined
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE messages SET tool_invocations = ? WHERE id = ?', [
+    invocations && invocations.length > 0 ? JSON.stringify(invocations) : null,
+    id,
+  ]);
 }
 
 export async function deleteMessage(id: string): Promise<void> {
@@ -137,6 +150,7 @@ export async function getMessagesByConversation(conversationId: string): Promise
     content: string;
     tool_calls: string | null;
     tool_call_id: string | null;
+    tool_invocations: string | null;
     created_at: number;
   }>('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC', [conversationId]);
 
@@ -146,6 +160,7 @@ export async function getMessagesByConversation(conversationId: string): Promise
     content: row.content,
     toolCalls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
     toolCallId: row.tool_call_id || undefined,
+    toolInvocations: row.tool_invocations ? JSON.parse(row.tool_invocations) : undefined,
     createdAt: row.created_at,
   }));
 }

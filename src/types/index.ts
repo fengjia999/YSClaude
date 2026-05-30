@@ -4,7 +4,16 @@ export interface Message {
   content: string;
   toolCalls?: ToolCall[];
   toolCallId?: string;
+  // AI 回复过程中实际发生的工具调用记录，用于在气泡上方展示「调用了什么工具」。
+  // 每次调用一行；随消息一起持久化。
+  toolInvocations?: ToolInvocation[];
   createdAt: number;
+}
+
+// 单次工具调用的展示记录（已发生的事实，区别于请求模型用的 ToolCall）
+export interface ToolInvocation {
+  name: string;        // 工具名，如 web_search
+  args: string;        // 原始参数 JSON 字符串
 }
 
 export interface ToolCall {

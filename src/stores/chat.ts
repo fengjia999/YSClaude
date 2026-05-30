@@ -11,6 +11,7 @@ import {
   updateConversation,
   insertMessage,
   updateMessageContent,
+  updateMessageToolInvocations,
   deleteMessage,
   getMessagesByConversation,
   getHiddenRanges,
@@ -51,7 +52,9 @@ async function runToolLoop(
   systemPrompt: string,
   memoryMessages: { role: string; content: string }[],
   apiMessages: { role: string; content: string }[],
-  maxTokens: number | undefined
+  maxTokens: number | undefined,
+  // 每发生一次工具调用就回调一次，用于实时把记录推到 UI
+  onToolInvocation?: (inv: { name: string; args: string }) => void
 ): Promise<string | null> {
   const settings = useSettingsStore.getState();
   const memoryEnabled = settings.memoryVaultConfig.enabled && !!settings.memoryVaultConfig.baseUrl;
@@ -107,6 +110,8 @@ async function runToolLoop(
     // 依次执行每个工具调用，结果作为 tool message 追加
     for (const tc of toolCalls) {
       toolCallCount++;
+      // 把本次调用记录回调给 UI（实时展示「调用了什么工具」）
+      onToolInvocation?.({ name: tc.function.name, args: tc.function.arguments || '' });
       let args: Record<string, any> = {};
       try {
         args = JSON.parse(tc.function.arguments || '{}');
@@ -231,13 +236,29 @@ async function streamAssistantResponse(
     });
   };
 
+  // 每发生一次工具调用，就把记录追加到当前 assistant 消息上，实时反映到 UI
+  const appendToolInvocation = (inv: { name: string; args: string }) => {
+    set((state) => {
+      const msgs = [...state.messages];
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === 'assistant') {
+        msgs[msgs.length - 1] = {
+          ...last,
+          toolInvocations: [...(last.toolInvocations || []), inv],
+        };
+      }
+      return { messages: msgs };
+    });
+  };
+
   try {
     const finalContent = await runToolLoop(
       { baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model },
       systemPromptWithTime,
       memoryMessages,
       apiMessages,
-      settings.maxOutputTokens || undefined
+      settings.maxOutputTokens || undefined,
+      appendToolInvocation
     );
 
     if (finalContent !== null) {
@@ -264,6 +285,7 @@ async function streamAssistantResponse(
     const lastMsg = finalMessages[finalMessages.length - 1];
     if (lastMsg && lastMsg.role === 'assistant') {
       await updateMessageContent(lastMsg.id, lastMsg.content);
+      await updateMessageToolInvocations(lastMsg.id, lastMsg.toolInvocations);
     }
 
     await updateConversation(conversationId, { updatedAt: Date.now() });
@@ -275,6 +297,7 @@ async function streamAssistantResponse(
     const lastMsg = finalMessages[finalMessages.length - 1];
     if (lastMsg && lastMsg.role === 'assistant') {
       await updateMessageContent(lastMsg.id, lastMsg.content);
+      await updateMessageToolInvocations(lastMsg.id, lastMsg.toolInvocations);
     }
   } finally {
     set({ isStreaming: false });

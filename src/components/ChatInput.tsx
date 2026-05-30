@@ -106,7 +106,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingBottom: 12,
     paddingTop: 4,
-    backgroundColor: colors.background,
+    backgroundColor: 'transparent',
   },
   container: {
     backgroundColor: colors.inputBackground,

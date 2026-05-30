@@ -79,6 +79,7 @@ export default function ChatScreen() {
         ref={flatListRef}
         data={messages}
         keyExtractor={(item) => item.id}
+        keyboardShouldPersistTaps="handled"
         renderItem={({ item, index }) => {
           // 与上一条消息间隔超过阈值时，在该消息上方插入居中时间分隔
           const prev = index > 0 ? messages[index - 1] : null;
@@ -107,15 +108,17 @@ export default function ChatScreen() {
         ListEmptyComponent={<EmptyState />}
       />
 
-      {/* Input */}
-      <ChatInput
-        onSend={addUserMessage}
-        onTriggerResponse={triggerResponse}
-        disabled={isStreaming}
-        isStreaming={isStreaming}
-        onStop={stopStreaming}
-        onModelPress={() => setShowModelSelector(true)}
-      />
+      {/* Input —— 悬浮在消息列表之上，两侧与下方留空隙可透出聊天内容 */}
+      <View style={styles.inputFloating} pointerEvents="box-none">
+        <ChatInput
+          onSend={addUserMessage}
+          onTriggerResponse={triggerResponse}
+          disabled={isStreaming}
+          isStreaming={isStreaming}
+          onStop={stopStreaming}
+          onModelPress={() => setShowModelSelector(true)}
+        />
+      </View>
 
       {showModelSelector && (
         <ModelSelector onClose={() => setShowModelSelector(false)} />
@@ -202,8 +205,17 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   messageContent: {
-    paddingVertical: 8,
+    paddingTop: 8,
+    // 底部留白，让最后一条消息能滚动到悬浮输入框之上，不被永久遮住
+    paddingBottom: 96,
     flexGrow: 1,
+  },
+  // 悬浮输入框容器：绝对定位贴底，自身透明，仅 ChatInput 内部气泡不透明
+  inputFloating: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   emptyContainer: {
     flex: 1,

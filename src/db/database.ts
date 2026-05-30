@@ -28,6 +28,7 @@ async function initTables(database: SQLite.SQLiteDatabase) {
       content TEXT NOT NULL DEFAULT '',
       tool_calls TEXT,
       tool_call_id TEXT,
+      tool_invocations TEXT,
       created_at INTEGER NOT NULL,
       FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
     );
@@ -66,5 +67,13 @@ async function runMigrations(database: SQLite.SQLiteDatabase) {
       `ALTER TABLE conversations ADD COLUMN hidden_ranges TEXT NOT NULL DEFAULT '[]';`
     );
     await database.execAsync('PRAGMA user_version = 1;');
+  }
+
+  // v2: 为消息记录实际发生的工具调用（用于气泡上方展示）
+  if (version < 2) {
+    await database.execAsync(
+      `ALTER TABLE messages ADD COLUMN tool_invocations TEXT;`
+    );
+    await database.execAsync('PRAGMA user_version = 2;');
   }
 }
