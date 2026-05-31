@@ -95,4 +95,27 @@ async function runMigrations(database: SQLite.SQLiteDatabase) {
     );
     await database.execAsync('PRAGMA user_version = 2;');
   }
+
+  // v3: 为消息添加图片 URI 字段（图片消息 + AI 识图）
+  // 用 PRAGMA table_info 直接检查列是否存在，避免 user_version 与实际 schema
+  // 不同步时（如开发期回滚/重装）漏掉迁移的情况。
+  if (!(await hasColumn(database, 'messages', 'image_uri'))) {
+    await database.execAsync(
+      `ALTER TABLE messages ADD COLUMN image_uri TEXT;`
+    );
+  }
+  if (version < 3) {
+    await database.execAsync('PRAGMA user_version = 3;');
+  }
+}
+
+async function hasColumn(
+  database: SQLite.SQLiteDatabase,
+  table: string,
+  column: string
+): Promise<boolean> {
+  const rows = await database.getAllAsync<{ name: string }>(
+    `PRAGMA table_info(${table})`
+  );
+  return rows.some((r) => r.name === column);
 }

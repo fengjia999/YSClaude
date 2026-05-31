@@ -105,8 +105,8 @@ export async function updateHiddenRanges(
 export async function insertMessage(conversationId: string, msg: Message): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    `INSERT OR REPLACE INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_invocations, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_invocations, image_uri, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       msg.id,
       conversationId,
@@ -115,6 +115,7 @@ export async function insertMessage(conversationId: string, msg: Message): Promi
       msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
       msg.toolCallId || null,
       msg.toolInvocations && msg.toolInvocations.length > 0 ? JSON.stringify(msg.toolInvocations) : null,
+      msg.imageUri || null,
       msg.createdAt,
     ]
   );
@@ -151,6 +152,7 @@ export async function getMessagesByConversation(conversationId: string): Promise
     tool_calls: string | null;
     tool_call_id: string | null;
     tool_invocations: string | null;
+    image_uri: string | null;
     created_at: number;
   }>('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC', [conversationId]);
 
@@ -161,6 +163,7 @@ export async function getMessagesByConversation(conversationId: string): Promise
     toolCalls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
     toolCallId: row.tool_call_id || undefined,
     toolInvocations: row.tool_invocations ? JSON.parse(row.tool_invocations) : undefined,
+    imageUri: row.image_uri || undefined,
     createdAt: row.created_at,
   }));
 }

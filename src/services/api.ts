@@ -5,7 +5,7 @@ interface ChatRequest {
   baseUrl: string;
   apiKey: string;
   model: string;
-  messages: { role: string; content: string; tool_calls?: any[]; tool_call_id?: string }[];
+  messages: { role: string; content: string | any[]; tool_calls?: any[]; tool_call_id?: string }[];
   maxTokens?: number;
 }
 

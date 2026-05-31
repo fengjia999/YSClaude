@@ -8,6 +8,9 @@ import { useChatStore } from '../stores/chat';
 import { useSettingsStore } from '../stores/settings';
 import { playTTS, stopTTS } from '../services/tts';
 
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const IMAGE_MAX_WIDTH = SCREEN_WIDTH * 0.65;
+
 const chatIcons = [
   require('../../assets/chat1.png'),
   require('../../assets/chat2.png'),
@@ -165,17 +168,39 @@ export function ChatBubble({ message, isLastAssistant, isHidden }: Props) {
       <View style={[styles.userRow, isHidden && styles.hiddenRow]}>
         <View style={styles.userColumn}>
           {isHidden && <Text style={styles.hiddenLabelRight}>已隐藏</Text>}
-          <Pressable
-            ref={bubbleRef}
-            onLongPress={handleUserLongPress}
-            style={styles.userBubble}
-          >
-            <Text style={styles.userText}>{message.content}</Text>
-          </Pressable>
+          {message.imageUri && (
+            <Pressable
+              ref={!message.content ? bubbleRef : undefined}
+              onLongPress={!message.content ? handleUserLongPress : undefined}
+            >
+              <Image
+                source={{ uri: message.imageUri }}
+                style={styles.userImage}
+                resizeMode="cover"
+              />
+            </Pressable>
+          )}
+          {message.content.length > 0 && (
+            <Pressable
+              ref={bubbleRef}
+              onLongPress={handleUserLongPress}
+              style={styles.userBubble}
+            >
+              <Text style={styles.userText}>{message.content}</Text>
+            </Pressable>
+          )}
+          {message.content.length === 0 && !message.imageUri && (
+            <Pressable
+              ref={bubbleRef}
+              onLongPress={handleUserLongPress}
+              style={styles.userBubble}
+            >
+              <Text style={styles.userText}>{message.content}</Text>
+            </Pressable>
+          )}
         </View>
 
-        {/* 长按操作菜单：用 Modal 渲染，全屏透明层捕获外部点击关闭，
-            菜单按测量到的气泡坐标锚定在气泡正上方。 */}
+        {/* 长按操作菜单 */}
         <Modal transparent visible={menuVisible} animationType="fade" onRequestClose={() => setMenuVisible(false)}>
           <Pressable style={styles.menuDismissOverlay} onPress={() => setMenuVisible(false)}>
             <View style={[styles.bubbleMenu, { left: menuLeft, top: menuTop }]}>
@@ -389,6 +414,12 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     paddingVertical: 12,
     paddingHorizontal: 16,
+  },
+  userImage: {
+    width: IMAGE_MAX_WIDTH,
+    height: IMAGE_MAX_WIDTH,
+    borderRadius: 16,
+    marginBottom: 6,
   },
   userText: {
     fontSize: 16,

@@ -7,6 +7,7 @@ export interface Message {
   // AI 回复过程中实际发生的工具调用记录，用于在气泡上方展示「调用了什么工具」。
   // 每次调用一行；随消息一起持久化。
   toolInvocations?: ToolInvocation[];
+  imageUri?: string;
   createdAt: number;
 }
 

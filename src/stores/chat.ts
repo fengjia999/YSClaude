@@ -1,6 +1,7 @@
 ﻿import { create } from 'zustand';
 import { Message, Conversation, HiddenRange } from '../types';
 import { randomUUID } from 'expo-crypto';
+import { File } from 'expo-file-system';
 import { streamChat, chatCompletion } from '../services/api';
 import { useSettingsStore } from './settings';
 import { getToolDefinitions, executeTool } from '../services/tools';
@@ -26,8 +27,8 @@ interface ChatState {
   isStreaming: boolean;
   error: string | null;
 
-  sendMessage: (content: string) => Promise<void>;
-  addUserMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, imageUri?: string) => Promise<void>;
+  addUserMessage: (content: string, imageUri?: string) => Promise<void>;
   triggerResponse: () => Promise<void>;
   stopStreaming: () => void;
   newConversation: () => void;
@@ -44,6 +45,36 @@ interface ChatState {
 
 let abortController: AbortController | null = null;
 
+async function readImageAsDataUrl(uri: string): Promise<string | null> {
+  try {
+    const file = new File(uri);
+    const base64 = await file.base64();
+    if (!base64) return null;
+    // 从扩展名推 mime 类型；image-picker 默认 jpeg，PNG/GIF/WEBP 也常见
+    const lower = uri.toLowerCase();
+    let mime = 'image/jpeg';
+    if (lower.endsWith('.png')) mime = 'image/png';
+    else if (lower.endsWith('.gif')) mime = 'image/gif';
+    else if (lower.endsWith('.webp')) mime = 'image/webp';
+    return `data:${mime};base64,${base64}`;
+  } catch (e) {
+    console.warn('[image] read failed', e);
+    return null;
+  }
+}
+
+function buildVisionContent(text: string, dataUrl: string): any[] {
+  const parts: any[] = [];
+  if (text) {
+    parts.push({ type: 'text', text });
+  }
+  parts.push({
+    type: 'image_url',
+    image_url: { url: dataUrl },
+  });
+  return parts;
+}
+
 /**
  * Tool Use 循环。
  * 返回最终的 assistant 文本内容；若没有启用任何工具则返回 null（调用方走流式路径）。
@@ -52,7 +83,7 @@ async function runToolLoop(
   config: { baseUrl: string; apiKey: string; model: string },
   systemPrompt: string,
   memoryMessages: { role: string; content: string }[],
-  apiMessages: { role: string; content: string }[],
+  apiMessages: { role: string; content: string | any[] }[],
   maxTokens: number | undefined,
   // 每发生一次工具调用就回调一次，用于实时把记录推到 UI
   onToolInvocation?: (inv: { name: string; args: string }) => void
@@ -181,18 +212,27 @@ async function streamAssistantResponse(
 
   // 相邻消息间隔超过阈值时，在该消息 content 前插入一行独立时间标记。
   // 第一条消息始终带标记，作为对话起点的时间锚点。
-  const apiMessages = filtered.map((m, index) => {
+  const apiMessagesPromises = filtered.map(async (m, index) => {
     const prev = index > 0 ? filtered[index - 1] : null;
     const needMarker = !prev || m.createdAt - prev.createdAt >= TIME_GAP_THRESHOLD_MS;
     let msgContent = m.content;
     if (settings.stripThinking) {
       msgContent = msgContent.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
     }
-    const content = needMarker
+    const textContent = needMarker
       ? `[时间 ${formatTimeMarker(m.createdAt)}]\n${msgContent}`
       : msgContent;
-    return { role: m.role, content };
+
+    if (m.imageUri) {
+      const dataUrl = await readImageAsDataUrl(m.imageUri);
+      if (dataUrl) {
+        return { role: m.role, content: buildVisionContent(textContent, dataUrl) };
+      }
+    }
+    return { role: m.role, content: textContent };
   });
+
+  const apiMessages = await Promise.all(apiMessagesPromises);
 
   // 当前时间注入到 system prompt 的最前面（所有 prompt 之前）
   const systemPromptWithTime = `当前时间：${formatCurrentTime()}\n\n${settings.systemPrompt}`;
@@ -318,7 +358,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   error: null,
 
   // 仅把用户消息加入列表并持久化，不触发 AI 回复。
-  addUserMessage: async (content: string) => {
+  addUserMessage: async (content: string, imageUri?: string) => {
     const { isStreaming } = get();
     if (isStreaming) return;
 
@@ -337,7 +377,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const now = Date.now();
       const conv: Conversation = {
         id: conversationId,
-        title: content.slice(0, 30),
+        title: content.slice(0, 30) || (imageUri ? '[图片]' : ''),
         systemPrompt: settings.systemPrompt,
         model: config.model,
         createdAt: now,
@@ -351,6 +391,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       id: randomUUID(),
       role: 'user',
       content,
+      imageUri,
       createdAt: Date.now(),
     };
 
@@ -380,10 +421,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   // 一体化发送：加用户消息 + 触发 AI 回复（向后兼容）。
-  sendMessage: async (content: string) => {
+  sendMessage: async (content: string, imageUri?: string) => {
     const { isStreaming } = get();
     if (isStreaming) return;
-    await get().addUserMessage(content);
+    await get().addUserMessage(content, imageUri);
     // addUserMessage 可能因为缺少配置而设置 error 并提前返回，
     // 此时不应继续触发回复。
     if (get().error) return;

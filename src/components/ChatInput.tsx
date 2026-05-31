@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { View, TextInput, Pressable, Text, StyleSheet, Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ImagePicker from 'expo-image-picker';
 import { colors } from '../theme/colors';
 import { useSettingsStore } from '../stores/settings';
 
 interface Props {
-  onSend: (text: string) => void;          // 仅发送用户消息（回车触发），不调 API
-  onTriggerResponse: () => void;            // 触发 AI 回复（发送按钮触发）
+  onSend: (text: string, imageUri?: string) => void;
+  onTriggerResponse: () => void;
   disabled?: boolean;
   isStreaming?: boolean;
   onStop?: () => void;
@@ -15,25 +16,33 @@ interface Props {
 
 export function ChatInput({ onSend, onTriggerResponse, disabled, isStreaming, onStop, onModelPress }: Props) {
   const [text, setText] = useState('');
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
   const { apiConfigs, activeConfigIndex } = useSettingsStore();
   const current = apiConfigs[activeConfigIndex];
   const currentModel = current?.name || current?.model || '未配置';
 
-  // 回车：仅把用户消息加入列表，不触发 AI 回复
-  const handleSend = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed || disabled) return;
-    onSend(trimmed);
-    setText('');
+  const pickImage = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.7,
+      allowsEditing: false,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setPendingImage(result.assets[0].uri);
+    }
   };
 
-  // 文本变化：检测「在末尾新增了一个换行符」→ 视为回车发送。
-  // 不直接拦截按键（Android multiline 无法可靠阻止默认换行），
-  // 而是在换行进入 state 前把它当作发送信号处理，避免残留换行。
+  const handleSend = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed && !pendingImage) return;
+    if (disabled) return;
+    onSend(trimmed, pendingImage || undefined);
+    setText('');
+    setPendingImage(null);
+  };
+
   const handleChangeText = (next: string) => {
-    // 仅当新文本比旧文本恰好多了一个尾部 \n 时才触发，
-    // 避免粘贴多行文本时误发送。
     if (
       next.length === text.length + 1 &&
       next.startsWith(text) &&
@@ -45,29 +54,39 @@ export function ChatInput({ onSend, onTriggerResponse, disabled, isStreaming, on
     setText(next);
   };
 
-  // 发送按钮：触发 AI 回复。有文字时先发消息再触发，无文字时直接触发
   const handleStopOrSend = () => {
     if (isStreaming) {
       onStop?.();
       return;
     }
     const trimmed = text.trim();
-    if (trimmed) {
-      onSend(trimmed);
+    if (trimmed || pendingImage) {
+      onSend(trimmed, pendingImage || undefined);
       setText('');
+      setPendingImage(null);
     }
     onTriggerResponse();
   };
 
   const getSendIcon = () => {
     if (isStreaming) return require('../../assets/stopsend.png');
-    if (text.trim()) return require('../../assets/send2.png');
+    if (text.trim() || pendingImage) return require('../../assets/send2.png');
     return require('../../assets/send1.png');
   };
 
   return (
     <View style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 12) }]}>
       <View style={styles.container}>
+        {pendingImage && (
+          <View style={styles.previewRow}>
+            <View style={styles.previewWrap}>
+              <Image source={{ uri: pendingImage }} style={styles.previewImage} resizeMode="cover" />
+              <Pressable style={styles.previewClose} onPress={() => setPendingImage(null)}>
+                <Text style={styles.previewCloseText}>✕</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
         <TextInput
           style={styles.input}
           value={text}
@@ -79,7 +98,7 @@ export function ChatInput({ onSend, onTriggerResponse, disabled, isStreaming, on
           editable={!disabled}
         />
         <View style={styles.toolbar}>
-          <Pressable style={styles.optionsButton}>
+          <Pressable style={styles.optionsButton} onPress={pickImage}>
             <Image source={require('../../assets/optionsbutton.png')} style={styles.optionsImage} resizeMode="contain" />
           </Pressable>
 
@@ -114,6 +133,35 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 8,
     paddingHorizontal: 16,
+  },
+  previewRow: {
+    marginBottom: 8,
+  },
+  previewWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  previewImage: {
+    width: 72,
+    height: 72,
+  },
+  previewClose: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewCloseText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
   },
   input: {
     fontSize: 16,
