@@ -9,9 +9,10 @@ interface Props {
   content: string;
   variant: 'user' | 'assistant';
   markdownStyle?: any;
+  markdownRules?: any;
 }
 
-export function StickerContent({ content, variant, markdownStyle }: Props) {
+export function StickerContent({ content, variant, markdownStyle, markdownRules }: Props) {
   const isUser = variant === 'user';
   const chunks = splitStickerContent(content, isUser ? 'user' : 'assistant');
 
@@ -41,7 +42,7 @@ export function StickerContent({ content, variant, markdownStyle }: Props) {
         }
 
         return (
-          <Markdown key={`text-${index}`} style={markdownStyle}>
+          <Markdown key={`text-${index}`} style={markdownStyle} rules={markdownRules}>
             {chunk.text}
           </Markdown>
         );
@@ -59,6 +60,7 @@ const styles = StyleSheet.create({
   },
   assistantContainer: {
     alignItems: 'flex-start',
+    width: '100%',
     maxWidth: '100%',
   },
   userText: {

@@ -17,6 +17,11 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
+      "permissions": [
+        "android.permission.PACKAGE_USAGE_STATS",
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
+      ],
       "package": "com.ysclaude.app"
     },
     "web": {
@@ -44,6 +49,13 @@
           "sounds": [
             "./assets/messagealert.mp3"
           ]
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "允许 YSClaude 读取和管理你的日历日程，以便在你开启日历 Tool 后执行日程相关请求。",
+          "remindersPermission": false
         }
       ]
     ],

@@ -1,0 +1,277 @@
+import { NativeModules, Platform } from 'react-native';
+import * as Battery from 'expo-battery';
+import * as Calendar from 'expo-calendar';
+import * as Device from 'expo-device';
+
+function toJson(data: unknown): string {
+  return JSON.stringify(data, null, 2);
+}
+
+function batteryStateToText(state: Battery.BatteryState): string {
+  switch (state) {
+    case Battery.BatteryState.CHARGING:
+      return 'charging';
+    case Battery.BatteryState.FULL:
+      return 'full';
+    case Battery.BatteryState.UNPLUGGED:
+      return 'unplugged';
+    case Battery.BatteryState.UNKNOWN:
+    default:
+      return 'unknown';
+  }
+}
+
+function deviceTypeToText(type: Device.DeviceType): string {
+  switch (type) {
+    case Device.DeviceType.PHONE:
+      return 'phone';
+    case Device.DeviceType.TABLET:
+      return 'tablet';
+    case Device.DeviceType.DESKTOP:
+      return 'desktop';
+    case Device.DeviceType.TV:
+      return 'tv';
+    case Device.DeviceType.UNKNOWN:
+    default:
+      return 'unknown';
+  }
+}
+
+function parseDate(value: unknown, fallback?: Date): Date {
+  if (typeof value !== 'string' || !value.trim()) {
+    if (fallback) return fallback;
+    throw new Error('缺少日期参数');
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`日期格式无效: ${value}`);
+  }
+  return date;
+}
+
+function getArg(args: Record<string, any>, ...names: string[]): unknown {
+  for (const name of names) {
+    if (args[name] !== undefined && args[name] !== null && args[name] !== '') {
+      return args[name];
+    }
+  }
+  return undefined;
+}
+
+function addHours(date: Date, hours: number): Date {
+  return new Date(date.getTime() + hours * 60 * 60 * 1000);
+}
+
+const AndroidSystemTools = NativeModules.AndroidSystemTools as
+  | {
+      getAppUsageStats: (startTime: number, endTime: number, limit: number) => Promise<unknown>;
+      openUsageAccessSettings: () => Promise<boolean>;
+    }
+  | undefined;
+
+function ensureAndroidSystemTools(): NonNullable<typeof AndroidSystemTools> {
+  if (Platform.OS !== 'android') {
+    throw new Error('该工具仅支持 Android');
+  }
+  if (!AndroidSystemTools) {
+    throw new Error('Android 原生模块未加载，请重新运行 npx expo run:android 安装包含原生模块的新包');
+  }
+  return AndroidSystemTools;
+}
+
+function getTimeRangeArgs(args: Record<string, any>, defaultDays: number): { startDate: Date; endDate: Date } {
+  const endDate = parseDate(
+    getArg(args, 'end_date', 'endDate', 'end_time', 'endTime'),
+    new Date()
+  );
+  const startDate = parseDate(
+    getArg(args, 'start_date', 'startDate', 'start_time', 'startTime'),
+    new Date(endDate.getTime() - defaultDays * 24 * 60 * 60 * 1000)
+  );
+  return { startDate, endDate };
+}
+
+async function ensureCalendarPermission(): Promise<void> {
+  const current = await Calendar.getCalendarPermissions();
+  if (current.granted) return;
+
+  const requested = await Calendar.requestCalendarPermissions();
+  if (!requested.granted) {
+    throw new Error('未获得日历权限，请在系统权限设置中允许访问日历');
+  }
+}
+
+async function getWritableCalendar(calendarId?: string): Promise<Calendar.ExpoCalendar> {
+  if (calendarId) return await Calendar.ExpoCalendar.get(calendarId);
+
+  try {
+    const defaultCalendar = Calendar.getDefaultCalendarSync();
+    if (defaultCalendar?.id) return defaultCalendar;
+  } catch {
+    // Fall through to selecting a writable calendar from the list.
+  }
+
+  const calendars = await Calendar.getCalendars(Calendar.EntityTypes.EVENT);
+  const writableCalendar = calendars.find((calendar) => calendar.allowsModifications) || calendars[0];
+  if (!writableCalendar) {
+    throw new Error('未找到可写日历');
+  }
+  return writableCalendar;
+}
+
+export async function readDeviceInfo(): Promise<string> {
+  const [deviceType, uptime, maxMemory] = await Promise.all([
+    Device.getDeviceTypeAsync(),
+    Device.getUptimeAsync().catch(() => null),
+    Device.getMaxMemoryAsync().catch(() => null),
+  ]);
+
+  return toJson({
+    platform: Platform.OS,
+    isDevice: Device.isDevice,
+    deviceType: deviceTypeToText(deviceType),
+    brand: Device.brand,
+    manufacturer: Device.manufacturer,
+    modelName: Device.modelName,
+    modelId: Device.modelId,
+    designName: Device.designName,
+    productName: Device.productName,
+    deviceYearClass: Device.deviceYearClass,
+    deviceName: Device.deviceName,
+    osName: Device.osName,
+    osVersion: Device.osVersion,
+    osBuildId: Device.osBuildId,
+    osInternalBuildId: Device.osInternalBuildId,
+    osBuildFingerprint: Device.osBuildFingerprint,
+    platformApiLevel: Device.platformApiLevel,
+    supportedCpuArchitectures: Device.supportedCpuArchitectures,
+    totalMemoryBytes: Device.totalMemory,
+    maxMemoryBytes: maxMemory,
+    uptimeSeconds: uptime,
+  });
+}
+
+export async function readBatteryStatus(): Promise<string> {
+  const [powerState, batteryOptimizationEnabled] = await Promise.all([
+    Battery.getPowerStateAsync(),
+    Platform.OS === 'android'
+      ? Battery.isBatteryOptimizationEnabledAsync().catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  return toJson({
+    batteryLevel: powerState.batteryLevel,
+    batteryPercent:
+      typeof powerState.batteryLevel === 'number'
+        ? Math.round(powerState.batteryLevel * 100)
+        : null,
+    batteryState: batteryStateToText(powerState.batteryState),
+    lowPowerMode: powerState.lowPowerMode,
+    batteryOptimizationEnabled,
+  });
+}
+
+export async function readAppUsageStats(args: Record<string, any>): Promise<string> {
+  const module = ensureAndroidSystemTools();
+  const { startDate, endDate } = getTimeRangeArgs(args, 1);
+  const limitValue = Number(getArg(args, 'limit', 'max_results', 'maxResults') || 20);
+  const result = await module.getAppUsageStats(
+    startDate.getTime(),
+    endDate.getTime(),
+    Number.isFinite(limitValue) ? limitValue : 20
+  );
+  return toJson(result);
+}
+
+export async function openUsageAccessSettings(): Promise<string> {
+  const module = ensureAndroidSystemTools();
+  await module.openUsageAccessSettings();
+  return toJson({ opened: true, target: 'usage_access_settings' });
+}
+
+export async function listCalendarEvents(args: Record<string, any>): Promise<string> {
+  await ensureCalendarPermission();
+  const now = new Date();
+  const startDate = parseDate(getArg(args, 'start_date', 'startDate', 'start_time', 'startTime'), now);
+  const endDate = parseDate(
+    getArg(args, 'end_date', 'endDate', 'end_time', 'endTime'),
+    addHours(startDate, 24)
+  );
+  const calendarIds = Array.isArray(args.calendar_ids) && args.calendar_ids.length > 0
+    ? args.calendar_ids.map(String)
+    : (await Calendar.getCalendars(Calendar.EntityTypes.EVENT)).map((calendar) => calendar.id);
+
+  const events = await Calendar.listEvents(calendarIds, startDate, endDate);
+  return toJson(events.map((event) => ({
+    id: event.id,
+    calendarId: event.calendarId,
+    title: event.title,
+    startDate: event.startDate,
+    endDate: event.endDate,
+    allDay: event.allDay,
+    location: event.location,
+    notes: event.notes,
+    timeZone: event.timeZone,
+    status: event.status,
+  })));
+}
+
+export async function createCalendarEvent(args: Record<string, any>): Promise<string> {
+  await ensureCalendarPermission();
+  const calendar = await getWritableCalendar(args.calendar_id ? String(args.calendar_id) : undefined);
+  const startDate = parseDate(getArg(args, 'start_date', 'startDate', 'start_time', 'startTime'));
+  const endDate = parseDate(
+    getArg(args, 'end_date', 'endDate', 'end_time', 'endTime'),
+    addHours(startDate, 1)
+  );
+  const event = await calendar.createEvent({
+    title: String(args.title || '新日程'),
+    startDate,
+    endDate,
+    allDay: Boolean(getArg(args, 'all_day', 'allDay')),
+    location: args.location ? String(args.location) : undefined,
+    notes: args.notes ? String(args.notes) : undefined,
+    timeZone: args.time_zone ? String(args.time_zone) : undefined,
+  });
+  return toJson({ id: event.id, calendarId: calendar.id });
+}
+
+export async function updateCalendarEvent(args: Record<string, any>): Promise<string> {
+  await ensureCalendarPermission();
+  const id = String(args.id || '').trim();
+  if (!id) throw new Error('缺少日程 id');
+
+  const details: Record<string, any> = {};
+  if (args.title !== undefined) details.title = String(args.title);
+  const startValue = getArg(args, 'start_date', 'startDate', 'start_time', 'startTime');
+  const endValue = getArg(args, 'end_date', 'endDate', 'end_time', 'endTime');
+  const allDayValue = getArg(args, 'all_day', 'allDay');
+  if (startValue !== undefined) details.startDate = parseDate(startValue);
+  if (endValue !== undefined) details.endDate = parseDate(endValue);
+  if (allDayValue !== undefined) details.allDay = Boolean(allDayValue);
+  if (args.location !== undefined) details.location = String(args.location);
+  if (args.notes !== undefined) details.notes = String(args.notes);
+  if (args.time_zone !== undefined) details.timeZone = String(args.time_zone);
+
+  const event = await Calendar.ExpoCalendarEvent.get(id);
+  await event.update(details);
+  return toJson({ id, updated: true });
+}
+
+export async function deleteCalendarEvent(args: Record<string, any>): Promise<string> {
+  await ensureCalendarPermission();
+  const id = String(args.id || '').trim();
+  if (!id) throw new Error('缺少日程 id');
+  const event = await Calendar.ExpoCalendarEvent.get(id);
+  await event.delete();
+  return toJson({ id, deleted: true });
+}
+
+export async function readUnsupportedNativeCapability(capability: string): Promise<string> {
+  return toJson({
+    supported: false,
+    capability,
+    reason:
+      'Expo SDK 56 没有内置该系统能力的跨平台 API。需要后续添加自定义原生模块或接入第三方原生库，并在 development build 中运行。',
+  });
+}

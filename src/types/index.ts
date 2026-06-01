@@ -13,8 +13,11 @@ export interface Message {
 
 // 单次工具调用的展示记录（已发生的事实，区别于请求模型用的 ToolCall）
 export interface ToolInvocation {
+  callId?: string;     // 模型返回的 tool_call id，用于把调用结果回填到同一条记录
   name: string;        // 工具名，如 web_search
   args: string;        // 原始参数 JSON 字符串
+  result?: string;     // 工具执行结果或错误文本，供展开调试查看
+  status?: 'running' | 'done';
 }
 
 export interface ToolCall {

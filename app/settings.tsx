@@ -600,10 +600,12 @@ function ToolConfigTab() {
     webSearchConfig,
     webPageReaderConfig,
     webInteractionConfig,
+    nativeToolConfig,
     setMemoryVaultConfig,
     setWebSearchConfig,
     setWebPageReaderConfig,
     setWebInteractionConfig,
+    setNativeToolConfig,
   } = useSettingsStore();
 
   // 记忆库本地 state
@@ -627,6 +629,12 @@ function ToolConfigTab() {
   // 网页交互本地 state
   const [wiEnabled, setWiEnabled] = useState(!!webInteractionConfig?.enabled);
   const [wiMaxCalls, setWiMaxCalls] = useState(String(webInteractionConfig?.maxToolCalls || 8));
+
+  // 设备原生工具本地 state
+  const [deviceInfoEnabled, setDeviceInfoEnabled] = useState(!!nativeToolConfig?.deviceInfoEnabled);
+  const [batteryStatusEnabled, setBatteryStatusEnabled] = useState(!!nativeToolConfig?.batteryStatusEnabled);
+  const [appUsageStatsEnabled, setAppUsageStatsEnabled] = useState(!!nativeToolConfig?.appUsageStatsEnabled);
+  const [calendarEnabled, setCalendarEnabled] = useState(!!nativeToolConfig?.calendarEnabled);
 
   function handleSaveMemory() {
     const topK = parseInt(mvTopK, 10);
@@ -700,6 +708,43 @@ function ToolConfigTab() {
     });
     Alert.alert('已保存', wiEnabled ? '网页交互配置已保存' : '网页交互已关闭');
   }
+
+  function handleSaveNativeTools() {
+    setNativeToolConfig({
+      deviceInfoEnabled,
+      batteryStatusEnabled,
+      appUsageStatsEnabled,
+      calendarEnabled,
+    });
+    Alert.alert('已保存', '设备原生 Tool 开关已保存');
+  }
+
+  const nativeToolRows = [
+    {
+      label: '用户设备信息读取',
+      hint: '品牌、型号、系统版本、设备类型、内存等',
+      value: deviceInfoEnabled,
+      onValueChange: setDeviceInfoEnabled,
+    },
+    {
+      label: '电池状态读取',
+      hint: '电量、充电状态、低电量模式等',
+      value: batteryStatusEnabled,
+      onValueChange: setBatteryStatusEnabled,
+    },
+    {
+      label: '应用使用时间统计读取',
+      hint: 'Android 使用情况访问权限；首次调用会提示去系统设置授权',
+      value: appUsageStatsEnabled,
+      onValueChange: setAppUsageStatsEnabled,
+    },
+    {
+      label: '日历日程管理',
+      hint: '读取、创建、修改、删除系统日历日程，需要授权',
+      value: calendarEnabled,
+      onValueChange: setCalendarEnabled,
+    },
+  ];
 
   return (
     <ScrollView style={styles.content}>
@@ -837,6 +882,30 @@ function ToolConfigTab() {
       <View style={styles.actions}>
         <Pressable style={styles.saveButton} onPress={handleSaveWebInteraction}>
           <Text style={styles.saveButtonText}>保存配置</Text>
+        </Pressable>
+      </View>
+
+      {/* ===== 设备原生 Tools ===== */}
+      <Text style={styles.sectionTitle}>设备原生 Tools</Text>
+      <Text style={styles.hint}>这些工具会直接访问用户设备能力；日历会触发系统权限请求，其他受限能力会先返回实现限制说明</Text>
+
+      {nativeToolRows.map((row) => (
+        <View key={row.label} style={styles.nativeToolRow}>
+          <View style={styles.nativeToolText}>
+            <Text style={styles.label}>{row.label}</Text>
+            <Text style={styles.hint}>{row.hint}</Text>
+          </View>
+          <Switch
+            value={row.value}
+            onValueChange={row.onValueChange}
+            trackColor={{ true: colors.primary }}
+          />
+        </View>
+      ))}
+
+      <View style={styles.actions}>
+        <Pressable style={styles.saveButton} onPress={handleSaveNativeTools}>
+          <Text style={styles.saveButtonText}>保存设备 Tool 开关</Text>
         </Pressable>
       </View>
     </ScrollView>
@@ -1269,6 +1338,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 14,
   },
+  nativeToolRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+    backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 10,
+  },
+  nativeToolText: { flex: 1 },
   content: { flex: 1, padding: 20 },
   sectionTitle: {
     fontSize: 13, fontWeight: '600', color: colors.textSecondary,

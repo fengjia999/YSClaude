@@ -14,6 +14,7 @@
 | Markdown | @ronradtke/react-native-markdown-display |
 | TTS | MiniMax T2A (expo-audio + expo-file-system) |
 | WebView | react-native-webview |
+| 设备能力 | expo-device / expo-battery / expo-calendar |
 | 打包 | EAS Build → APK |
 
 ## 功能
@@ -21,7 +22,7 @@
 ### 核心（已完成）
 - 文本对话（OpenAI 兼容格式）
 - 流式输出（SSE 逐 token 渲染）
-- Markdown 渲染（代码块深色高亮）
+- Markdown 渲染（代码块深色高亮，长表格在气泡内横向滚动）
 - 对话历史管理（SQLite 持久化、恢复、删除、重命名）
 - 多 API 配置管理（命名保存、同名覆盖、拉取模型列表、测试连接）
 - 多模型随时切换
@@ -42,7 +43,8 @@
   - 图片随消息持久化（SQLite 存储本地 URI），重开历史对话仍可见
 - 聊天页 UI
   - 悬浮输入框：仅输入框气泡悬浮于聊天内容之上，两侧与下方留透明空隙，滚动时可透出底层聊天记录
-  - 工具调用展示：AI 回复中实际发生的工具调用以「时钟图标 + 动作描述 + 箭头」单行展示于正文上方，每次调用一行，随消息持久化（重开历史对话仍可见）
+  - 工具调用展示：AI 回复中实际发生的工具调用以「时钟图标 + 动作描述 + 展开箭头」单行展示于正文上方，每次调用一行，随消息持久化（重开历史对话仍可见）
+  - 工具调用详情：点击工具调用行可展开参数与执行结果，便于调试工具链行为
   - 思维链折叠：AI 输出中 `<thinking>...</thinking>` 包裹的内容拆分为可点击展开的「Thought process」胶囊，正文仅渲染剩余部分
 - 日记系统
   - AI 日记总结：选择消息范围，AI 以第一人称流水账形式自动总结为日记
@@ -61,8 +63,12 @@
   - Tavily 联网搜索
   - 网页读取：用户发送链接后，AI 可调用 `read_web_page` 抓取标题、正文和摘要；可选配置 JS 渲染读取服务兜底
   - 网页交互：AI 可在 App 内打开可见 WebView 面板，并通过 `webview_open` / `webview_observe` / `webview_click_element` / `webview_click_selector` / `webview_tap` / `webview_wait` 进行简单网页操作
+  - 设备原生 Tools：可选开启 `read_device_info`、`read_battery_status`、`read_app_usage_stats`、`calendar_list_events`、`calendar_create_event`、`calendar_update_event`、`calendar_delete_event`
+  - 日历工具：通过 Expo Calendar 读写系统日历；首次使用会请求系统日历权限
+  - 应用使用统计：Android 专属能力，依赖 `AndroidSystemTools` 原生模块；未打入原生模块时会返回需要重新安装 development build 的说明
   - 流式 Tool 调用：启用工具后仍使用流式输出；模型需要工具时暂停执行工具，再继续流式回复
-  - 工具调用可视化：AI 调用工具时在回复上方逐行展示「调用了什么工具 + 参数」（clock 图标 + 描述 + 箭头），随消息持久化
+  - 流式 tool_call 合并：兼容部分模型把工具名或多个工具调用分片输出的情况，减少工具名串联或调用错位
+  - 工具调用可视化：AI 调用工具时在回复上方逐行展示「调用了什么工具 + 参数」（clock 图标 + 描述 + 箭头），点击可查看参数和结果，随消息持久化
 - WebView 网页面板
   - AI 打开网页时，用户端同步显示可见窗口
   - 顶部标题栏可拖动，右下角可缩放窗口大小
@@ -116,6 +122,11 @@
   - 支持打开、观察、点击元素、点击 selector、坐标点击、等待
   - 适合简单网页交互和轻量前端小游戏
   - 每轮最大操作次数可配置，防止无限循环
+- **设备原生 Tools** — 可按能力分别开启设备信息、电池状态、应用使用统计和日历日程管理
+  - 设备信息：读取品牌、型号、系统版本、设备类型、内存、运行时长等
+  - 电池状态：读取电量、充电状态、低电量模式和 Android 电池优化状态
+  - 应用使用统计：Android 专属；首次使用需到系统「使用情况访问权限」中授权，且需要包含 `AndroidSystemTools` 的 development build
+  - 日历日程：支持读取、创建、修改、删除系统日历日程，首次使用会请求日历权限
 
 网页交互窗口会出现在 App 内，用户可拖动标题栏改变位置，也可拖动右下角调整大小。窗口关闭前会保留当前页面状态，后续 AI 可继续观察和操作。
 
@@ -150,12 +161,14 @@ src/
 │   ├── ChatBubble.tsx      # 消息气泡 + 操作图标 + 工具调用行 + 思维链折叠
 │   ├── ChatInput.tsx       # 输入框 + 工具栏
 │   ├── ModelSelector.tsx   # 模型切换弹窗
+│   ├── StickerContent.tsx  # 表情包 token 分段 + 助手 Markdown 渲染
 │   ├── TimeDivider.tsx     # 消息间居中时间分隔（间隔 >30min 时显示）
 │   └── WebViewPanel.tsx    # AI 网页交互面板（可拖动、可缩放）
 ├── services/
 │   ├── api.ts              # 流式 API 调用（SSE + stream tool_calls）
+│   ├── nativeTools.ts      # 设备信息 / 电池 / 应用使用统计 / 日历工具实现
 │   ├── tts.ts              # MiniMax TTS 语音合成
-│   ├── tools.ts            # 工具定义与执行（记忆库 / 搜索 / 网页读取 / 网页交互）
+│   ├── tools.ts            # 工具定义与执行（记忆库 / 搜索 / 网页读取 / 网页交互 / 设备原生）
 │   └── webviewController.ts # Tool 与 WebViewPanel 的控制桥
 ├── utils/
 │   ├── time.ts             # 时间格式化 + 消息间隔时间戳阈值

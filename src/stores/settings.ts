@@ -45,6 +45,13 @@ export interface WebInteractionConfig {
   maxToolCalls: number;
 }
 
+export interface NativeToolConfig {
+  deviceInfoEnabled: boolean;
+  batteryStatusEnabled: boolean;
+  appUsageStatsEnabled: boolean;
+  calendarEnabled: boolean;
+}
+
 interface SettingsState {
   _hydrated: boolean;
   apiConfigs: NamedAPIConfig[];
@@ -58,6 +65,7 @@ interface SettingsState {
   webSearchConfig: WebSearchConfig;
   webPageReaderConfig: WebPageReaderConfig;
   webInteractionConfig: WebInteractionConfig;
+  nativeToolConfig: NativeToolConfig;
 
   setActiveConfig: (index: number) => void;
   saveAPIConfig: (config: NamedAPIConfig) => void;
@@ -71,6 +79,7 @@ interface SettingsState {
   setWebSearchConfig: (config: Partial<WebSearchConfig>) => void;
   setWebPageReaderConfig: (config: Partial<WebPageReaderConfig>) => void;
   setWebInteractionConfig: (config: Partial<WebInteractionConfig>) => void;
+  setNativeToolConfig: (config: Partial<NativeToolConfig>) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -115,6 +124,12 @@ export const useSettingsStore = create<SettingsState>()(
         enabled: false,
         maxToolCalls: 8,
       },
+      nativeToolConfig: {
+        deviceInfoEnabled: false,
+        batteryStatusEnabled: false,
+        appUsageStatsEnabled: false,
+        calendarEnabled: false,
+      },
 
       setActiveConfig: (index) => set({ activeConfigIndex: index }),
 
@@ -153,6 +168,8 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ webPageReaderConfig: { ...state.webPageReaderConfig, ...config } })),
       setWebInteractionConfig: (config) =>
         set((state) => ({ webInteractionConfig: { ...state.webInteractionConfig, ...config } })),
+      setNativeToolConfig: (config) =>
+        set((state) => ({ nativeToolConfig: { ...state.nativeToolConfig, ...config } })),
     }),
     {
       name: 'ysclaude-settings',
@@ -169,6 +186,7 @@ export const useSettingsStore = create<SettingsState>()(
         webSearchConfig: state.webSearchConfig,
         webPageReaderConfig: state.webPageReaderConfig,
         webInteractionConfig: state.webInteractionConfig,
+        nativeToolConfig: state.nativeToolConfig,
       }),
       onRehydrateStorage: () => () => {
         useSettingsStore.setState({ _hydrated: true });

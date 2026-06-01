@@ -1,5 +1,5 @@
 ﻿import { create } from 'zustand';
-import { Message, Conversation, HiddenRange } from '../types';
+import { Message, Conversation, HiddenRange, ToolInvocation } from '../types';
 import { randomUUID } from 'expo-crypto';
 import { File } from 'expo-file-system';
 import { streamChat, streamChatCompletion } from '../services/api';
@@ -119,7 +119,7 @@ async function runToolLoop(
   maxTokens: number | undefined,
   onToken: (token: string) => void,
   // 每发生一次工具调用就回调一次，用于实时把记录推到 UI
-  onToolInvocation?: (inv: { name: string; args: string }) => void,
+  onToolInvocation?: (inv: ToolInvocation) => void,
   signal?: AbortSignal
 ): Promise<boolean> {
   const settings = useSettingsStore.getState();
@@ -135,6 +135,7 @@ async function runToolLoop(
     webSearch: webEnabled,
     webPageReader: webPageReaderEnabled,
     webInteraction: webInteractionEnabled,
+    nativeTools: settings.nativeToolConfig,
   });
   if (tools.length === 0) {
     return false; // 无工具 → 走原有流式路径
@@ -183,7 +184,12 @@ async function runToolLoop(
     for (const tc of toolCalls) {
       toolCallCount++;
       // 把本次调用记录回调给 UI（实时展示「调用了什么工具」）
-      onToolInvocation?.({ name: tc.function.name, args: tc.function.arguments || '' });
+      onToolInvocation?.({
+        callId: tc.id,
+        name: tc.function.name,
+        args: tc.function.arguments || '',
+        status: 'running',
+      });
       let args: Record<string, any> = {};
       try {
         args = JSON.parse(tc.function.arguments || '{}');
@@ -195,6 +201,14 @@ async function runToolLoop(
         webSearchConfig: settings.webSearchConfig,
         webPageReaderConfig: settings.webPageReaderConfig,
         webInteractionConfig: settings.webInteractionConfig,
+        nativeToolConfig: settings.nativeToolConfig,
+      });
+      onToolInvocation?.({
+        callId: tc.id,
+        name: tc.function.name,
+        args: tc.function.arguments || '',
+        result,
+        status: 'done',
       });
       messages.push({
         role: 'tool',
@@ -317,14 +331,24 @@ async function streamAssistantResponse(
   };
 
   // 每发生一次工具调用，就把记录追加到当前 assistant 消息上，实时反映到 UI
-  const appendToolInvocation = (inv: { name: string; args: string }) => {
+  const appendToolInvocation = (inv: ToolInvocation) => {
     set((state) => {
       const msgs = [...state.messages];
       const last = msgs[msgs.length - 1];
       if (last && last.role === 'assistant') {
+        const existing = last.toolInvocations || [];
+        const existingIndex = inv.callId
+          ? existing.findIndex((item) => item.callId === inv.callId)
+          : -1;
+        const nextInvocations = [...existing];
+        if (existingIndex >= 0) {
+          nextInvocations[existingIndex] = { ...nextInvocations[existingIndex], ...inv };
+        } else {
+          nextInvocations.push(inv);
+        }
         msgs[msgs.length - 1] = {
           ...last,
-          toolInvocations: [...(last.toolInvocations || []), inv],
+          toolInvocations: nextInvocations,
         };
       }
       return { messages: msgs };

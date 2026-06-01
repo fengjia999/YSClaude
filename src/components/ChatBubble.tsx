@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, StyleSheet, Pressable, Image, Alert, TextInput, Modal, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Image, Alert, TextInput, Modal, Dimensions, ScrollView } from 'react-native';
 import Markdown from '@ronradtke/react-native-markdown-display';
 import { Message } from '../types';
 import { colors } from '../theme/colors';
@@ -12,6 +12,21 @@ import { hasStickerToken, isStickerOnlyContent } from '../utils/stickers';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const IMAGE_MAX_WIDTH = SCREEN_WIDTH * 0.65;
+
+const markdownRules = {
+  table: (node: any, children: React.ReactNode, _parent: any, styles: any) => (
+    <ScrollView
+      key={node.key}
+      horizontal
+      nestedScrollEnabled
+      showsHorizontalScrollIndicator
+      style={styles.markdownTableScroll}
+      contentContainerStyle={styles.markdownTableScrollContent}
+    >
+      <View style={styles._VIEW_SAFE_table}>{children}</View>
+    </ScrollView>
+  ),
+};
 
 const chatIcons = [
   require('../../assets/chat1.png'),
@@ -41,6 +56,14 @@ const TOOL_LABELS: Record<string, string> = {
   webview_click_element: '点击元素',
   webview_click_selector: '点击选择器',
   webview_wait: '等待网页',
+  read_device_info: '读取设备信息',
+  read_battery_status: '读取电池状态',
+  read_app_usage_stats: '读取应用使用统计',
+  open_usage_access_settings: '打开使用统计授权',
+  calendar_list_events: '读取日程',
+  calendar_create_event: '创建日程',
+  calendar_update_event: '修改日程',
+  calendar_delete_event: '删除日程',
 };
 
 // 把一次工具调用格式化成「动作描述 + 参数」的单行文字。
@@ -50,7 +73,7 @@ function formatToolInvocation(name: string, rawArgs: string): string {
   let detail = '';
   try {
     const args = JSON.parse(rawArgs || '{}');
-    detail = args.query ?? args.date ?? args.url ?? args.ms ?? args.index ?? args.selector ?? '';
+    detail = args.query ?? args.date ?? args.url ?? args.title ?? args.start_date ?? args.package_name ?? args.id ?? args.ms ?? args.index ?? args.selector ?? '';
     if (!detail && args.x != null && args.y != null) {
       detail = `${args.x}, ${args.y}`;
     }
@@ -59,6 +82,15 @@ function formatToolInvocation(name: string, rawArgs: string): string {
     detail = '';
   }
   return detail ? `${label}：${detail}` : label;
+}
+
+function formatDebugJson(raw: string): string {
+  if (!raw) return '{}';
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
 }
 
 // 思维链胶囊：白底灰边圆角，左侧 clock 图标 + "Thought process"，点击展开/收起内容。
@@ -76,7 +108,7 @@ function ThinkingBlock({ thinking }: { thinking: string }) {
       </Pressable>
       {expanded && (
         <View style={styles.thinkingContent}>
-          <Markdown style={thinkingMarkdownStyles}>{thinking}</Markdown>
+          <Markdown style={thinkingMarkdownStyles} rules={markdownRules}>{thinking}</Markdown>
         </View>
       )}
     </View>
@@ -131,6 +163,7 @@ export const ChatBubble = React.memo(function ChatBubble({
   const [menuVisible, setMenuVisible] = useState(false);
   // 长按时测量得到的气泡屏幕坐标，用于把菜单锚定到气泡上方
   const [menuAnchor, setMenuAnchor] = useState({ x: 0, y: 0, width: 0 });
+  const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
   const bubbleRef = useRef<View>(null);
 
   function handleUserLongPress() {
@@ -314,6 +347,7 @@ export const ChatBubble = React.memo(function ChatBubble({
           {message.toolInvocations.map((inv, i) => (
             <Pressable
               key={i}
+              onPress={() => setExpandedTools((state) => ({ ...state, [i]: !state[i] }))}
               onLongPress={() => {
                 Alert.alert('删除', '确定删除该工具调用记录？', [
                   { text: '取消', style: 'cancel' },
@@ -328,14 +362,18 @@ export const ChatBubble = React.memo(function ChatBubble({
                   resizeMode="contain"
                 />
                 <Text style={styles.toolText} numberOfLines={1}>
-                  {formatToolInvocation(inv.name, inv.args)}
+                  {formatToolInvocation(inv.name, inv.args)}{inv.status === 'running' ? '（执行中）' : ''}
                 </Text>
-                <Image
-                  source={require('../../assets/rightarrow.png')}
-                  style={styles.toolIconRight}
-                  resizeMode="contain"
-                />
+                <Text style={styles.toolChevron}>{expandedTools[i] ? '⌃' : '⌄'}</Text>
               </View>
+              {expandedTools[i] && (
+                <View style={styles.toolDetailBox}>
+                  <Text style={styles.toolDetailLabel}>参数</Text>
+                  <Text style={styles.toolDetailText} selectable>{formatDebugJson(inv.args)}</Text>
+                  <Text style={styles.toolDetailLabel}>结果</Text>
+                  <Text style={styles.toolDetailText} selectable>{inv.result || '尚未返回结果'}</Text>
+                </View>
+              )}
             </Pressable>
           ))}
         </View>
@@ -343,7 +381,12 @@ export const ChatBubble = React.memo(function ChatBubble({
       {/* 思维链：<thinking> 包裹的内容拆出，正文只渲染剩余部分 */}
       {thinking.length > 0 && <ThinkingBlock thinking={thinking} />}
       <View style={styles.assistantContent}>
-        <StickerContent content={body || ' '} variant="assistant" markdownStyle={markdownStyles} />
+        <StickerContent
+          content={body || ' '}
+          variant="assistant"
+          markdownStyle={markdownStyles}
+          markdownRules={markdownRules}
+        />
       </View>
       {message.content.length > 0 && (
         <>
@@ -465,6 +508,7 @@ const styles = StyleSheet.create({
     marginVertical: 8,
   },
   assistantContent: {
+    width: '100%',
     maxWidth: '100%',
   },
   // 工具调用记录列表（位于回复文字上方）
@@ -486,6 +530,34 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontSize: 13,
     color: colors.textSecondary,
+  },
+  toolChevron: {
+    marginLeft: 6,
+    fontSize: 13,
+    color: colors.textTertiary,
+  },
+  toolDetailBox: {
+    marginLeft: 21,
+    marginTop: 6,
+    marginBottom: 2,
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  toolDetailLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textTertiary,
+    marginBottom: 4,
+  },
+  toolDetailText: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.textSecondary,
+    marginBottom: 8,
+    fontFamily: fonts.mono,
   },
   toolIconRight: {
     width: 11,
@@ -585,7 +657,7 @@ const styles = StyleSheet.create({
 });
 
 const thinkingMarkdownStyles = StyleSheet.create({
-  body: { fontSize: 14, color: colors.textSecondary, lineHeight: 21 },
+  body: { width: '100%', fontSize: 14, color: colors.textSecondary, lineHeight: 21 },
   code_inline: {
     backgroundColor: colors.surface, color: colors.primary,
     paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, fontSize: 13, fontFamily: 'monospace',
@@ -593,10 +665,16 @@ const thinkingMarkdownStyles = StyleSheet.create({
   fence: { backgroundColor: colors.codeBlock, borderRadius: 10, padding: 12, marginVertical: 8 },
   code_block: { color: colors.codeText, fontSize: 12, fontFamily: 'monospace' },
   link: { color: colors.primary },
+  markdownTableScroll: { width: '100%', maxWidth: '100%', marginVertical: 8 },
+  markdownTableScrollContent: { flexGrow: 0 },
+  table: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, overflow: 'hidden' },
+  tr: { flexDirection: 'row', borderBottomWidth: 1, borderColor: colors.border },
+  th: { minWidth: 112, flexShrink: 0, paddingVertical: 7, paddingHorizontal: 9, backgroundColor: colors.surface },
+  td: { minWidth: 112, flexShrink: 0, paddingVertical: 7, paddingHorizontal: 9 },
 });
 
 const markdownStyles = StyleSheet.create({
-  body: { fontSize: 16, color: colors.text, lineHeight: 24, fontFamily: fonts.serifBold },
+  body: { width: '100%', fontSize: 16, color: colors.text, lineHeight: 24, fontFamily: fonts.serifBold },
   code_inline: {
     backgroundColor: colors.surface, color: colors.primary,
     paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, fontSize: 14, fontFamily: 'monospace',
@@ -612,4 +690,10 @@ const markdownStyles = StyleSheet.create({
   },
   list_item: { marginVertical: 2 },
   link: { color: colors.primary },
+  markdownTableScroll: { width: '100%', maxWidth: '100%', marginVertical: 10 },
+  markdownTableScrollContent: { flexGrow: 0 },
+  table: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, overflow: 'hidden' },
+  tr: { flexDirection: 'row', borderBottomWidth: 1, borderColor: colors.border },
+  th: { minWidth: 128, flexShrink: 0, paddingVertical: 8, paddingHorizontal: 10, backgroundColor: colors.surface },
+  td: { minWidth: 128, flexShrink: 0, paddingVertical: 8, paddingHorizontal: 10 },
 });
