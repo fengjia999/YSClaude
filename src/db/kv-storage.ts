@@ -2,15 +2,31 @@ import * as SQLite from 'expo-sqlite';
 import { StateStorage } from 'zustand/middleware';
 
 let kvDb: SQLite.SQLiteDatabase | null = null;
+// 与 database.ts 的 getDatabase() 同理：缓存 in-flight Promise，
+// 防止冷启动时多个并发调用者各自 openDatabaseAsync 导致竞态——
+// 后打开的连接覆盖先打开的、或在建表完成前就被使用，
+// 引发 NativeDatabase.execAsync 的 NullPointerException。
+let kvInitPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 async function getKVDb(): Promise<SQLite.SQLiteDatabase> {
-  if (!kvDb) {
-    kvDb = await SQLite.openDatabaseAsync('ysclaude_kv.db');
-    await kvDb.execAsync(
+  if (kvDb) return kvDb;
+  if (kvInitPromise) return kvInitPromise;
+
+  kvInitPromise = (async () => {
+    const opened = await SQLite.openDatabaseAsync('ysclaude_kv.db');
+    await opened.execAsync(
       `CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)`
     );
+    kvDb = opened;
+    return opened;
+  })();
+
+  try {
+    return await kvInitPromise;
+  } catch (e) {
+    kvInitPromise = null;
+    throw e;
   }
-  return kvDb;
 }
 
 export const sqliteStorage: StateStorage = {

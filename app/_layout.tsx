@@ -5,6 +5,11 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { colors } from '../src/theme/colors';
+import {
+  initNotifications,
+  startAppStateListener,
+  ensurePermission,
+} from '../src/services/notifications';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -22,6 +27,16 @@ export default function RootLayout() {
       SplashScreen.hideAsync();
     }
   }, [fontsLoaded]);
+
+  useEffect(() => {
+    // 设置通知 handler 和 Android 通知渠道
+    initNotifications();
+    // 开始追踪前后台状态
+    const unsub = startAppStateListener();
+    // 提前请求通知权限（Android 12 及以下自动授权，无对话框）
+    ensurePermission();
+    return unsub;
+  }, []);
 
   if (!fontsLoaded) {
     return (

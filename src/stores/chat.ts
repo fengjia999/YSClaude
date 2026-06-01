@@ -3,10 +3,12 @@ import { Message, Conversation, HiddenRange } from '../types';
 import { randomUUID } from 'expo-crypto';
 import { File } from 'expo-file-system';
 import { streamChat, chatCompletion } from '../services/api';
+import { notifyReplyReady } from '../services/notifications';
 import { useSettingsStore } from './settings';
 import { getToolDefinitions, executeTool } from '../services/tools';
 import { formatCurrentTime, formatTimeMarker, TIME_GAP_THRESHOLD_MS } from '../utils/time';
 import { mergeRanges } from '../utils/ranges';
+import { buildStickerSystemInstruction } from '../utils/stickers';
 import {
   createConversation,
   updateConversation,
@@ -82,7 +84,6 @@ function buildVisionContent(text: string, dataUrl: string): any[] {
 async function runToolLoop(
   config: { baseUrl: string; apiKey: string; model: string },
   systemPrompt: string,
-  memoryMessages: { role: string; content: string }[],
   apiMessages: { role: string; content: string | any[] }[],
   maxTokens: number | undefined,
   // 每发生一次工具调用就回调一次，用于实时把记录推到 UI
@@ -100,10 +101,9 @@ async function runToolLoop(
   // 每轮最大工具调用次数（记忆库配置；联网搜索复用同一上限）
   const maxToolCalls = Math.max(1, settings.memoryVaultConfig.maxToolCalls || 3);
 
-  // 构建对话消息（含 system + 近期日记）
+  // 构建对话消息（单个 system 消息 + 对话历史）
   const messages: any[] = [
     { role: 'system', content: systemPrompt },
-    ...memoryMessages,
     ...apiMessages,
   ];
 
@@ -234,27 +234,20 @@ async function streamAssistantResponse(
 
   const apiMessages = await Promise.all(apiMessagesPromises);
 
-  // 当前时间注入到 system prompt 的最前面（所有 prompt 之前）
-  const systemPromptWithTime = `当前时间：${formatCurrentTime()}\n\n${settings.systemPrompt}`;
+  // 构建完整的 system prompt：时间 + 用户设置的提示词 + 收藏日记
+  // 全部合并为单个 system 消息，避免部分 API 中转不支持多个 system 消息的问题。
+  let fullSystemPrompt = `当前时间：${formatCurrentTime()}\n\n${settings.systemPrompt}\n\n${buildStickerSystemInstruction()}`;
 
-  // 获取已收藏的日记作为「近期日记」，作为独立 system 消息插入到
-  // system prompt 之后、对话消息之前。
-  let memoryMessages: { role: string; content: string }[] = [];
   try {
     const favoriteDiaries = await getFavoriteDiaries();
     if (favoriteDiaries.length > 0) {
       const memoryContent = favoriteDiaries
-        .map((d) => {
-          const date = formatTimeMarker(d.createdAt);
-          return `【${date}】${d.title}\n${d.content}`;
-        })
+        .map((d) => `${d.title}\n${d.content}`)
         .join('\n\n---\n\n');
-      memoryMessages = [
-        { role: 'system', content: `以下是你的近期日记：\n\n${memoryContent}` },
-      ];
+      fullSystemPrompt += `\n\n---\n\n以下是你的近期日记：\n\n${memoryContent}`;
     }
-  } catch {
-    // 读取日记失败时静默忽略，不影响正常对话
+  } catch (err) {
+    console.warn('[Chat] 读取收藏日记失败:', err);
   }
 
   abortController = new AbortController();
@@ -296,11 +289,16 @@ async function streamAssistantResponse(
     });
   };
 
+  // 流式路径要发送的完整消息：单个 system 消息（含身份设定 + 收藏日记）+ 对话历史。
+  const outgoingMessages = [
+    { role: 'system', content: fullSystemPrompt },
+    ...apiMessages,
+  ];
+
   try {
     const finalContent = await runToolLoop(
       { baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model },
-      systemPromptWithTime,
-      memoryMessages,
+      fullSystemPrompt,
       apiMessages,
       settings.maxOutputTokens || undefined,
       appendToolInvocation
@@ -314,11 +312,7 @@ async function streamAssistantResponse(
           baseUrl: config.baseUrl,
           apiKey: config.apiKey,
           model: config.model,
-          messages: [
-            { role: 'system', content: systemPromptWithTime },
-            ...memoryMessages,
-            ...apiMessages,
-          ],
+          messages: outgoingMessages,
           maxTokens: settings.maxOutputTokens || undefined,
         },
         onToken,
@@ -347,6 +341,14 @@ async function streamAssistantResponse(
   } finally {
     set({ isStreaming: false });
     abortController = null;
+
+    // 回复完成且应用处于后台时，发送本地通知提醒用户。
+    // fire-and-forget，任何失败都不能影响聊天流程。
+    const msgs = get().messages;
+    const lastMsg = msgs[msgs.length - 1];
+    if (lastMsg?.role === 'assistant' && typeof lastMsg.content === 'string' && lastMsg.content) {
+      notifyReplyReady(lastMsg.content).catch(() => {});
+    }
   }
 }
 

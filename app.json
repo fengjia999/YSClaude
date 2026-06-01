@@ -13,8 +13,9 @@
     "android": {
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/icon.png"
+        "backgroundImage": "./assets/android-icon-background.png",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "com.ysclaude.app"
     },
@@ -33,6 +34,15 @@
             "./assets/SohneMono-Buch.otf",
             "./assets/TiemposText.otf",
             "./assets/TiemposText-bold.otf"
+          ]
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#ffffff",
+          "sounds": [
+            "./assets/messagealert.mp3"
           ]
         }
       ]

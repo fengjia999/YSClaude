@@ -1,8 +1,23 @@
-import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { View, FlatList, Text, Pressable, StyleSheet, Image } from 'react-native';
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
+import {
+  View,
+  FlatList,
+  Text,
+  Pressable,
+  StyleSheet,
+  Image,
+  type LayoutChangeEvent,
+  type ListRenderItem,
+} from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useAnimatedKeyboard,
+  KeyboardState,
+  useAnimatedReaction,
+  runOnJS,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { useKeyboardHeight } from '../src/hooks/useKeyboardHeight';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { colors } from '../src/theme/colors';
 import { fonts } from '../src/theme/fonts';
 import { useChatStore } from '../src/stores/chat';
@@ -14,24 +29,163 @@ import { Message } from '../src/types';
 import { TIME_GAP_THRESHOLD_MS } from '../src/utils/time';
 import { pickGreeting } from '../src/utils/greetings';
 
+const INPUT_BAR_FALLBACK_HEIGHT = 128;
+const MESSAGE_BOTTOM_GAP = 16;
+
 export default function ChatScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const keyboardHeight = useKeyboardHeight();
-  const { messages, hiddenRanges, isStreaming, error, addUserMessage, triggerResponse, stopStreaming } = useChatStore();
+  const {
+    conversationId,
+    messages,
+    hiddenRanges,
+    isStreaming,
+    error,
+    addUserMessage,
+    triggerResponse,
+    stopStreaming,
+  } = useChatStore();
   const [showModelSelector, setShowModelSelector] = useState(false);
   const [dismissedDividers, setDismissedDividers] = useState<Set<string>>(new Set());
+  const [inputBarHeight, setInputBarHeight] = useState(INPUT_BAR_FALLBACK_HEIGHT);
   const flatListRef = useRef<FlatList<Message>>(null);
+  const scrollFrameRef = useRef<number | null>(null);
+  const scrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollFollowUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listHeightRef = useRef(0);
+  const contentHeightRef = useRef(0);
+  const keyboardLiftRef = useRef(0);
+
+  const keyboard = useAnimatedKeyboard();
+
+  const scrollToEnd = useCallback((animated = false) => {
+    if (scrollFrameRef.current !== null) {
+      cancelAnimationFrame(scrollFrameRef.current);
+    }
+
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const contentHeight = contentHeightRef.current;
+      const listHeight = listHeightRef.current;
+
+      if (contentHeight > 0 && listHeight > 0) {
+        flatListRef.current?.scrollToOffset({
+          offset: Math.max(0, contentHeight - listHeight + keyboardLiftRef.current),
+          animated,
+        });
+        return;
+      }
+
+      flatListRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
+
+  const scheduleScrollToEnd = useCallback((delay = 24, followUp = false) => {
+    if (scrollSettleTimerRef.current !== null) {
+      clearTimeout(scrollSettleTimerRef.current);
+    }
+
+    scrollSettleTimerRef.current = setTimeout(() => {
+      scrollSettleTimerRef.current = null;
+      scrollToEnd(false);
+
+      if (followUp) {
+        if (scrollFollowUpTimerRef.current !== null) {
+          clearTimeout(scrollFollowUpTimerRef.current);
+        }
+        scrollFollowUpTimerRef.current = setTimeout(() => {
+          scrollFollowUpTimerRef.current = null;
+          scrollToEnd(false);
+        }, 90);
+      }
+    }, delay);
+  }, [scrollToEnd]);
+
+  const updateKeyboardLiftAndScroll = useCallback((lift: number) => {
+    keyboardLiftRef.current = Math.ceil(Math.max(lift, 0));
+    scheduleScrollToEnd(24, true);
+  }, [scheduleScrollToEnd]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current);
+      }
+      if (scrollSettleTimerRef.current !== null) {
+        clearTimeout(scrollSettleTimerRef.current);
+      }
+      if (scrollFollowUpTimerRef.current !== null) {
+        clearTimeout(scrollFollowUpTimerRef.current);
+      }
+    };
+  }, []);
+
+  useAnimatedReaction(
+    () => ({
+      state: keyboard.state.value,
+      lift: Math.max(keyboard.height.value - insets.bottom, 0),
+    }),
+    (current, previous) => {
+      if (
+        current.state === KeyboardState.OPEN &&
+        previous?.state !== KeyboardState.OPEN
+      ) {
+        runOnJS(updateKeyboardLiftAndScroll)(current.lift);
+      }
+
+      if (
+        current.state === KeyboardState.CLOSED &&
+        previous?.state !== KeyboardState.CLOSED
+      ) {
+        runOnJS(updateKeyboardLiftAndScroll)(0);
+      }
+    },
+  );
 
   useEffect(() => {
     if (messages.length > 0) {
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+      scheduleScrollToEnd(32, true);
     }
-  }, [messages]);
+  }, [conversationId, inputBarHeight, messages.length, scheduleScrollToEnd]);
 
-  // 消息ID → 楼层号（仅 user/assistant，1-based），与 API 过滤/隐藏设置的编号口径一致
+  useFocusEffect(
+    useCallback(() => {
+      if (messages.length > 0) {
+        scheduleScrollToEnd(32, true);
+      }
+    }, [messages.length, scheduleScrollToEnd])
+  );
+
+  const handleInputLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+    if (nextHeight > 0) {
+      setInputBarHeight((current) =>
+        Math.abs(current - nextHeight) > 1 ? nextHeight : current
+      );
+    }
+  }, []);
+
+  const handleListLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+    if (nextHeight > 0 && Math.abs(listHeightRef.current - nextHeight) > 1) {
+      listHeightRef.current = nextHeight;
+      scheduleScrollToEnd(24);
+    }
+  }, [scheduleScrollToEnd]);
+
+  const handleContentSizeChange = useCallback((_width: number, height: number) => {
+    contentHeightRef.current = Math.ceil(height);
+    scheduleScrollToEnd(24);
+  }, [scheduleScrollToEnd]);
+
+  const messageContentStyle = useMemo(
+    () => [
+      styles.messageContent,
+      { paddingBottom: inputBarHeight + MESSAGE_BOTTOM_GAP },
+    ],
+    [inputBarHeight]
+  );
+
   const floorMap = useMemo(() => {
     const map = new Map<string, number>();
     let floor = 0;
@@ -44,7 +198,6 @@ export default function ChatScreen() {
     return map;
   }, [messages]);
 
-  // 所有被隐藏的楼层号集合，渲染时 O(1) 判断
   const hiddenFloorSet = useMemo(() => {
     const set = new Set<number>();
     for (const r of hiddenRanges) {
@@ -53,20 +206,58 @@ export default function ChatScreen() {
     return set;
   }, [hiddenRanges]);
 
-  // SDK 54+ 起 Android 强制开启 edge-to-edge：窗口绘制到键盘后面，
-  // adjustResize 不再缩小 RN 根视图，KeyboardAvoidingView 也常拿不到正确的
-  // 键盘高度 —— 所以输入框不被顶起。改为直接监听 Keyboard 事件，自己把悬浮
-  // 输入框上移 liftHeight 把它顶到键盘上方，最可靠、零原生改动。
-  //
-  // keyboardHeight 是从窗口底部算起的完整高度（edge-to-edge 下含手势条区域）。
-  // ChatInput 自身已经垫了 insets.bottom 的底部安全区，键盘弹起时这块被键盘
-  // 盖住，所以只需顶起「键盘高度 - 底部安全区」，避免顶过头。
-  const liftHeight = keyboardHeight > 0 ? Math.max(keyboardHeight - insets.bottom, 0) : 0;
+  const animatedContainerStyle = useAnimatedStyle(() => {
+    const kbHeight = keyboard.height.value;
+    const lift = kbHeight > 0 ? Math.max(kbHeight - insets.bottom, 0) : 0;
+    return {
+      paddingBottom: lift,
+    };
+  });
 
-  // 页面主体内容。iOS 与 Android 共用，区别只在外层是否包 KeyboardAvoidingView。
-  const content = (
-    <>
-      {/* Header */}
+  const animatedInputStyle = useAnimatedStyle(() => {
+    const kbHeight = keyboard.height.value;
+    const lift = kbHeight > 0 ? Math.max(kbHeight - insets.bottom, 0) : 0;
+    return {
+      bottom: lift,
+    };
+  });
+
+  const renderMessageItem = useCallback<ListRenderItem<Message>>(
+    ({ item, index }) => {
+      const prev = index > 0 ? messages[index - 1] : null;
+      const showDivider =
+        (!prev || item.createdAt - prev.createdAt >= TIME_GAP_THRESHOLD_MS) &&
+        !dismissedDividers.has(item.id);
+      const floor = floorMap.get(item.id);
+      const isHidden = floor !== undefined && hiddenFloorSet.has(floor);
+
+      return (
+        <>
+          {showDivider && (
+            <TimeDivider
+              timestamp={item.createdAt}
+              onDelete={() =>
+                setDismissedDividers((current) => new Set(current).add(item.id))
+              }
+            />
+          )}
+          <ChatBubble
+            message={item}
+            previousUserMessage={prev?.role === 'user' ? prev : null}
+            isHidden={isHidden}
+            isLastAssistant={
+              item.role === 'assistant' &&
+              index === messages.length - 1
+            }
+          />
+        </>
+      );
+    },
+    [dismissedDividers, floorMap, hiddenFloorSet, messages]
+  );
+
+  return (
+    <Animated.View style={[styles.container, animatedContainerStyle]}>
       <View style={styles.header}>
         <Pressable style={styles.headerButton} onPress={() => router.push('/history')}>
           <View style={styles.hamburgerLines}>
@@ -86,47 +277,24 @@ export default function ChatScreen() {
         </View>
       )}
 
-      {/* Messages */}
       <FlatList
         ref={flatListRef}
         data={messages}
         keyExtractor={(item) => item.id}
         keyboardShouldPersistTaps="handled"
-        renderItem={({ item, index }) => {
-          const prev = index > 0 ? messages[index - 1] : null;
-          const showDivider =
-            (!prev || item.createdAt - prev.createdAt >= TIME_GAP_THRESHOLD_MS) &&
-            !dismissedDividers.has(item.id);
-          const floor = floorMap.get(item.id);
-          const isHidden = floor !== undefined && hiddenFloorSet.has(floor);
-          return (
-            <>
-              {showDivider && (
-                <TimeDivider
-                  timestamp={item.createdAt}
-                  onDelete={() => setDismissedDividers((prev) => new Set(prev).add(item.id))}
-                />
-              )}
-              <ChatBubble
-                message={item}
-                isHidden={isHidden}
-                isLastAssistant={
-                  item.role === 'assistant' &&
-                  index === messages.length - 1
-                }
-              />
-            </>
-          );
-        }}
+        renderItem={renderMessageItem}
         style={styles.messageList}
-        contentContainerStyle={styles.messageContent}
-        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+        contentContainerStyle={messageContentStyle}
+        onLayout={handleListLayout}
+        onContentSizeChange={handleContentSizeChange}
         ListEmptyComponent={<EmptyState />}
       />
 
-      {/* Input —— 悬浮在消息列表之上，两侧与下方留空隙可透出聊天内容。
-          键盘弹起时整体上移 liftHeight（见下方说明），避免被键盘遮挡。 */}
-      <View style={[styles.inputFloating, { bottom: liftHeight }]} pointerEvents="box-none">
+      <Animated.View
+        style={[styles.inputFloating, animatedInputStyle]}
+        pointerEvents="box-none"
+        onLayout={handleInputLayout}
+      >
         <ChatInput
           onSend={addUserMessage}
           onTriggerResponse={triggerResponse}
@@ -135,23 +303,16 @@ export default function ChatScreen() {
           onStop={stopStreaming}
           onModelPress={() => setShowModelSelector(true)}
         />
-      </View>
+      </Animated.View>
 
       {showModelSelector && (
         <ModelSelector onClose={() => setShowModelSelector(false)} />
       )}
-    </>
-  );
-
-  return (
-    <View style={styles.container}>
-      {content}
-    </View>
+    </Animated.View>
   );
 }
 
 function EmptyState() {
-  // 每次进入新对话页时随机抽一条欢迎语（通用池 + 当前时段池）
   const greeting = useMemo(() => pickGreeting(), []);
   return (
     <View style={styles.emptyContainer}>
@@ -215,11 +376,8 @@ const styles = StyleSheet.create({
   },
   messageContent: {
     paddingTop: 8,
-    // 底部留白，让最后一条消息能滚动到悬浮输入框之上，不被永久遮住
-    paddingBottom: 96,
     flexGrow: 1,
   },
-  // 悬浮输入框容器：绝对定位贴底，自身透明，仅 ChatInput 内部气泡不透明
   inputFloating: {
     position: 'absolute',
     left: 0,

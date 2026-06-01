@@ -15,7 +15,14 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   // "DB 刚 open、表/迁移尚未就绪就被查询"的时序竞态。
   initPromise = (async () => {
     const opened = await SQLite.openDatabaseAsync('ysclaude.db');
-    await initTables(opened);
+    try {
+      await initTables(opened);
+    } catch (e) {
+      // initTables 失败时关闭已打开的连接，防止悬空句柄——
+      // 下次重试会重新 openDatabaseAsync，不会操作一个半初始化的 db。
+      try { await opened.closeAsync(); } catch {}
+      throw e;
+    }
     db = opened;
     return opened;
   })();
@@ -80,25 +87,31 @@ async function runMigrations(database: SQLite.SQLiteDatabase) {
   const version = row?.user_version ?? 0;
 
   // v1: 为每个对话独立存储隐藏楼层范围
-  if (version < 1) {
-    // ALTER TABLE ADD COLUMN 不重写已有行，旧行该列默认 '[]'
+  // 所有迁移统一用 hasColumn 守卫，而非仅靠 user_version：
+  // CREATE TABLE IF NOT EXISTS 已包含最新 schema（含后来迁移新增的列），
+  // 全新安装时列已随建表创建，但 user_version 仍为 0——
+  // 若仅靠 version 判断就会 ALTER TABLE ADD COLUMN 已存在的列，
+  // 触发 "duplicate column name" 导致 NativeDatabase.execAsync 被 reject。
+  if (!(await hasColumn(database, 'conversations', 'hidden_ranges'))) {
     await database.execAsync(
       `ALTER TABLE conversations ADD COLUMN hidden_ranges TEXT NOT NULL DEFAULT '[]';`
     );
+  }
+  if (version < 1) {
     await database.execAsync('PRAGMA user_version = 1;');
   }
 
   // v2: 为消息记录实际发生的工具调用（用于气泡上方展示）
-  if (version < 2) {
+  if (!(await hasColumn(database, 'messages', 'tool_invocations'))) {
     await database.execAsync(
       `ALTER TABLE messages ADD COLUMN tool_invocations TEXT;`
     );
+  }
+  if (version < 2) {
     await database.execAsync('PRAGMA user_version = 2;');
   }
 
   // v3: 为消息添加图片 URI 字段（图片消息 + AI 识图）
-  // 用 PRAGMA table_info 直接检查列是否存在，避免 user_version 与实际 schema
-  // 不同步时（如开发期回滚/重装）漏掉迁移的情况。
   if (!(await hasColumn(database, 'messages', 'image_uri'))) {
     await database.execAsync(
       `ALTER TABLE messages ADD COLUMN image_uri TEXT;`

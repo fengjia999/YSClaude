@@ -1,13 +1,16 @@
 import React, { useState } from 'react';
-import { View, TextInput, Pressable, Text, StyleSheet, Image } from 'react-native';
+import { View, TextInput, Pressable, Text, StyleSheet, Image, Modal, ScrollView, Dimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { colors } from '../theme/colors';
 import { useSettingsStore } from '../stores/settings';
+import { USER_STICKERS } from '../utils/stickers';
+
+const STICKER_PANEL_HEIGHT = Math.min(420, Dimensions.get('window').height * 0.48);
 
 interface Props {
-  onSend: (text: string, imageUri?: string) => void;
-  onTriggerResponse: () => void;
+  onSend: (text: string, imageUri?: string) => void | Promise<void>;
+  onTriggerResponse: () => void | Promise<void>;
   disabled?: boolean;
   isStreaming?: boolean;
   onStop?: () => void;
@@ -17,6 +20,7 @@ interface Props {
 export function ChatInput({ onSend, onTriggerResponse, disabled, isStreaming, onStop, onModelPress }: Props) {
   const [text, setText] = useState('');
   const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [stickerPickerVisible, setStickerPickerVisible] = useState(false);
   const insets = useSafeAreaInsets();
   const { apiConfigs, activeConfigIndex } = useSettingsStore();
   const current = apiConfigs[activeConfigIndex];
@@ -33,11 +37,11 @@ export function ChatInput({ onSend, onTriggerResponse, disabled, isStreaming, on
     }
   };
 
-  const handleSend = (value: string) => {
+  const handleSend = async (value: string) => {
     const trimmed = value.trim();
     if (!trimmed && !pendingImage) return;
     if (disabled) return;
-    onSend(trimmed, pendingImage || undefined);
+    await onSend(trimmed, pendingImage || undefined);
     setText('');
     setPendingImage(null);
   };
@@ -48,24 +52,32 @@ export function ChatInput({ onSend, onTriggerResponse, disabled, isStreaming, on
       next.startsWith(text) &&
       next.endsWith('\n')
     ) {
-      handleSend(text);
+      void handleSend(text);
       return;
     }
     setText(next);
   };
 
-  const handleStopOrSend = () => {
+  const handleStopOrSend = async () => {
     if (isStreaming) {
       onStop?.();
       return;
     }
     const trimmed = text.trim();
     if (trimmed || pendingImage) {
-      onSend(trimmed, pendingImage || undefined);
+      await onSend(trimmed, pendingImage || undefined);
       setText('');
       setPendingImage(null);
     }
-    onTriggerResponse();
+    await onTriggerResponse();
+  };
+
+  const handleSendSticker = async (token: string) => {
+    if (disabled || isStreaming) return;
+    setStickerPickerVisible(false);
+    setText('');
+    setPendingImage(null);
+    await onSend(token);
   };
 
   const getSendIcon = () => {
@@ -107,8 +119,8 @@ export function ChatInput({ onSend, onTriggerResponse, disabled, isStreaming, on
           </Pressable>
 
           <View style={styles.rightButtons}>
-            <Pressable style={styles.voiceButton}>
-              <Image source={require('../../assets/voice.png')} style={styles.voiceImage} resizeMode="contain" />
+            <Pressable style={styles.stickerButton} onPress={() => setStickerPickerVisible(true)}>
+              <Image source={require('../../assets/sticker.png')} style={styles.stickerButtonImage} resizeMode="contain" />
             </Pressable>
             <Pressable style={styles.sendButton} onPress={handleStopOrSend}>
               <Image source={getSendIcon()} style={styles.sendImage} resizeMode="contain" />
@@ -116,6 +128,31 @@ export function ChatInput({ onSend, onTriggerResponse, disabled, isStreaming, on
           </View>
         </View>
       </View>
+
+      <Modal transparent visible={stickerPickerVisible} animationType="fade" onRequestClose={() => setStickerPickerVisible(false)}>
+        <Pressable style={styles.stickerOverlay} onPress={() => setStickerPickerVisible(false)}>
+          <View style={styles.stickerPanel} onStartShouldSetResponder={() => true}>
+            <ScrollView
+              style={styles.stickerScroll}
+              contentContainerStyle={styles.stickerGrid}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+              persistentScrollbar
+            >
+              {USER_STICKERS.map((sticker) => (
+                <Pressable
+                  key={sticker.name}
+                  style={styles.stickerItem}
+                  onPress={() => void handleSendSticker(sticker.token)}
+                >
+                  <Image source={sticker.image} style={styles.stickerImage} resizeMode="contain" />
+                  <Text style={styles.stickerName}>{sticker.name}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -205,13 +242,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  voiceButton: {
+  stickerButton: {
     width: 36,
     height: 36,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  voiceImage: {
+  stickerButtonImage: {
     width: 30,
     height: 30,
   },
@@ -224,5 +261,50 @@ const styles = StyleSheet.create({
   sendImage: {
     width: 30,
     height: 30,
+  },
+  stickerOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.12)',
+  },
+  stickerPanel: {
+    marginHorizontal: 12,
+    marginBottom: 96,
+    backgroundColor: colors.inputBackground,
+    borderRadius: 20,
+    padding: 12,
+    height: STICKER_PANEL_HEIGHT,
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 8,
+  },
+  stickerScroll: {
+    flex: 1,
+  },
+  stickerGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingBottom: 4,
+  },
+  stickerItem: {
+    width: '30%',
+    minWidth: 86,
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceHover,
+  },
+  stickerImage: {
+    width: 64,
+    height: 64,
+  },
+  stickerName: {
+    marginTop: 4,
+    fontSize: 12,
+    color: colors.textSecondary,
   },
 });

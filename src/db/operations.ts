@@ -261,6 +261,6 @@ export async function getFavoriteDiaries(): Promise<Diary[]> {
     is_favorite: number;
     created_at: number;
     updated_at: number;
-  }>('SELECT * FROM diaries WHERE is_favorite = 1 ORDER BY updated_at DESC');
+  }>('SELECT * FROM diaries WHERE is_favorite = 1 ORDER BY created_at ASC');
   return rows.map(mapDiaryRow);
 }

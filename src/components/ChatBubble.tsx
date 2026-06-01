@@ -7,6 +7,8 @@ import { fonts } from '../theme/fonts';
 import { useChatStore } from '../stores/chat';
 import { useSettingsStore } from '../stores/settings';
 import { playTTS, stopTTS } from '../services/tts';
+import { StickerContent } from './StickerContent';
+import { hasStickerToken, isStickerOnlyContent } from '../utils/stickers';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const IMAGE_MAX_WIDTH = SCREEN_WIDTH * 0.65;
@@ -22,6 +24,7 @@ const chatIcons = [
 
 interface Props {
   message: Message;
+  previousUserMessage?: Message | null;
   isLastAssistant?: boolean;
   isHidden?: boolean;
 }
@@ -96,9 +99,20 @@ function splitThinking(raw: string): { thinking: string; body: string } {
   return { thinking: thinking.trim(), body: body.trim() };
 }
 
-export function ChatBubble({ message, isLastAssistant, isHidden }: Props) {
+export const ChatBubble = React.memo(function ChatBubble({
+  message,
+  previousUserMessage,
+  isLastAssistant,
+  isHidden,
+}: Props) {
   const isUser = message.role === 'user';
-  const { messages, editMessage, removeMessage, removeToolInvocation, regenerate } = useChatStore();
+  const stickerCatalog = isUser ? 'user' : 'assistant';
+  const messageHasSticker = hasStickerToken(message.content, stickerCatalog);
+  const messageIsStickerOnly = isStickerOnlyContent(message.content, stickerCatalog);
+  const editMessage = useChatStore((state) => state.editMessage);
+  const removeMessage = useChatStore((state) => state.removeMessage);
+  const removeToolInvocation = useChatStore((state) => state.removeToolInvocation);
+  const regenerate = useChatStore((state) => state.regenerate);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editText, setEditText] = useState('');
   // 当前编辑目标消息的 id
@@ -184,9 +198,13 @@ export function ChatBubble({ message, isLastAssistant, isHidden }: Props) {
             <Pressable
               ref={bubbleRef}
               onLongPress={handleUserLongPress}
-              style={styles.userBubble}
+              style={[
+                styles.userBubble,
+                messageHasSticker && styles.userBubbleWithSticker,
+                messageIsStickerOnly && styles.userStickerOnlyBubble,
+              ]}
             >
-              <Text style={styles.userText}>{message.content}</Text>
+              <StickerContent content={message.content} variant="user" />
             </Pressable>
           )}
           {message.content.length === 0 && !message.imageUri && (
@@ -220,11 +238,7 @@ export function ChatBubble({ message, isLastAssistant, isHidden }: Props) {
     );
   }
 
-  const userMsgBefore = (() => {
-    const idx = messages.findIndex((m) => m.id === message.id);
-    if (idx > 0 && messages[idx - 1].role === 'user') return messages[idx - 1];
-    return null;
-  })();
+  const userMsgBefore = previousUserMessage ?? null;
 
   // 拆分思维链与正文：<thinking> 内容进胶囊，正文只渲染剩余部分
   const { thinking, body } = splitThinking(message.content);
@@ -319,7 +333,7 @@ export function ChatBubble({ message, isLastAssistant, isHidden }: Props) {
       {/* 思维链：<thinking> 包裹的内容拆出，正文只渲染剩余部分 */}
       {thinking.length > 0 && <ThinkingBlock thinking={thinking} />}
       <View style={styles.assistantContent}>
-        <Markdown style={markdownStyles}>{body || ' '}</Markdown>
+        <StickerContent content={body || ' '} variant="assistant" markdownStyle={markdownStyles} />
       </View>
       {message.content.length > 0 && (
         <>
@@ -342,7 +356,7 @@ export function ChatBubble({ message, isLastAssistant, isHidden }: Props) {
       {editModal}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   userRow: {
@@ -415,6 +429,15 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 16,
   },
+  userBubbleWithSticker: {
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  userStickerOnlyBubble: {
+    backgroundColor: 'transparent',
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+  },
   userImage: {
     width: IMAGE_MAX_WIDTH,
     height: IMAGE_MAX_WIDTH,
@@ -425,7 +448,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.text,
     lineHeight: 22,
-    fontFamily: fonts.serif,
+    fontFamily: fonts.serifBold,
   },
   assistantRow: {
     paddingHorizontal: 16,
@@ -563,7 +586,7 @@ const thinkingMarkdownStyles = StyleSheet.create({
 });
 
 const markdownStyles = StyleSheet.create({
-  body: { fontSize: 16, color: colors.text, lineHeight: 24, fontFamily: fonts.serif },
+  body: { fontSize: 16, color: colors.text, lineHeight: 24, fontFamily: fonts.serifBold },
   code_inline: {
     backgroundColor: colors.surface, color: colors.primary,
     paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, fontSize: 14, fontFamily: 'monospace',
