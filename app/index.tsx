@@ -6,6 +6,8 @@ import {
   Pressable,
   StyleSheet,
   Image,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   type LayoutChangeEvent,
   type ListRenderItem,
 } from 'react-native';
@@ -57,10 +59,16 @@ export default function ChatScreen() {
   const listHeightRef = useRef(0);
   const contentHeightRef = useRef(0);
   const keyboardLiftRef = useRef(0);
+  const shouldStickToBottomRef = useRef(true);
+  const messageIdsRef = useRef<string[]>([]);
+  const conversationIdRef = useRef<string | null>(null);
+  const hasListLaidOutRef = useRef(false);
 
   const keyboard = useAnimatedKeyboard();
 
   const scrollToEnd = useCallback((animated = false) => {
+    shouldStickToBottomRef.current = true;
+
     if (scrollFrameRef.current !== null) {
       cancelAnimationFrame(scrollFrameRef.current);
     }
@@ -145,17 +153,40 @@ export default function ChatScreen() {
   );
 
   useEffect(() => {
-    if (messages.length > 0) {
+    const nextIds = messages.map((message) => message.id);
+    const prevIds = messageIdsRef.current;
+    const prevConversationId = conversationIdRef.current;
+    const conversationChanged = conversationId !== prevConversationId;
+    const appended =
+      nextIds.length > prevIds.length &&
+      prevIds.every((id, index) => nextIds[index] === id);
+
+    messageIdsRef.current = nextIds;
+    conversationIdRef.current = conversationId;
+
+    if (nextIds.length === 0) {
+      shouldStickToBottomRef.current = true;
+      return;
+    }
+
+    if (conversationChanged || appended) {
+      shouldStickToBottomRef.current = true;
       scheduleScrollToEnd(32, true);
     }
-  }, [conversationId, inputBarHeight, messages.length, scheduleScrollToEnd]);
+  }, [conversationId, messages, scheduleScrollToEnd]);
+
+  useEffect(() => {
+    if (messageIdsRef.current.length > 0 && shouldStickToBottomRef.current) {
+      scheduleScrollToEnd(32, true);
+    }
+  }, [inputBarHeight, scheduleScrollToEnd]);
 
   useFocusEffect(
     useCallback(() => {
-      if (messages.length > 0) {
+      if (messageIdsRef.current.length > 0 && shouldStickToBottomRef.current) {
         scheduleScrollToEnd(32, true);
       }
-    }, [messages.length, scheduleScrollToEnd])
+    }, [conversationId, scheduleScrollToEnd])
   );
 
   const handleInputLayout = useCallback((event: LayoutChangeEvent) => {
@@ -171,14 +202,29 @@ export default function ChatScreen() {
     const nextHeight = Math.ceil(event.nativeEvent.layout.height);
     if (nextHeight > 0 && Math.abs(listHeightRef.current - nextHeight) > 1) {
       listHeightRef.current = nextHeight;
-      scheduleScrollToEnd(24);
+      if (!hasListLaidOutRef.current || shouldStickToBottomRef.current) {
+        scheduleScrollToEnd(24);
+      }
+      hasListLaidOutRef.current = true;
     }
   }, [scheduleScrollToEnd]);
 
   const handleContentSizeChange = useCallback((_width: number, height: number) => {
-    contentHeightRef.current = Math.ceil(height);
-    scheduleScrollToEnd(24);
+    const nextHeight = Math.ceil(height);
+    const heightChanged = Math.abs(contentHeightRef.current - nextHeight) > 1;
+    contentHeightRef.current = nextHeight;
+
+    if (heightChanged && shouldStickToBottomRef.current) {
+      scheduleScrollToEnd(24);
+    }
   }, [scheduleScrollToEnd]);
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distanceToBottom =
+      contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    shouldStickToBottomRef.current = distanceToBottom <= 80;
+  }, []);
 
   const messageContentStyle = useMemo(
     () => [
@@ -294,6 +340,8 @@ export default function ChatScreen() {
         contentContainerStyle={messageContentStyle}
         onLayout={handleListLayout}
         onContentSizeChange={handleContentSizeChange}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
         ListEmptyComponent={<EmptyState />}
       />
 

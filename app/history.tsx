@@ -12,7 +12,7 @@ export default function HistoryScreen() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [editingConv, setEditingConv] = useState<Conversation | null>(null);
   const [editTitle, setEditTitle] = useState('');
-  const { loadConversation, newConversation } = useChatStore();
+  const { conversationId, loadConversation, newConversation } = useChatStore();
 
   useFocusEffect(
     useCallback(() => {
@@ -85,25 +85,31 @@ export default function HistoryScreen() {
       <FlatList
         data={conversations}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <Pressable
-            style={styles.item}
-            onPress={() => handleOpen(item)}
-            onLongPress={() => handleLongPress(item)}
-          >
-            <View style={styles.itemContent}>
-              <Text style={styles.itemTitle} numberOfLines={1}>
-                {item.title || '新对话'}
-              </Text>
-              <Text style={styles.itemMeta}>
-                {item.model} · {formatTime(item.createdAt)}
-              </Text>
-            </View>
-            <Pressable style={styles.deleteButton} onPress={() => handleDelete(item)}>
-              <Text style={styles.deleteIcon}>×</Text>
+        renderItem={({ item }) => {
+          const isActive = item.id === conversationId;
+          return (
+            <Pressable
+              style={[styles.item, isActive && styles.itemActive]}
+              onPress={() => handleOpen(item)}
+              onLongPress={() => handleLongPress(item)}
+            >
+              <View style={styles.itemContent}>
+                <Text
+                  style={[styles.itemTitle, isActive && styles.itemTitleActive]}
+                  numberOfLines={1}
+                >
+                  {item.title || '新对话'}
+                </Text>
+                <Text style={[styles.itemMeta, isActive && styles.itemMetaActive]}>
+                  {item.model} · {formatTime(item.createdAt)}
+                </Text>
+              </View>
+              <Pressable style={styles.deleteButton} onPress={() => handleDelete(item)}>
+                <Text style={[styles.deleteIcon, isActive && styles.deleteIconActive]}>×</Text>
+              </Pressable>
             </Pressable>
-          </Pressable>
-        )}
+          );
+        }}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           <View style={styles.empty}>
@@ -176,8 +182,14 @@ const styles = StyleSheet.create({
     paddingLeft: 20,
     paddingRight: 12,
     paddingVertical: 14,
+    borderLeftWidth: 3,
+    borderLeftColor: 'transparent',
     borderBottomWidth: 0.5,
     borderBottomColor: colors.border,
+  },
+  itemActive: {
+    backgroundColor: colors.surface,
+    borderLeftColor: colors.primary,
   },
   itemContent: { flex: 1, gap: 4 },
   itemTitle: {
@@ -185,9 +197,16 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: colors.text,
   },
+  itemTitleActive: {
+    color: colors.text,
+    fontWeight: '700',
+  },
   itemMeta: {
     fontSize: 12,
     color: colors.textTertiary,
+  },
+  itemMetaActive: {
+    color: colors.primary,
   },
   deleteButton: {
     width: 32,
@@ -199,6 +218,9 @@ const styles = StyleSheet.create({
   deleteIcon: {
     fontSize: 20,
     color: colors.textTertiary,
+  },
+  deleteIconActive: {
+    color: colors.primary,
   },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 120 },
   emptyText: { fontSize: 15, color: colors.textTertiary },

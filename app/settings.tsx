@@ -22,10 +22,32 @@ import {
 } from '../src/utils/hotboardPlatforms';
 
 const TABS = ['API 配置', '对话设置', 'TTS 配置', 'Tool 设置', '日记'] as const;
+type ToastFn = (message: string) => void;
 
 export default function SettingsScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState(0);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  function showToast(message: string) {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+    setToastMessage(message);
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+      toastTimerRef.current = null;
+    }, 1800);
+  }
 
   return (
     <View style={styles.container}>
@@ -52,18 +74,24 @@ export default function SettingsScreen() {
         ))}
       </ScrollView>
 
-      {activeTab === 0 && <APIConfigTab />}
-      {activeTab === 1 && <ChatSettingsTab />}
-      {activeTab === 2 && <TTSConfigTab />}
-      {activeTab === 3 && <ToolConfigTab />}
-      {activeTab === 4 && <DiaryTab />}
+      {activeTab === 0 && <APIConfigTab showToast={showToast} />}
+      {activeTab === 1 && <ChatSettingsTab showToast={showToast} />}
+      {activeTab === 2 && <TTSConfigTab showToast={showToast} />}
+      {activeTab === 3 && <ToolConfigTab showToast={showToast} />}
+      {activeTab === 4 && <DiaryTab showToast={showToast} />}
+
+      {toastMessage && (
+        <View pointerEvents="none" style={styles.toast}>
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </View>
+      )}
     </View>
   );
 }
 
 /* ==================== API 配置 Tab ==================== */
 
-function APIConfigTab() {
+function APIConfigTab({ showToast }: { showToast: ToastFn }) {
   const { _hydrated, apiConfigs, activeConfigIndex, saveAPIConfig, removeAPIConfig, setActiveConfig } = useSettingsStore();
 
   const [name, setName] = useState('');
@@ -146,7 +174,7 @@ function APIConfigTab() {
         const text = await resp.text();
         throw new Error(`HTTP ${resp.status}: ${text.slice(0, 100)}`);
       }
-      Alert.alert('连接成功', 'API 配置有效');
+      showToast('API 配置有效');
     } catch (e: any) {
       Alert.alert('连接失败', e.message);
     } finally {
@@ -166,7 +194,7 @@ function APIConfigTab() {
     saveAPIConfig(config);
     const newIndex = useSettingsStore.getState().apiConfigs.findIndex((c) => c.name === trimmedName);
     if (newIndex >= 0) setActiveConfig(newIndex);
-    Alert.alert('已保存', `配置「${trimmedName}」已保存`);
+    showToast(`配置「${trimmedName}」已保存`);
   }
 
   function handleSelectConfig(index: number) {
@@ -285,7 +313,7 @@ function APIConfigTab() {
 
 /* ==================== 对话设置 Tab ==================== */
 
-function ChatSettingsTab() {
+function ChatSettingsTab({ showToast }: { showToast: ToastFn }) {
   const { maxOutputTokens, systemPrompt, stripThinking, setSystemPrompt, setMaxOutputTokens, setStripThinking } = useSettingsStore();
   // 隐藏楼层现在按对话独立存储，数据源改为 chat store
   const { messages, conversationId, hiddenRanges, addHiddenRange, removeHiddenRange } = useChatStore();
@@ -338,7 +366,7 @@ function ChatSettingsTab() {
     const val = tokensStr.trim();
     if (!val) {
       setMaxOutputTokens(null);
-      Alert.alert('已保存', '输出字数不限制');
+      showToast('输出字数不限制');
       return;
     }
     const num = parseInt(val, 10);
@@ -347,7 +375,7 @@ function ChatSettingsTab() {
       return;
     }
     setMaxOutputTokens(num);
-    Alert.alert('已保存', `AI 最大输出 ${num} tokens`);
+    showToast(`AI 最大输出 ${num} tokens`);
   }
 
   const messageCount = messages.filter((m) => m.role === 'user' || m.role === 'assistant').length;
@@ -475,7 +503,7 @@ function ChatSettingsTab() {
 
 const TTS_MODELS = ['speech-02-hd', 'speech-02-turbo', 'speech-2.8-hd'];
 
-function TTSConfigTab() {
+function TTSConfigTab({ showToast }: { showToast: ToastFn }) {
   const { ttsConfig, setTTSConfig } = useSettingsStore();
   const [groupId, setGroupId] = useState(ttsConfig.groupId);
   const [apiKey, setApiKey] = useState(ttsConfig.apiKey);
@@ -499,7 +527,7 @@ function TTSConfigTab() {
     const v = parseFloat(vol) || 1;
     const p = parseFloat(pitch) || 0;
     setTTSConfig({ groupId: groupId.trim(), apiKey: apiKey.trim(), model, voiceId: voiceId.trim(), speed: s, vol: v, pitch: p });
-    Alert.alert('已保存', 'TTS 配置已保存');
+    showToast('TTS 配置已保存');
   }
 
   async function handleTest() {
@@ -519,7 +547,7 @@ function TTSConfigTab() {
         pitch: parseFloat(pitch) || 0,
       };
       await playTTS('你好，这是一段语音合成测试。', testConfig);
-      Alert.alert('播放成功', 'TTS 配置有效');
+      showToast('TTS 配置有效');
     } catch (e: any) {
       Alert.alert('播放失败', e.message);
     } finally {
@@ -599,7 +627,7 @@ function TTSConfigTab() {
 
 /* ==================== Tool 设置 Tab ==================== */
 
-function ToolConfigTab() {
+function ToolConfigTab({ showToast }: { showToast: ToastFn }) {
   const {
     memoryVaultConfig,
     webSearchConfig,
@@ -666,7 +694,7 @@ function ToolConfigTab() {
       tokenBudget: isNaN(tokenBudget) || tokenBudget <= 0 ? 2000 : tokenBudget,
       maxToolCalls: isNaN(maxToolCalls) || maxToolCalls <= 0 ? 3 : maxToolCalls,
     });
-    Alert.alert('已保存', '记忆库配置已保存');
+    showToast('记忆库配置已保存');
   }
 
   async function handleTestMemory() {
@@ -679,7 +707,7 @@ function ToolConfigTab() {
       const url = `${mvBaseUrl.trim().replace(/\/$/, '')}/health`;
       const resp = await fetch(url, { method: 'GET' });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      Alert.alert('连接成功', '记忆库服务正常');
+      showToast('记忆库服务正常');
     } catch (e: any) {
       Alert.alert('连接失败', e.message);
     } finally {
@@ -698,7 +726,7 @@ function ToolConfigTab() {
       tavilyApiKey: wsApiKey.trim(),
       maxResults: isNaN(maxResults) || maxResults <= 0 ? 5 : maxResults,
     });
-    Alert.alert('已保存', '联网搜索配置已保存');
+    showToast('联网搜索配置已保存');
   }
 
   function handleSaveWebPageReader() {
@@ -711,7 +739,7 @@ function ToolConfigTab() {
       enabled: wprEnabled,
       renderServiceUrl: trimmedUrl,
     });
-    Alert.alert('已保存', wprEnabled ? '网页读取配置已保存' : '网页读取已关闭');
+    showToast(wprEnabled ? '网页读取配置已保存' : '网页读取已关闭');
   }
 
   function handleSaveWebInteraction() {
@@ -720,7 +748,7 @@ function ToolConfigTab() {
       enabled: wiEnabled,
       maxToolCalls: isNaN(maxToolCalls) || maxToolCalls <= 0 ? 8 : maxToolCalls,
     });
-    Alert.alert('已保存', wiEnabled ? '网页交互配置已保存' : '网页交互已关闭');
+    showToast(wiEnabled ? '网页交互配置已保存' : '网页交互已关闭');
   }
 
   function handleSaveHotboard() {
@@ -737,7 +765,7 @@ function ToolConfigTab() {
       apiKey: hbApiKey.trim(),
       platforms: hbPlatformTypes.join(','),
     });
-    Alert.alert('已保存', hbEnabled ? 'AI 网页巡游热榜配置已保存' : 'AI 网页巡游热榜已关闭');
+    showToast(hbEnabled ? 'AI 网页巡游热榜配置已保存' : 'AI 网页巡游热榜已关闭');
   }
 
   function toggleHotboardPlatform(type: string) {
@@ -767,7 +795,7 @@ function ToolConfigTab() {
       appUsageStatsEnabled,
       calendarEnabled,
     });
-    Alert.alert('已保存', '设备原生 Tool 开关已保存');
+    showToast('设备原生 Tool 开关已保存');
   }
 
   const nativeToolRows = [
@@ -1035,7 +1063,7 @@ function ToolConfigTab() {
 
 /* ==================== 日记 Tab ==================== */
 
-function DiaryTab() {
+function DiaryTab({ showToast }: { showToast: ToastFn }) {
   const { diaries, loadDiaries, addDiary, editDiary, toggleFavorite, removeDiary } = useDiaryStore();
   // 隐藏楼层随对话独立，与待总结的消息同源，统一从 chat store 取
   const { messages, hiddenRanges } = useChatStore();
@@ -1173,7 +1201,7 @@ function DiaryTab() {
     setSummaryTitle('');
     setFromStr('');
     setToStr('');
-    Alert.alert('已保存', '日记已保存');
+    showToast('日记已保存');
   }
 
   function handleOpenCreate() {
@@ -1435,6 +1463,28 @@ function DiaryTab() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  toast: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    bottom: 34,
+    alignItems: 'center',
+    zIndex: 20,
+  },
+  toastText: {
+    maxWidth: '100%',
+    overflow: 'hidden',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
   header: {
     flexDirection: 'row', alignItems: 'center',
     paddingTop: 50, paddingHorizontal: 16, paddingBottom: 12,

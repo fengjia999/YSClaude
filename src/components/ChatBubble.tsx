@@ -7,6 +7,7 @@ import { fonts } from '../theme/fonts';
 import { useChatStore } from '../stores/chat';
 import { useSettingsStore } from '../stores/settings';
 import { playTTS, stopTTS } from '../services/tts';
+import { getToolLabel } from '../services/tools';
 import { StickerContent } from './StickerContent';
 import { hasStickerToken, isStickerOnlyContent } from '../utils/stickers';
 
@@ -44,33 +45,10 @@ interface Props {
   isHidden?: boolean;
 }
 
-// 工具名 → 中文动作描述
-const TOOL_LABELS: Record<string, string> = {
-  search_memory_vault: '搜索记忆库',
-  query_diary: '查询日记',
-  web_search: '联网搜索',
-  read_web_page: '读取网页',
-  get_hotboard: '查询热榜',
-  webview_open: '打开网页',
-  webview_observe: '观察网页',
-  webview_tap: '点击网页',
-  webview_click_element: '点击元素',
-  webview_click_selector: '点击选择器',
-  webview_wait: '等待网页',
-  read_device_info: '读取设备信息',
-  read_battery_status: '读取电池状态',
-  read_app_usage_stats: '读取应用使用统计',
-  open_usage_access_settings: '打开使用统计授权',
-  calendar_list_events: '读取日程',
-  calendar_create_event: '创建日程',
-  calendar_update_event: '修改日程',
-  calendar_delete_event: '删除日程',
-};
-
 // 把一次工具调用格式化成「动作描述 + 参数」的单行文字。
 // 参数取第一个有意义的字段（query/date 等），解析失败时仅显示动作描述。
 function formatToolInvocation(name: string, rawArgs: string): string {
-  const label = TOOL_LABELS[name] || name;
+  const label = getToolLabel(name);
   let detail = '';
   try {
     const args = JSON.parse(rawArgs || '{}');
