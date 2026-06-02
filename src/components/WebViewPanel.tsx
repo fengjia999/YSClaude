@@ -2,15 +2,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
+  Image,
   PanResponder,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { WebViewMessageEvent } from 'react-native-webview';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { randomUUID } from 'expo-crypto';
 import { colors } from '../theme/colors';
+import { sqliteStorage } from '../db/kv-storage';
 import {
   registerWebViewHost,
   WebViewObservation,
@@ -28,14 +34,24 @@ const REQUEST_TIMEOUT_MS = 12000;
 const OPEN_TIMEOUT_MS = 20000;
 const MAX_OBSERVE_TEXT = 12000;
 const MAX_ELEMENTS = 40;
-const PANEL_MARGIN = 12;
-const DEFAULT_PANEL_HEIGHT = 420;
-const DEFAULT_PANEL_WIDTH = Dimensions.get('window').width - PANEL_MARGIN * 2;
-const MIN_PANEL_WIDTH = 260;
-const MIN_PANEL_HEIGHT = 280;
+const FLOATING_MARGIN = 12;
+const DEFAULT_PANEL_WIDTH_RATIO = 0.9;
+const DEFAULT_PANEL_HEIGHT = 460;
+const MIN_PANEL_WIDTH = 280;
+const MIN_PANEL_HEIGHT = 300;
+const COLLAPSED_ICON_SIZE = 48;
+const WEB_BOOKMARKS_KEY = 'ysclaude-web-bookmarks';
+const MAX_WEB_BOOKMARKS = 80;
 const DESKTOP_WEBVIEW_MIN_WIDTH = 1280;
 const DESKTOP_WEBVIEW_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+
+interface WebBookmark {
+  id: string;
+  title: string;
+  url: string;
+  createdAt: number;
+}
 
 function buildClickScript(target: { index?: number; selector?: string }): string {
   const targetJson = JSON.stringify(target);
@@ -291,7 +307,7 @@ const DESKTOP_LAYOUT_SCROLL_SCRIPT = `
         viewport.setAttribute('name', 'viewport');
         (document.head || document.documentElement).appendChild(viewport);
       }
-      viewport.setAttribute('content', 'width=' + minWidth + ', initial-scale=1');
+      viewport.setAttribute('content', 'width=' + minWidth + ', initial-scale=1, minimum-scale=0.25, maximum-scale=5, user-scalable=yes');
 
       var style = document.getElementById('ysclaude-desktop-scroll-style');
       if (!style) {
@@ -308,7 +324,8 @@ const DESKTOP_LAYOUT_SCROLL_SCRIPT = `
         'body {',
         '  width: auto !important;',
         '  -webkit-overflow-scrolling: touch;',
-        '  touch-action: pan-x pan-y;',
+        '  touch-action: pan-x pan-y pinch-zoom;',
+        '  overscroll-behavior: auto;',
         '}',
         '::-webkit-scrollbar {',
         '  width: 10px !important;',
@@ -327,7 +344,120 @@ const DESKTOP_LAYOUT_SCROLL_SCRIPT = `
   true;
 `;
 
+const CLEAR_CURRENT_SITE_DATA_SCRIPT = `
+  (function () {
+    try {
+      var cookies = document.cookie ? document.cookie.split(';') : [];
+      var expires = 'Thu, 01 Jan 1970 00:00:00 GMT';
+      var hostname = window.location.hostname || '';
+      var domainParts = hostname.split('.');
+      var domains = [''];
+      for (var i = 0; i < domainParts.length - 1; i += 1) {
+        domains.push('.' + domainParts.slice(i).join('.'));
+      }
+
+      cookies.forEach(function (cookie) {
+        var name = cookie.split('=')[0].trim();
+        if (!name) return;
+        domains.forEach(function (domain) {
+          var domainPart = domain ? ';domain=' + domain : '';
+          document.cookie = name + '=;expires=' + expires + ';path=/' + domainPart;
+        });
+      });
+
+      try { window.localStorage && window.localStorage.clear(); } catch (e) {}
+      try { window.sessionStorage && window.sessionStorage.clear(); } catch (e) {}
+      try {
+        if (window.caches && window.caches.keys) {
+          window.caches.keys().then(function (keys) {
+            keys.forEach(function (key) { window.caches.delete(key); });
+          });
+        }
+      } catch (e) {}
+      try {
+        if (window.indexedDB && window.indexedDB.databases) {
+          window.indexedDB.databases().then(function (databases) {
+            databases.forEach(function (database) {
+              if (database && database.name) window.indexedDB.deleteDatabase(database.name);
+            });
+          });
+        }
+      } catch (e) {}
+    } catch (e) {}
+    true;
+  })();
+`;
+
+function normalizeAddressInput(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(withProtocol);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function clampPanelSize(width: number, height: number) {
+  const screen = Dimensions.get('window');
+  return {
+    width: Math.min(Math.max(MIN_PANEL_WIDTH, width), screen.width - FLOATING_MARGIN * 2),
+    height: Math.min(Math.max(MIN_PANEL_HEIGHT, height), screen.height - FLOATING_MARGIN * 4),
+  };
+}
+
+function clampPanelPosition(x: number, y: number, size: { width: number; height: number }, topInset: number) {
+  const screen = Dimensions.get('window');
+  const minY = topInset + FLOATING_MARGIN;
+  return {
+    x: Math.min(Math.max(FLOATING_MARGIN, x), Math.max(FLOATING_MARGIN, screen.width - size.width - FLOATING_MARGIN)),
+    y: Math.min(Math.max(minY, y), Math.max(minY, screen.height - size.height - FLOATING_MARGIN)),
+  };
+}
+
+function snapCollapsedIcon(x: number, y: number, topInset: number) {
+  const screen = Dimensions.get('window');
+  const snappedX = x + COLLAPSED_ICON_SIZE / 2 < screen.width / 2
+    ? FLOATING_MARGIN
+    : screen.width - COLLAPSED_ICON_SIZE - FLOATING_MARGIN;
+  const minY = topInset + FLOATING_MARGIN;
+  const maxY = Math.max(minY, screen.height - COLLAPSED_ICON_SIZE - FLOATING_MARGIN);
+  return {
+    x: snappedX,
+    y: Math.min(Math.max(minY, y), maxY),
+  };
+}
+
+async function loadWebBookmarks(): Promise<WebBookmark[]> {
+  const raw = await sqliteStorage.getItem(WEB_BOOKMARKS_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item) => item && typeof item.url === 'string')
+      .map((item) => ({
+        id: typeof item.id === 'string' ? item.id : randomUUID(),
+        title: typeof item.title === 'string' ? item.title : item.url,
+        url: item.url,
+        createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+async function saveWebBookmarks(bookmarks: WebBookmark[]): Promise<void> {
+  await sqliteStorage.setItem(WEB_BOOKMARKS_KEY, JSON.stringify(bookmarks.slice(0, MAX_WEB_BOOKMARKS)));
+}
+
 export function WebViewPanel() {
+  const insets = useSafeAreaInsets();
   const webViewRef = useRef<WebView>(null);
   const pendingRequests = useRef<Record<string, PendingRequest>>({});
   const pendingOpen = useRef<PendingRequest | null>(null);
@@ -336,91 +466,48 @@ export function WebViewPanel() {
   const userAgentRef = useRef<string | undefined>(undefined);
   const [visible, setVisible] = useState(false);
   const [url, setUrl] = useState('');
+  const [addressInput, setAddressInput] = useState('');
+  const [homeSearch, setHomeSearch] = useState('');
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
-  const [webViewUserAgent, setWebViewUserAgent] = useState<string | undefined>(undefined);
-  const [webViewReloadKey, setWebViewReloadKey] = useState(0);
-  const [panelSize, setPanelSize] = useState({
-    width: DEFAULT_PANEL_WIDTH,
-    height: DEFAULT_PANEL_HEIGHT,
+  const [canGoBack, setCanGoBack] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [panelSize, setPanelSize] = useState(() => {
+    const screen = Dimensions.get('window');
+    return clampPanelSize(
+      Math.round(screen.width * DEFAULT_PANEL_WIDTH_RATIO),
+      Math.min(DEFAULT_PANEL_HEIGHT, screen.height - FLOATING_MARGIN * 4)
+    );
   });
   const [panelPosition, setPanelPosition] = useState(() => {
-    const { height } = Dimensions.get('window');
-    return { x: PANEL_MARGIN, y: Math.max(PANEL_MARGIN, height - DEFAULT_PANEL_HEIGHT - 92) };
+    const screen = Dimensions.get('window');
+    const size = clampPanelSize(
+      Math.round(screen.width * DEFAULT_PANEL_WIDTH_RATIO),
+      Math.min(DEFAULT_PANEL_HEIGHT, screen.height - FLOATING_MARGIN * 4)
+    );
+    return {
+      x: Math.max(FLOATING_MARGIN, screen.width - size.width - FLOATING_MARGIN),
+      y: insets.top + FLOATING_MARGIN,
+    };
   });
+  const [collapsedIconPosition, setCollapsedIconPosition] = useState(() => ({
+    x: FLOATING_MARGIN,
+    y: insets.top + FLOATING_MARGIN,
+  }));
+  const [bookmarks, setBookmarks] = useState<WebBookmark[]>([]);
+  const [showBookmarks, setShowBookmarks] = useState(false);
+  const [showWebMenu, setShowWebMenu] = useState(false);
+  const [showClearDataMenu, setShowClearDataMenu] = useState(false);
+  const [webViewUserAgent, setWebViewUserAgent] = useState<string | undefined>(undefined);
+  const [webViewReloadKey, setWebViewReloadKey] = useState(0);
+  const panelPositionRef = useRef(panelPosition);
+  const panelSizeRef = useRef(panelSize);
+  const collapsedIconPositionRef = useRef(collapsedIconPosition);
+  const insetTopRef = useRef(insets.top);
   const dragStart = useRef(panelPosition);
   const resizeStart = useRef(panelSize);
-
-  const clampPanelSize = useCallback((width: number, height: number, x = panelPosition.x, y = panelPosition.y) => {
-    const screen = Dimensions.get('window');
-    return {
-      width: Math.min(Math.max(MIN_PANEL_WIDTH, width), Math.max(MIN_PANEL_WIDTH, screen.width - x - PANEL_MARGIN)),
-      height: Math.min(Math.max(MIN_PANEL_HEIGHT, height), Math.max(MIN_PANEL_HEIGHT, screen.height - y - PANEL_MARGIN)),
-    };
-  }, [panelPosition.x, panelPosition.y]);
-
-  const clampPanelPosition = useCallback((x: number, y: number, size = panelSize) => {
-    const { width, height } = Dimensions.get('window');
-    return {
-      x: Math.min(Math.max(PANEL_MARGIN, x), Math.max(PANEL_MARGIN, width - size.width - PANEL_MARGIN)),
-      y: Math.min(Math.max(PANEL_MARGIN, y), Math.max(PANEL_MARGIN, height - size.height - PANEL_MARGIN)),
-    };
-  }, [panelSize]);
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, gestureState) =>
-        Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3,
-      onPanResponderGrant: () => {
-        dragStart.current = panelPosition;
-      },
-      onPanResponderMove: (_, gestureState) => {
-        setPanelPosition(
-          clampPanelPosition(
-            dragStart.current.x + gestureState.dx,
-            dragStart.current.y + gestureState.dy
-          )
-        );
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        setPanelPosition(
-          clampPanelPosition(
-            dragStart.current.x + gestureState.dx,
-            dragStart.current.y + gestureState.dy
-          )
-        );
-      },
-    })
-  ).current;
-
-  const resizeResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, gestureState) =>
-        Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3,
-      onPanResponderGrant: () => {
-        resizeStart.current = panelSize;
-      },
-      onPanResponderMove: (_, gestureState) => {
-        setPanelSize(
-          clampPanelSize(
-            resizeStart.current.width + gestureState.dx,
-            resizeStart.current.height + gestureState.dy
-          )
-        );
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        setPanelSize(
-          clampPanelSize(
-            resizeStart.current.width + gestureState.dx,
-            resizeStart.current.height + gestureState.dy
-          )
-        );
-      },
-    })
-  ).current;
+  const collapsedDragStart = useRef(collapsedIconPosition);
 
   const rejectPendingRequest = useCallback((id: string, reason: string) => {
     const pending = pendingRequests.current[id];
@@ -455,6 +542,137 @@ export function WebViewPanel() {
       `${webViewUserAgent ? DESKTOP_LAYOUT_SCROLL_SCRIPT : ''}\n${LOGIN_OVERLAY_CLEANUP_SCRIPT}`
     );
   }, [webViewUserAgent]);
+
+  const dragResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3,
+      onPanResponderGrant: () => {
+        dragStart.current = panelPositionRef.current;
+      },
+      onPanResponderMove: (_, gestureState) => {
+        setPanelPosition(
+          clampPanelPosition(
+            dragStart.current.x + gestureState.dx,
+            dragStart.current.y + gestureState.dy,
+            panelSizeRef.current,
+            insetTopRef.current
+          )
+        );
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        setPanelPosition(
+          clampPanelPosition(
+            dragStart.current.x + gestureState.dx,
+            dragStart.current.y + gestureState.dy,
+            panelSizeRef.current,
+            insetTopRef.current
+          )
+        );
+      },
+    })
+  ).current;
+
+  const resizeResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3,
+      onPanResponderGrant: () => {
+        resizeStart.current = panelSizeRef.current;
+      },
+      onPanResponderMove: (_, gestureState) => {
+        const nextSize = clampPanelSize(
+          resizeStart.current.width + gestureState.dx,
+          resizeStart.current.height + gestureState.dy
+        );
+        setPanelSize(nextSize);
+        setPanelPosition((current) => clampPanelPosition(current.x, current.y, nextSize, insetTopRef.current));
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const nextSize = clampPanelSize(
+          resizeStart.current.width + gestureState.dx,
+          resizeStart.current.height + gestureState.dy
+        );
+        setPanelSize(nextSize);
+        setPanelPosition((current) => clampPanelPosition(current.x, current.y, nextSize, insetTopRef.current));
+      },
+    })
+  ).current;
+
+  const collapsedIconResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3,
+      onPanResponderGrant: () => {
+        collapsedDragStart.current = collapsedIconPositionRef.current;
+      },
+      onPanResponderMove: (_, gestureState) => {
+        const screen = Dimensions.get('window');
+        setCollapsedIconPosition({
+          x: Math.min(
+            Math.max(FLOATING_MARGIN, collapsedDragStart.current.x + gestureState.dx),
+            screen.width - COLLAPSED_ICON_SIZE - FLOATING_MARGIN
+          ),
+          y: Math.min(
+            Math.max(insetTopRef.current + FLOATING_MARGIN, collapsedDragStart.current.y + gestureState.dy),
+            screen.height - COLLAPSED_ICON_SIZE - FLOATING_MARGIN
+          ),
+        });
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        setCollapsedIconPosition(
+          snapCollapsedIcon(
+            collapsedDragStart.current.x + gestureState.dx,
+            collapsedDragStart.current.y + gestureState.dy,
+            insetTopRef.current
+          )
+        );
+      },
+    })
+  ).current;
+
+  const show = useCallback(() => {
+    setVisible(true);
+    setCollapsed(false);
+    setStatus('');
+  }, []);
+
+  useEffect(() => {
+    panelPositionRef.current = panelPosition;
+  }, [panelPosition]);
+
+  useEffect(() => {
+    panelSizeRef.current = panelSize;
+  }, [panelSize]);
+
+  useEffect(() => {
+    collapsedIconPositionRef.current = collapsedIconPosition;
+  }, [collapsedIconPosition]);
+
+  useEffect(() => {
+    insetTopRef.current = insets.top;
+  }, [insets.top]);
+
+  useEffect(() => {
+    if (!showWebMenu) {
+      setShowClearDataMenu(false);
+    }
+  }, [showWebMenu]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadWebBookmarks()
+      .then((items) => {
+        if (!cancelled) setBookmarks(items);
+      })
+      .catch((err) => console.warn('[WebView] load bookmarks failed:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const observe = useCallback(async (): Promise<WebViewObservation> => {
     setStatus('观察网页');
@@ -531,6 +749,17 @@ export function WebViewPanel() {
       true;
     `);
   }, [runScriptRequest, webViewUserAgent]);
+
+  const isOpen = useCallback(() => {
+    return visible && !!urlRef.current;
+  }, [visible]);
+
+  const observeIfOpen = useCallback(async (): Promise<WebViewObservation | null> => {
+    if (!visible || !urlRef.current) {
+      return null;
+    }
+    return await observe();
+  }, [observe, visible]);
 
   const tap = useCallback(
     async (x: number, y: number): Promise<WebViewTapResult> => {
@@ -628,20 +857,24 @@ export function WebViewPanel() {
       : undefined;
 
     if (visible && urlRef.current === nextUrl && userAgentRef.current === nextUserAgent) {
+      setCollapsed(false);
       setStatus('网页已打开，继续观察');
       return await observe();
     }
 
     setVisible(true);
+    setCollapsed(false);
     setLoading(true);
     setStatus('打开网页');
     setTitle('');
     titleRef.current = '';
+    setCanGoBack(false);
     userAgentRef.current = nextUserAgent;
     setWebViewUserAgent(nextUserAgent);
     setWebViewReloadKey((key) => key + 1);
     urlRef.current = nextUrl;
     setUrl(nextUrl);
+    setAddressInput(nextUrl);
 
     return await new Promise<WebViewObservation>((resolve, reject) => {
       if (pendingOpen.current) {
@@ -661,8 +894,8 @@ export function WebViewPanel() {
   }, [observe, visible]);
 
   useEffect(() => {
-    return registerWebViewHost({ open, observe, tap, clickElement, clickSelector, wait });
-  }, [clickElement, clickSelector, observe, open, tap, wait]);
+    return registerWebViewHost({ show, isOpen, observeIfOpen, open, observe, tap, clickElement, clickSelector, wait });
+  }, [clickElement, clickSelector, isOpen, observe, observeIfOpen, open, show, tap, wait]);
 
   useEffect(() => {
     urlRef.current = url;
@@ -693,6 +926,8 @@ export function WebViewPanel() {
     urlRef.current = nextUrl;
     setTitle(nextTitle);
     setUrl(nextUrl);
+    setAddressInput(nextUrl);
+    setCanGoBack(!!navState.canGoBack);
   };
 
   const handleMessage = (event: WebViewMessageEvent) => {
@@ -717,6 +952,7 @@ export function WebViewPanel() {
       if (payload.data?.url) {
         urlRef.current = payload.data.url;
         setUrl(payload.data.url);
+        setAddressInput(payload.data.url);
       }
       pending.resolve(payload.data);
     } else {
@@ -724,11 +960,193 @@ export function WebViewPanel() {
     }
   };
 
+  const openUrl = (nextUrl: string, nextTitle = '') => {
+    urlRef.current = nextUrl;
+    setUrl(nextUrl);
+    setAddressInput(nextUrl);
+    setTitle(nextTitle);
+    titleRef.current = nextTitle;
+    setCanGoBack(false);
+    setLoading(true);
+    setStatus('打开网页');
+    setShowBookmarks(false);
+    setShowWebMenu(false);
+    setWebViewReloadKey((key) => key + 1);
+  };
+
+  const handleSubmitAddress = () => {
+    const nextUrl = normalizeAddressInput(addressInput);
+    if (!nextUrl) {
+      setStatus('请输入有效网址');
+      return;
+    }
+    openUrl(nextUrl);
+  };
+
+  const handleSubmitHomeSearch = () => {
+    const query = homeSearch.trim();
+    if (!query) return;
+    const directUrl = normalizeAddressInput(query);
+    const nextUrl = directUrl || `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+    openUrl(nextUrl);
+  };
+
+  const handleGoBack = () => {
+    if (!canGoBack) return;
+    setShowWebMenu(false);
+    webViewRef.current?.goBack();
+  };
+
+  const handleReload = () => {
+    if (!urlRef.current) return;
+    setShowWebMenu(false);
+    setLoading(true);
+    setStatus('刷新网页');
+    webViewRef.current?.reload();
+  };
+
+  const clearBrowserCache = () => {
+    webViewRef.current?.clearCache(true);
+    setShowClearDataMenu(false);
+    setShowWebMenu(false);
+    setStatus('已清除网页缓存');
+  };
+
+  const clearAllBrowserData = () => {
+    webViewRef.current?.clearCache(true);
+    if (urlRef.current) {
+      webViewRef.current?.injectJavaScript(CLEAR_CURRENT_SITE_DATA_SCRIPT);
+      setTimeout(() => {
+        if (urlRef.current) {
+          setWebViewReloadKey((key) => key + 1);
+        }
+      }, 120);
+    }
+    setShowClearDataMenu(false);
+    setShowWebMenu(false);
+    setStatus('已清除缓存和当前站点数据');
+  };
+
+  const toggleUserAgent = () => {
+    const nextUserAgent = webViewUserAgent ? undefined : DESKTOP_WEBVIEW_USER_AGENT;
+    userAgentRef.current = nextUserAgent;
+    setWebViewUserAgent(nextUserAgent);
+    setShowWebMenu(false);
+    setShowClearDataMenu(false);
+    if (urlRef.current) {
+      setLoading(true);
+      setStatus(nextUserAgent ? '切换为网页端 UA' : '切换为移动端 UA');
+      setWebViewReloadKey((key) => key + 1);
+    }
+  };
+
+  const handleCollapse = () => {
+    const currentPosition = panelPositionRef.current;
+    const currentSize = panelSizeRef.current;
+    setCollapsedIconPosition(
+      snapCollapsedIcon(
+        currentPosition.x + currentSize.width / 2 - COLLAPSED_ICON_SIZE / 2,
+        currentPosition.y,
+        insetTopRef.current
+      )
+    );
+    setCollapsed(true);
+    setShowWebMenu(false);
+    setShowClearDataMenu(false);
+  };
+
+  const handleClose = () => {
+    setVisible(false);
+    setCollapsed(false);
+    urlRef.current = '';
+    titleRef.current = '';
+    setUrl('');
+    setAddressInput('');
+    setHomeSearch('');
+    setTitle('');
+    setCanGoBack(false);
+    setLoading(false);
+    setShowBookmarks(false);
+    userAgentRef.current = undefined;
+    setWebViewUserAgent(undefined);
+    setShowWebMenu(false);
+    setShowClearDataMenu(false);
+  };
+
+  const persistBookmarkList = async (nextBookmarks: WebBookmark[]) => {
+    setBookmarks(nextBookmarks);
+    try {
+      await saveWebBookmarks(nextBookmarks);
+    } catch (err) {
+      console.warn('[WebView] save bookmarks failed:', err);
+      setStatus('收藏保存失败');
+    }
+  };
+
+  const openBookmark = (bookmark: WebBookmark) => {
+    openUrl(bookmark.url, bookmark.title);
+  };
+
+  const removeBookmark = async (id: string) => {
+    await persistBookmarkList(bookmarks.filter((bookmark) => bookmark.id !== id));
+  };
+
+  const toggleBookmark = async () => {
+    const currentUrl = urlRef.current;
+    if (!currentUrl) {
+      setStatus('先打开网页再收藏');
+      setShowWebMenu(false);
+      return;
+    }
+
+    const existing = bookmarks.find((bookmark) => bookmark.url === currentUrl);
+    if (existing) {
+      await persistBookmarkList(bookmarks.filter((bookmark) => bookmark.id !== existing.id));
+      setStatus('已取消收藏');
+      setShowWebMenu(false);
+      return;
+    }
+
+    const nextBookmark: WebBookmark = {
+      id: randomUUID(),
+      title: titleRef.current || title || currentUrl,
+      url: currentUrl,
+      createdAt: Date.now(),
+    };
+    await persistBookmarkList([
+      nextBookmark,
+      ...bookmarks.filter((bookmark) => bookmark.url !== currentUrl),
+    ].slice(0, MAX_WEB_BOOKMARKS));
+    setStatus('已收藏网页');
+    setShowWebMenu(false);
+  };
+
   if (!visible) return null;
 
+  const isCurrentBookmarked = !!url && bookmarks.some((bookmark) => bookmark.url === url);
+  const expandedPanelStyle = [
+    styles.panel,
+    {
+      left: panelPosition.x,
+      top: panelPosition.y,
+      width: panelSize.width,
+      height: panelSize.height,
+    },
+  ];
+  const panelStyle = collapsed
+    ? [
+        styles.hiddenPanel,
+        {
+          width: panelSize.width,
+          height: panelSize.height,
+        },
+      ]
+    : expandedPanelStyle;
+
   return (
-    <View style={[styles.panel, { left: panelPosition.x, top: panelPosition.y, width: panelSize.width, height: panelSize.height }]}>
-      <View style={styles.header} {...panResponder.panHandlers}>
+    <>
+    <View style={panelStyle} pointerEvents={collapsed ? 'none' : 'auto'}>
+      <View style={styles.header} {...dragResponder.panHandlers}>
         <View style={styles.headerText}>
           <Text style={styles.title} numberOfLines={1}>
             {title || '网页交互'}
@@ -738,10 +1156,121 @@ export function WebViewPanel() {
           </Text>
         </View>
         {loading && <ActivityIndicator size="small" color={colors.primary} />}
-        <Pressable style={styles.closeButton} onPress={() => setVisible(false)}>
+        <Pressable style={styles.modeButton} onPress={handleCollapse}>
+          <Text style={styles.modeButtonText}>收起</Text>
+        </Pressable>
+        <Pressable style={styles.closeButton} onPress={handleClose}>
           <Text style={styles.closeText}>关闭</Text>
         </Pressable>
       </View>
+      <View style={styles.addressRow}>
+        <TextInput
+          value={addressInput}
+          onChangeText={setAddressInput}
+          onSubmitEditing={handleSubmitAddress}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+          returnKeyType="go"
+          placeholder="输入网址"
+          placeholderTextColor={colors.textTertiary}
+          style={styles.addressInput}
+        />
+        <Pressable style={styles.menuButton} onPress={() => setShowWebMenu((current) => !current)}>
+          <Text style={styles.menuButtonText}>⋯</Text>
+        </Pressable>
+      </View>
+      {showWebMenu && (
+        <View style={styles.webMenu}>
+          <Pressable
+            style={[styles.webMenuItem, !canGoBack && styles.webMenuItemDisabled]}
+            onPress={handleGoBack}
+            disabled={!canGoBack}
+          >
+            <Text style={[styles.webMenuText, !canGoBack && styles.webMenuTextDisabled]}>回退</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.webMenuItem, !url && styles.webMenuItemDisabled]}
+            onPress={handleReload}
+            disabled={!url}
+          >
+            <Text style={[styles.webMenuText, !url && styles.webMenuTextDisabled]}>刷新</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.webMenuItem, !url && styles.webMenuItemDisabled]}
+            onPress={toggleBookmark}
+            disabled={!url}
+          >
+            <Text style={[styles.webMenuText, !url && styles.webMenuTextDisabled]}>
+              {isCurrentBookmarked ? '取消收藏' : '收藏网页'}
+            </Text>
+          </Pressable>
+          <Pressable style={styles.webMenuItem} onPress={toggleUserAgent}>
+            <Text style={styles.webMenuText}>{webViewUserAgent ? '切换移动端 UA' : '切换网页端 UA'}</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.webMenuItem, showBookmarks && styles.webMenuItemActive]}
+            onPress={() => {
+              setShowBookmarks((current) => !current);
+              setShowWebMenu(false);
+            }}
+          >
+            <Text style={styles.webMenuText}>收藏夹</Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.webMenuItem,
+              showClearDataMenu && styles.webMenuItemActive,
+              !url && styles.webMenuItemDisabled,
+            ]}
+            onPress={() => {
+              setShowBookmarks(false);
+              setShowClearDataMenu((current) => !current);
+            }}
+            disabled={!url}
+          >
+            <Text style={[styles.webMenuText, !url && styles.webMenuTextDisabled]}>清除浏览数据</Text>
+          </Pressable>
+          {showClearDataMenu && (
+            <View style={styles.clearDataOptions}>
+              <Pressable style={styles.clearDataItem} onPress={clearBrowserCache}>
+                <Text style={styles.clearDataTitle}>清除缓存</Text>
+                <Text style={styles.clearDataDescription}>图片和网页缓存</Text>
+              </Pressable>
+              <Pressable style={styles.clearDataItem} onPress={clearAllBrowserData}>
+                <Text style={styles.clearDataTitle}>清除所有数据</Text>
+                <Text style={styles.clearDataDescription}>缓存、Cookie 和当前站点存储</Text>
+              </Pressable>
+            </View>
+          )}
+        </View>
+      )}
+      {showBookmarks && (
+        <View style={styles.bookmarkPanel}>
+          {bookmarks.length === 0 ? (
+            <Text style={styles.emptyBookmarksText}>暂无收藏网页</Text>
+          ) : (
+            <ScrollView style={styles.bookmarkList} keyboardShouldPersistTaps="handled">
+              {bookmarks.map((bookmark) => (
+                <View key={bookmark.id} style={styles.bookmarkItem}>
+                  <Pressable style={styles.bookmarkTextBlock} onPress={() => openBookmark(bookmark)}>
+                    <Text style={styles.bookmarkTitle} numberOfLines={1}>
+                      {bookmark.title || bookmark.url}
+                    </Text>
+                    <Text style={styles.bookmarkUrl} numberOfLines={1}>
+                      {bookmark.url}
+                    </Text>
+                  </Pressable>
+                  <Pressable style={styles.bookmarkDeleteButton} onPress={() => removeBookmark(bookmark.id)}>
+                    <Text style={styles.bookmarkDeleteText}>删除</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+      )}
+      {url ? (
       <WebView
         key={webViewReloadKey}
         ref={webViewRef}
@@ -751,6 +1280,13 @@ export function WebViewPanel() {
         domStorageEnabled
         userAgent={webViewUserAgent}
         scrollEnabled
+        nestedScrollEnabled
+        scalesPageToFit
+        setBuiltInZoomControls
+        setDisplayZoomControls={false}
+        directionalLockEnabled={false}
+        bounces
+        overScrollMode="always"
         showsHorizontalScrollIndicator
         showsVerticalScrollIndicator
         onLoadEnd={handleLoadEnd}
@@ -759,6 +1295,49 @@ export function WebViewPanel() {
         injectedJavaScript={`${webViewUserAgent ? DESKTOP_LAYOUT_SCROLL_SCRIPT : ''}\n${LOGIN_OVERLAY_CLEANUP_SCRIPT}`}
         setSupportMultipleWindows={false}
       />
+      ) : (
+        <ScrollView
+          style={styles.homeView}
+          contentContainerStyle={styles.homeContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text style={styles.homeTitle}>网页首页</Text>
+          <View style={styles.homeSearchRow}>
+            <TextInput
+              value={homeSearch}
+              onChangeText={setHomeSearch}
+              onSubmitEditing={handleSubmitHomeSearch}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+              placeholder="使用 Bing 搜索或输入网址"
+              placeholderTextColor={colors.textTertiary}
+              style={styles.homeSearchInput}
+            />
+          </View>
+          <Text style={styles.homeSectionTitle}>快捷方式</Text>
+          {bookmarks.length === 0 ? (
+            <Text style={styles.emptyWebViewText}>暂无收藏网页</Text>
+          ) : (
+            <View style={styles.shortcutGrid}>
+              {bookmarks.map((bookmark) => (
+                <Pressable
+                  key={bookmark.id}
+                  style={styles.shortcutItem}
+                  onPress={() => openBookmark(bookmark)}
+                >
+                  <Text style={styles.shortcutIcon}>
+                    {(bookmark.title || bookmark.url).trim().slice(0, 1).toUpperCase()}
+                  </Text>
+                  <Text style={styles.shortcutTitle} numberOfLines={2}>
+                    {bookmark.title || bookmark.url}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+        </ScrollView>
+      )}
       <View style={styles.footer}>
         <Text style={styles.footerText} numberOfLines={1}>
           {status || '就绪'}
@@ -768,6 +1347,17 @@ export function WebViewPanel() {
         </View>
       </View>
     </View>
+    {collapsed && (
+      <View
+        style={[styles.collapsedIconWrap, { left: collapsedIconPosition.x, top: collapsedIconPosition.y }]}
+        {...collapsedIconResponder.panHandlers}
+      >
+        <Pressable style={styles.collapsedIconButton} onPress={() => setCollapsed(false)}>
+          <Image source={require('../../assets/web.png')} style={styles.collapsedIconImage} resizeMode="contain" />
+        </Pressable>
+      </View>
+    )}
+    </>
   );
 }
 
@@ -784,6 +1374,13 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
     elevation: 8,
+  },
+  hiddenPanel: {
+    position: 'absolute',
+    left: -10000,
+    top: 0,
+    opacity: 0,
+    overflow: 'hidden',
   },
   header: {
     minHeight: 52,
@@ -820,9 +1417,261 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
+  modeButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+  },
+  modeButtonText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  menuButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+  },
+  menuButtonText: {
+    color: colors.textSecondary,
+    fontSize: 22,
+    fontWeight: '600',
+    lineHeight: 24,
+  },
+  addressInput: {
+    flex: 1,
+    minHeight: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.inputBackground,
+    color: colors.text,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 13,
+  },
+  webMenu: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  webMenuItem: {
+    minHeight: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+  },
+  webMenuItemActive: {
+    backgroundColor: colors.primary,
+  },
+  webMenuItemDisabled: {
+    opacity: 0.45,
+  },
+  webMenuText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  webMenuTextDisabled: {
+    color: colors.textTertiary,
+  },
+  clearDataOptions: {
+    width: '100%',
+    gap: 8,
+    paddingTop: 2,
+  },
+  clearDataItem: {
+    minHeight: 54,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  clearDataTitle: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  clearDataDescription: {
+    marginTop: 3,
+    color: colors.textTertiary,
+    fontSize: 11,
+  },
+  bookmarkPanel: {
+    maxHeight: 220,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  bookmarkList: {
+    maxHeight: 220,
+  },
+  bookmarkItem: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  bookmarkTextBlock: {
+    flex: 1,
+  },
+  bookmarkTitle: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  bookmarkUrl: {
+    marginTop: 3,
+    color: colors.textTertiary,
+    fontSize: 11,
+  },
+  bookmarkDeleteButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+  },
+  bookmarkDeleteText: {
+    color: colors.danger,
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  emptyBookmarksText: {
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    color: colors.textTertiary,
+    fontSize: 13,
+    textAlign: 'center',
+  },
   webview: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+  },
+  homeView: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  homeContent: {
+    padding: 18,
+  },
+  homeTitle: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: '700',
+    marginBottom: 14,
+  },
+  homeSearchRow: {
+    marginBottom: 18,
+  },
+  homeSearchInput: {
+    minHeight: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.inputBackground,
+    color: colors.text,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    fontSize: 15,
+  },
+  homeSectionTitle: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 10,
+  },
+  shortcutGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  shortcutItem: {
+    width: 92,
+    minHeight: 94,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  shortcutIcon: {
+    width: 34,
+    height: 34,
+    lineHeight: 34,
+    borderRadius: 17,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  shortcutTitle: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 15,
+    textAlign: 'center',
+  },
+  emptyWebViewText: {
+    color: colors.textTertiary,
+    fontSize: 13,
+  },
+  collapsedIconWrap: {
+    position: 'absolute',
+    width: COLLAPSED_ICON_SIZE,
+    height: COLLAPSED_ICON_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  collapsedIconButton: {
+    width: COLLAPSED_ICON_SIZE,
+    height: COLLAPSED_ICON_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.border,
+    shadowColor: '#000000',
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 8,
+  },
+  collapsedIconImage: {
+    width: 24,
+    height: 24,
   },
   footer: {
     height: 28,

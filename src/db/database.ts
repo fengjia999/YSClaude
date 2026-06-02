@@ -73,6 +73,33 @@ async function initTables(database: SQLite.SQLiteDatabase) {
 
     CREATE INDEX IF NOT EXISTS idx_diaries_updated ON diaries(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_diaries_favorite ON diaries(is_favorite);
+
+    CREATE TABLE IF NOT EXISTS reading_books (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT '',
+      author TEXT NOT NULL DEFAULT '',
+      cover_uri TEXT,
+      file_uri TEXT,
+      format TEXT NOT NULL,
+      text TEXT NOT NULL DEFAULT '',
+      chapters TEXT NOT NULL DEFAULT '[]',
+      reading_offset INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_reading_books_updated ON reading_books(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS reading_messages (
+      id TEXT PRIMARY KEY,
+      book_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (book_id) REFERENCES reading_books(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_reading_messages_book ON reading_messages(book_id, created_at ASC);
   `);
 
   await runMigrations(database);
@@ -119,6 +146,10 @@ async function runMigrations(database: SQLite.SQLiteDatabase) {
   }
   if (version < 3) {
     await database.execAsync('PRAGMA user_version = 3;');
+  }
+
+  if (version < 4) {
+    await database.execAsync('PRAGMA user_version = 4;');
   }
 }
 

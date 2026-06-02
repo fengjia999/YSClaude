@@ -12,6 +12,8 @@
 | Markdown | @ronradtke/react-native-markdown-display |
 | TTS | MiniMax T2A (expo-audio + expo-file-system) |
 | WebView | react-native-webview |
+| 文件导入 | expo-document-picker / expo-file-system |
+| EPUB 解析 | fflate / fast-xml-parser |
 | 设备能力 | expo-device / expo-battery / expo-calendar |
 | 打包 | EAS Build → APK |
 
@@ -52,6 +54,13 @@
   - AI 日记查询：AI 可通过 `query_diary` 工具按日期查询日记内容
   - 上传云端：每条日记可单独上传到 Memory Vault 云端记忆库（上传时确认日期，标题并入正文）
   - SQLite 持久化存储
+- AI 共读
+  - 顶栏 reading 图标进入共读书架，支持导入 `txt` / `epub`
+  - EPUB 会解析书名、作者、章节正文，并尽量提取封面；TXT 会按文件名生成书名
+  - 书籍、阅读位置和每本书的共读消息均通过 SQLite 持久化
+  - 长按书籍可编辑书名、作者和封面；删除书籍会同步删除该书共读记录
+  - 阅读页底部提供独立共读面板，发送问题时会自动附带当前位置前方的原文片段
+  - 共读可使用独立 OpenAI 兼容 API 配置，也可一键复制普通对话 API 配置
 
 ### 扩展
 - MCP Tool 调用
@@ -68,9 +77,15 @@
   - 流式 tool_call 合并：兼容部分模型把工具名或多个工具调用分片输出的情况，减少工具名串联或调用错位
   - 工具调用可视化：AI 调用工具时在回复上方逐行展示「调用了什么工具 + 参数」（clock 图标 + 描述 + 箭头），点击可查看参数和结果，随消息持久化
 - WebView 网页面板
-  - AI 打开网页时，用户端同步显示可见窗口
-  - 顶部标题栏可拖动，右下角可缩放窗口大小
+  - AI 打开网页时，用户端同步显示可见窗口；用户也可点击顶栏 web 图标主动打开
+  - WebView 以悬浮窗展示，可拖动位置、拖动右下角缩放大小
+  - 收起后变为贴边小图标，仍保持网页会话；关闭后清空当前网页会话，后续不再自动附带网页上下文
+  - 新会话默认进入网页首页：首页包含 Bing 搜索框，以及直接读取收藏夹生成的快捷方式网格
+  - 地址栏支持输入 URL 后回车打开；菜单内提供回退、刷新、收藏/取消收藏、收藏夹、移动端/网页端 UA 切换
+  - 默认使用移动端 UA；切换网页端 UA 后支持双指缩放、横向/纵向拖动查看 PC 页面
+  - 支持清除浏览数据：可单独清除图片/网页缓存，或清除缓存、Cookie 和当前站点存储
   - 同一链接重复打开时优先复用当前页面状态，不强制刷新
+  - 用户发送消息获取回复时，如果 WebView 当前有打开页面，会插入一条仅用户可见的系统提示，并把当前网页观察内容附带给 AI
   - 普通 DOM 点击优先使用元素编号 / selector，坐标点击主要用于 canvas 或无标准控件的页面
 - 思维链展示：AI 输出中 `<thinking></thinking>` 包裹的内容自动折叠为「Thought process」胶囊，单击展开查看
 - AI 网页巡游
@@ -128,22 +143,39 @@
   - 应用使用统计：Android 专属；首次使用需到系统「使用情况访问权限」中授权，且需要包含 `AndroidSystemTools` 的 development build
   - 日历日程：支持读取、创建、修改、删除系统日历日程，首次使用会请求日历权限
 
-网页交互窗口会出现在 App 内，用户可拖动标题栏改变位置，也可拖动右下角调整大小。窗口关闭前会保留当前页面状态，后续 AI 可继续观察和操作。
+网页交互窗口会出现在 App 内，用户可拖动标题栏改变位置，也可拖动右下角调整大小。收起窗口会保留当前页面状态，后续 AI 可继续观察和操作；关闭窗口会结束当前网页会话。
+
+主动打开或 AI 打开的 WebView 页面都会进入同一套上下文判断：窗口处于打开或收起状态时会随下一次 API 请求自动观察并附带给 AI；用户关闭窗口后会清空当前 URL，不再发送网页信息。
+
+## AI 共读配置
+
+在顶栏点击 reading 图标进入 AI 共读。书架页可以导入 `txt` / `epub`，也可以长按书籍编辑元数据和封面。阅读页会保存阅读进度，并在向 AI 提问时把当前位置前方的一段原文作为上下文。
+
+共读设置支持：
+
+- **Base URL / API Key / Model** — OpenAI 兼容接口
+- **复制普通对话 API** — 将当前聊天 API 配置复制到共读配置
+- **System Prompt** — 控制共读助手的语气和边界
+- **原文字数** — 每次提问附带的原文片段长度
+- **对话条数** — 每次请求带入的最近共读消息数量
 
 ## 运行
 
 ```bash
 # 安装依赖
-npm install
+npm.cmd install
 
 # 启动开发服务器
-npx expo start
+npx.cmd expo start
 
 # 手机测试（Expo Go 扫码）
-npx expo start --tunnel
+npx.cmd expo start --tunnel
 
 # 浏览器预览
-npx expo start --web
+npx.cmd expo start --web
+
+# 类型检查
+npm.cmd run typecheck
 ```
 
 ## 项目结构
@@ -154,6 +186,9 @@ app/                        # expo-router 页面
 ├── index.tsx               # 对话主界面
 ├── history.tsx             # 对话历史（☰ 触发）
 ├── settings.tsx            # 设置页（⋯ 触发）
+├── reading/
+│   ├── index.tsx           # AI 共读书架 + 共读设置
+│   └── [id].tsx            # 书籍阅读页 + 共读对话面板
 └── chat/[id].tsx           # 历史对话详情
 
 src/
@@ -167,8 +202,10 @@ src/
 ├── services/
 │   ├── api.ts              # 流式 API 调用（SSE + stream tool_calls）
 │   ├── nativeTools.ts      # 设备信息 / 电池 / 应用使用统计 / 日历工具实现
+│   ├── readingImport.ts    # txt / epub 导入、正文/章节/封面解析
 │   ├── tts.ts              # MiniMax TTS 语音合成
 │   ├── tools.ts            # 工具定义与执行（记忆库 / 搜索 / 网页读取 / 网页交互 / 设备原生）
+│   ├── toolModules/        # 工具模块拆分实现
 │   └── webviewController.ts # Tool 与 WebViewPanel 的控制桥
 ├── utils/
 │   ├── time.ts             # 时间格式化 + 消息间隔时间戳阈值
@@ -179,7 +216,7 @@ src/
 │   └── settings.ts         # 配置状态（zustand persist + sqlite）
 ├── db/
 │   ├── database.ts         # SQLite 初始化 + schema
-│   ├── operations.ts       # 对话/消息/日记/隐藏楼层 CRUD
+│   ├── operations.ts       # 对话/消息/日记/隐藏楼层/共读书籍 CRUD
 │   └── kv-storage.ts       # KV 存储适配器
 ├── hooks/
 │   └── useKeyboardHeight.ts # 软键盘高度监听（edge-to-edge 输入框避让）
@@ -213,7 +250,6 @@ src/
 ## 未来规划
 
   - AI后台消息
-  - 共读功能
   - 悬浮球
 
 ## License

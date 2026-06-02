@@ -31,6 +31,7 @@ import { Message } from '../src/types';
 import { TIME_GAP_THRESHOLD_MS } from '../src/utils/time';
 import { pickGreeting } from '../src/utils/greetings';
 import { getPendingWebCruiseNotice } from '../src/utils/webCruise';
+import { showWebViewPanel } from '../src/services/webviewController';
 
 const INPUT_BAR_FALLBACK_HEIGHT = 128;
 const MESSAGE_BOTTOM_GAP = 16;
@@ -312,13 +313,21 @@ export default function ChatScreen() {
   return (
     <Animated.View style={[styles.container, animatedContainerStyle]}>
       <View style={styles.header}>
-        <Pressable style={styles.headerButton} onPress={() => router.push('/history')}>
-          <View style={styles.hamburgerLines}>
-            <View style={styles.hamburgerLine} />
-            <View style={styles.hamburgerLine} />
-            <View style={[styles.hamburgerLine, styles.hamburgerLineShort]} />
-          </View>
-        </Pressable>
+        <View style={styles.headerLeftGroup}>
+          <Pressable style={styles.headerButton} onPress={() => router.push('/history')}>
+            <View style={styles.hamburgerLines}>
+              <View style={styles.hamburgerLine} />
+              <View style={styles.hamburgerLine} />
+              <View style={[styles.hamburgerLine, styles.hamburgerLineShort]} />
+            </View>
+          </Pressable>
+          <Pressable style={styles.headerButton} onPress={() => router.push('/reading')}>
+            <Image source={require('../assets/reading.png')} style={styles.readingIcon} resizeMode="contain" />
+          </Pressable>
+          <Pressable style={styles.headerButton} onPress={showWebViewPanel}>
+            <Image source={require('../assets/web.png')} style={styles.webIcon} resizeMode="contain" />
+          </Pressable>
+        </View>
         <Pressable style={styles.headerButton} onPress={() => router.push('/settings')}>
           <Image source={require('../assets/setting.png')} style={styles.settingIcon} resizeMode="contain" />
         </Pressable>
@@ -399,6 +408,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 8,
   },
+  headerLeftGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   hamburgerLines: {
     width: 20,
     height: 16,
@@ -416,6 +430,14 @@ const styles = StyleSheet.create({
   settingIcon: {
     width: 22,
     height: 22,
+  },
+  readingIcon: {
+    width: 24,
+    height: 24,
+  },
+  webIcon: {
+    width: 24,
+    height: 24,
   },
   errorBanner: {
     backgroundColor: '#FEF2F2',

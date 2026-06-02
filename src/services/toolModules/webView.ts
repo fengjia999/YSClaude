@@ -281,7 +281,7 @@ function formatWebViewClickResult(result: Awaited<ReturnType<typeof clickWebView
   ].filter(Boolean).join('\n');
 }
 
-function formatWebViewObservation(observation: Awaited<ReturnType<typeof observeWebView>>): string {
+export function formatWebViewObservation(observation: Awaited<ReturnType<typeof observeWebView>>): string {
   const lines = [
     `网页标题: ${observation.title || '无标题'}`,
     `URL: ${observation.url}`,

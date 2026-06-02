@@ -59,6 +59,36 @@ export interface APIConfig {
   model: string;
 }
 
+export type ReadingBookFormat = 'txt' | 'epub';
+
+export interface ReadingChapter {
+  id: string;
+  title: string;
+  start: number;
+}
+
+export interface ReadingBook {
+  id: string;
+  title: string;
+  author: string;
+  coverUri?: string;
+  fileUri?: string;
+  format: ReadingBookFormat;
+  text: string;
+  chapters: ReadingChapter[];
+  readingOffset: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ReadingMessage {
+  id: string;
+  bookId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: number;
+}
+
 export interface ModelOption {
   id: string;
   name: string;

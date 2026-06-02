@@ -1,5 +1,14 @@
 import { getDatabase } from './database';
-import { Conversation, Message, Diary, HiddenRange, ToolInvocation } from '../types';
+import {
+  Conversation,
+  Message,
+  Diary,
+  HiddenRange,
+  ToolInvocation,
+  ReadingBook,
+  ReadingChapter,
+  ReadingMessage,
+} from '../types';
 
 export async function createConversation(conv: Conversation): Promise<void> {
   const db = await getDatabase();
@@ -263,4 +272,208 @@ export async function getFavoriteDiaries(): Promise<Diary[]> {
     updated_at: number;
   }>('SELECT * FROM diaries WHERE is_favorite = 1 ORDER BY created_at ASC');
   return rows.map(mapDiaryRow);
+}
+
+/* ==================== Reading CRUD ==================== */
+
+function parseReadingChapters(raw: string | null | undefined): ReadingChapter[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (chapter) =>
+        chapter &&
+        typeof chapter.id === 'string' &&
+        typeof chapter.title === 'string' &&
+        typeof chapter.start === 'number'
+    );
+  } catch {
+    return [];
+  }
+}
+
+function mapReadingBookRow(row: {
+  id: string;
+  title: string;
+  author: string;
+  cover_uri: string | null;
+  file_uri: string | null;
+  format: string;
+  text: string;
+  chapters: string | null;
+  reading_offset: number;
+  created_at: number;
+  updated_at: number;
+}): ReadingBook {
+  return {
+    id: row.id,
+    title: row.title,
+    author: row.author,
+    coverUri: row.cover_uri || undefined,
+    fileUri: row.file_uri || undefined,
+    format: row.format === 'epub' ? 'epub' : 'txt',
+    text: row.text,
+    chapters: parseReadingChapters(row.chapters),
+    readingOffset: row.reading_offset,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function createReadingBook(book: ReadingBook): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    `INSERT INTO reading_books
+      (id, title, author, cover_uri, file_uri, format, text, chapters, reading_offset, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      book.id,
+      book.title,
+      book.author,
+      book.coverUri || null,
+      book.fileUri || null,
+      book.format,
+      book.text,
+      JSON.stringify(book.chapters || []),
+      book.readingOffset,
+      book.createdAt,
+      book.updatedAt,
+    ]
+  );
+}
+
+export async function updateReadingBook(
+  id: string,
+  updates: Partial<Pick<ReadingBook, 'title' | 'author' | 'coverUri' | 'fileUri' | 'text' | 'chapters' | 'readingOffset' | 'updatedAt'>>
+): Promise<void> {
+  const db = await getDatabase();
+  const sets: string[] = [];
+  const values: any[] = [];
+
+  if (updates.title !== undefined) {
+    sets.push('title = ?');
+    values.push(updates.title);
+  }
+  if (updates.author !== undefined) {
+    sets.push('author = ?');
+    values.push(updates.author);
+  }
+  if (updates.coverUri !== undefined) {
+    sets.push('cover_uri = ?');
+    values.push(updates.coverUri || null);
+  }
+  if (updates.fileUri !== undefined) {
+    sets.push('file_uri = ?');
+    values.push(updates.fileUri || null);
+  }
+  if (updates.text !== undefined) {
+    sets.push('text = ?');
+    values.push(updates.text);
+  }
+  if (updates.chapters !== undefined) {
+    sets.push('chapters = ?');
+    values.push(JSON.stringify(updates.chapters));
+  }
+  if (updates.readingOffset !== undefined) {
+    sets.push('reading_offset = ?');
+    values.push(updates.readingOffset);
+  }
+  if (updates.updatedAt !== undefined) {
+    sets.push('updated_at = ?');
+    values.push(updates.updatedAt);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  await db.runAsync(`UPDATE reading_books SET ${sets.join(', ')} WHERE id = ?`, values);
+}
+
+export async function deleteReadingBook(id: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('DELETE FROM reading_messages WHERE book_id = ?', [id]);
+  await db.runAsync('DELETE FROM reading_books WHERE id = ?', [id]);
+}
+
+export async function getAllReadingBooks(): Promise<ReadingBook[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{
+    id: string;
+    title: string;
+    author: string;
+    cover_uri: string | null;
+    file_uri: string | null;
+    format: string;
+    text: string;
+    chapters: string | null;
+    reading_offset: number;
+    created_at: number;
+    updated_at: number;
+  }>('SELECT * FROM reading_books ORDER BY updated_at DESC');
+  return rows.map(mapReadingBookRow);
+}
+
+export async function getReadingBook(id: string): Promise<ReadingBook | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{
+    id: string;
+    title: string;
+    author: string;
+    cover_uri: string | null;
+    file_uri: string | null;
+    format: string;
+    text: string;
+    chapters: string | null;
+    reading_offset: number;
+    created_at: number;
+    updated_at: number;
+  }>('SELECT * FROM reading_books WHERE id = ?', [id]);
+  return row ? mapReadingBookRow(row) : null;
+}
+
+function mapReadingMessageRow(row: {
+  id: string;
+  book_id: string;
+  role: string;
+  content: string;
+  created_at: number;
+}): ReadingMessage {
+  return {
+    id: row.id,
+    bookId: row.book_id,
+    role: row.role === 'assistant' ? 'assistant' : 'user',
+    content: row.content,
+    createdAt: row.created_at,
+  };
+}
+
+export async function insertReadingMessage(message: ReadingMessage): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    `INSERT OR REPLACE INTO reading_messages (id, book_id, role, content, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [message.id, message.bookId, message.role, message.content, message.createdAt]
+  );
+}
+
+export async function updateReadingMessageContent(id: string, content: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE reading_messages SET content = ? WHERE id = ?', [content, id]);
+}
+
+export async function deleteReadingMessage(id: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('DELETE FROM reading_messages WHERE id = ?', [id]);
+}
+
+export async function getReadingMessages(bookId: string): Promise<ReadingMessage[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{
+    id: string;
+    book_id: string;
+    role: string;
+    content: string;
+    created_at: number;
+  }>('SELECT * FROM reading_messages WHERE book_id = ? ORDER BY created_at ASC', [bookId]);
+  return rows.map(mapReadingMessageRow);
 }

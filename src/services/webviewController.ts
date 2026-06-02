@@ -32,6 +32,9 @@ export interface WebViewOpenOptions {
 }
 
 export interface WebViewHostActions {
+  show: () => void;
+  isOpen: () => boolean;
+  observeIfOpen: () => Promise<WebViewObservation | null>;
   open: (url: string, options?: WebViewOpenOptions) => Promise<WebViewObservation>;
   observe: () => Promise<WebViewObservation>;
   tap: (x: number, y: number) => Promise<WebViewTapResult>;
@@ -63,6 +66,18 @@ export async function openWebView(
   options?: WebViewOpenOptions
 ): Promise<WebViewObservation> {
   return getHostActions().open(url, options);
+}
+
+export function showWebViewPanel(): void {
+  getHostActions().show();
+}
+
+export function isWebViewOpen(): boolean {
+  return getHostActions().isOpen();
+}
+
+export async function observeActiveWebView(): Promise<WebViewObservation | null> {
+  return getHostActions().observeIfOpen();
 }
 
 export async function observeWebView(): Promise<WebViewObservation> {

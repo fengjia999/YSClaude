@@ -59,6 +59,15 @@ export interface NativeToolConfig {
   calendarEnabled: boolean;
 }
 
+export interface ReadingConfig {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  systemPrompt: string;
+  sourceCharLimit: number;
+  conversationMessageLimit: number;
+}
+
 interface SettingsState {
   _hydrated: boolean;
   apiConfigs: NamedAPIConfig[];
@@ -74,6 +83,7 @@ interface SettingsState {
   webInteractionConfig: WebInteractionConfig;
   hotboardConfig: HotboardConfig;
   nativeToolConfig: NativeToolConfig;
+  readingConfig: ReadingConfig;
 
   setActiveConfig: (index: number) => void;
   saveAPIConfig: (config: NamedAPIConfig) => void;
@@ -89,6 +99,7 @@ interface SettingsState {
   setWebInteractionConfig: (config: Partial<WebInteractionConfig>) => void;
   setHotboardConfig: (config: Partial<HotboardConfig>) => void;
   setNativeToolConfig: (config: Partial<NativeToolConfig>) => void;
+  setReadingConfig: (config: Partial<ReadingConfig>) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -144,6 +155,15 @@ export const useSettingsStore = create<SettingsState>()(
         appUsageStatsEnabled: false,
         calendarEnabled: false,
       },
+      readingConfig: {
+        baseUrl: '',
+        apiKey: '',
+        model: '',
+        systemPrompt:
+          '你是一个温柔、细致的 AI 共读伙伴。围绕用户正在阅读的原文回答，帮助解释、联想、提问和梳理，但不要剧透当前原文之后的内容。',
+        sourceCharLimit: 4000,
+        conversationMessageLimit: 8,
+      },
 
       setActiveConfig: (index) => set({ activeConfigIndex: index }),
 
@@ -186,6 +206,8 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ hotboardConfig: { ...state.hotboardConfig, ...config } })),
       setNativeToolConfig: (config) =>
         set((state) => ({ nativeToolConfig: { ...state.nativeToolConfig, ...config } })),
+      setReadingConfig: (config) =>
+        set((state) => ({ readingConfig: { ...state.readingConfig, ...config } })),
     }),
     {
       name: 'ysclaude-settings',
@@ -204,6 +226,7 @@ export const useSettingsStore = create<SettingsState>()(
         webInteractionConfig: state.webInteractionConfig,
         hotboardConfig: state.hotboardConfig,
         nativeToolConfig: state.nativeToolConfig,
+        readingConfig: state.readingConfig,
       }),
       onRehydrateStorage: () => () => {
         useSettingsStore.setState({ _hydrated: true });
