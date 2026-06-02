@@ -43,6 +43,9 @@ interface Props {
   previousUserMessage?: Message | null;
   isLastAssistant?: boolean;
   isHidden?: boolean;
+  floorNumber?: number;
+  showFloorNumber?: boolean;
+  onBubblePress?: () => void;
 }
 
 // 把一次工具调用格式化成「动作描述 + 参数」的单行文字。
@@ -125,6 +128,9 @@ export const ChatBubble = React.memo(function ChatBubble({
   previousUserMessage,
   isLastAssistant,
   isHidden,
+  floorNumber,
+  showFloorNumber,
+  onBubblePress,
 }: Props) {
   const isUser = message.role === 'user';
   const stickerCatalog = isUser ? 'user' : 'assistant';
@@ -144,6 +150,7 @@ export const ChatBubble = React.memo(function ChatBubble({
   const [menuAnchor, setMenuAnchor] = useState({ x: 0, y: 0, width: 0 });
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
   const bubbleRef = useRef<View>(null);
+  const floorLabel = showFloorNumber && floorNumber !== undefined ? `#${floorNumber}` : null;
 
   if (message.role === 'system') {
     return (
@@ -219,10 +226,12 @@ export const ChatBubble = React.memo(function ChatBubble({
     return (
       <View style={[styles.userRow, isHidden && styles.hiddenRow]}>
         <View style={styles.userColumn}>
+          {floorLabel && <Text style={styles.floorLabelRight}>{floorLabel}</Text>}
           {isHidden && <Text style={styles.hiddenLabelRight}>已隐藏</Text>}
           {message.imageUri && (
             <Pressable
               ref={!message.content ? bubbleRef : undefined}
+              onPress={onBubblePress}
               onLongPress={!message.content ? handleUserLongPress : undefined}
             >
               <Image
@@ -235,6 +244,7 @@ export const ChatBubble = React.memo(function ChatBubble({
           {message.content.length > 0 && (
             <Pressable
               ref={bubbleRef}
+              onPress={onBubblePress}
               onLongPress={handleUserLongPress}
               style={[
                 styles.userBubble,
@@ -248,6 +258,7 @@ export const ChatBubble = React.memo(function ChatBubble({
           {message.content.length === 0 && !message.imageUri && (
             <Pressable
               ref={bubbleRef}
+              onPress={onBubblePress}
               onLongPress={handleUserLongPress}
               style={styles.userBubble}
             >
@@ -335,6 +346,7 @@ export const ChatBubble = React.memo(function ChatBubble({
 
   return (
     <View style={[styles.assistantRow, isHidden && styles.hiddenBubble]}>
+      {floorLabel && <Text style={styles.floorLabelLeft}>{floorLabel}</Text>}
       {isHidden && <Text style={styles.hiddenLabelLeft}>已隐藏</Text>}
       {/* 工具调用记录：显示在 AI 回复文字上方，每次调用一行 */}
       {message.toolInvocations && message.toolInvocations.length > 0 && (
@@ -375,14 +387,14 @@ export const ChatBubble = React.memo(function ChatBubble({
       )}
       {/* 思维链：<thinking> 包裹的内容拆出，正文只渲染剩余部分 */}
       {thinking.length > 0 && <ThinkingBlock thinking={thinking} />}
-      <View style={styles.assistantContent}>
+      <Pressable style={styles.assistantContent} onPress={onBubblePress}>
         <StickerContent
           content={body || ' '}
           variant="assistant"
           markdownStyle={markdownStyles}
           markdownRules={markdownRules}
         />
-      </View>
+      </Pressable>
       {message.content.length > 0 && (
         <>
           <View style={styles.actions}>
@@ -434,6 +446,20 @@ const styles = StyleSheet.create({
   hiddenLabelLeft: {
     fontSize: 10,
     color: colors.textTertiary,
+    marginBottom: 3,
+    textAlign: 'left',
+  },
+  floorLabelRight: {
+    fontSize: 11,
+    color: colors.primary,
+    fontFamily: fonts.mono,
+    marginBottom: 3,
+    textAlign: 'right',
+  },
+  floorLabelLeft: {
+    fontSize: 11,
+    color: colors.primary,
+    fontFamily: fonts.mono,
     marginBottom: 3,
     textAlign: 'left',
   },

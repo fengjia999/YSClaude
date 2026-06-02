@@ -15,6 +15,7 @@ import { Diary } from '../src/types';
 import { getFavoriteDiaries } from '../src/db/operations';
 import { uploadDiary } from '../src/services/tools';
 import { formatFullTime, formatDateOnly } from '../src/utils/time';
+import { importMyphonePrivateChatsFromPicker } from '../src/services/myphoneImport';
 import {
   DEFAULT_HOTBOARD_PLATFORM_TYPES,
   HOTBOARD_PLATFORMS,
@@ -408,14 +409,17 @@ function ChatSettingsTab({ showToast }: { showToast: ToastFn }) {
     messages,
     conversationId,
     hiddenRanges,
+    messageFloorOffset,
     addHiddenRange,
     restoreHiddenRange,
     removeHiddenRange,
+    loadConversation,
   } = useChatStore();
   const [fromStr, setFromStr] = useState('');
   const [toStr, setToStr] = useState('');
   const [tokensStr, setTokensStr] = useState(maxOutputTokens ? String(maxOutputTokens) : '');
   const [promptText, setPromptText] = useState(systemPrompt);
+  const [importingMyphone, setImportingMyphone] = useState(false);
 
   // 仅取 user/assistant 消息作为「楼层」序列（1-based）
   const floorMessages = messages.filter((m) => m.role === 'user' || m.role === 'assistant');
@@ -454,8 +458,8 @@ function ChatSettingsTab({ showToast }: { showToast: ToastFn }) {
     const from = parseInt(fromStr, 10);
     const to = parseInt(toStr, 10);
     if (isNaN(from) || isNaN(to) || from < 1 || to < from) return null;
-    const firstMsg = floorMessages[from - 1] ?? null;
-    const lastMsg = floorMessages[to - 1] ?? null;
+    const firstMsg = floorMessages[from - messageFloorOffset - 1] ?? null;
+    const lastMsg = floorMessages[to - messageFloorOffset - 1] ?? null;
     if (!firstMsg && !lastMsg) return null;
     return {
       from,
@@ -490,7 +494,31 @@ function ChatSettingsTab({ showToast }: { showToast: ToastFn }) {
     showToast(`AI 最大输出 ${num} tokens`);
   }
 
+  async function handleImportMyphone() {
+    if (importingMyphone) return;
+    setImportingMyphone(true);
+    try {
+      const result = await importMyphonePrivateChatsFromPicker();
+      if (result.cancelled) return;
+      if (result.firstConversationId) {
+        await loadConversation(result.firstConversationId);
+      }
+      showToast(`已导入 ${result.importedMessages} 条消息`);
+      Alert.alert(
+        '导入完成',
+        `已导入 ${result.importedConversations} 个单聊，共 ${result.importedMessages} 条消息。` +
+          (result.skippedCharacters > 0 ? `\n跳过 ${result.skippedCharacters} 个空角色。` : '')
+      );
+    } catch (error: any) {
+      Alert.alert('导入失败', error?.message || '无法读取 myphone 单聊备份');
+    } finally {
+      setImportingMyphone(false);
+    }
+  }
+
   const messageCount = messages.filter((m) => m.role === 'user' || m.role === 'assistant').length;
+  const loadedFloorFrom = messageCount > 0 ? messageFloorOffset + 1 : 0;
+  const loadedFloorTo = messageFloorOffset + messageCount;
 
   return (
     <ScrollView style={styles.content}>
@@ -510,9 +538,25 @@ function ChatSettingsTab({ showToast }: { showToast: ToastFn }) {
       {/* 消息条数 */}
       <Text style={styles.sectionTitle}>当前对话</Text>
       <View style={styles.infoRow}>
-        <Text style={styles.infoLabel}>消息条数</Text>
-        <Text style={styles.infoValue}>{messageCount} 条</Text>
+        <Text style={styles.infoLabel}>已加载消息</Text>
+        <Text style={styles.infoValue}>
+          {messageCount > 0 ? `${loadedFloorFrom}-${loadedFloorTo}` : '0'} 条
+        </Text>
       </View>
+
+      <Text style={styles.sectionTitle}>myphone 导入</Text>
+      <Text style={styles.hint}>选择 myphone 导出的 .ee 或 JSON 单聊备份；只导入角色单聊，群聊会被跳过。</Text>
+      <Pressable
+        style={[styles.importButton, importingMyphone && styles.importButtonDisabled]}
+        onPress={handleImportMyphone}
+        disabled={importingMyphone}
+      >
+        {importingMyphone ? (
+          <ActivityIndicator size="small" color="#FFFFFF" />
+        ) : (
+          <Text style={styles.importButtonText}>导入 myphone 单聊</Text>
+        )}
+      </Pressable>
 
       {/* 隐藏消息 */}
       <Text style={styles.sectionTitle}>隐藏消息</Text>
@@ -1760,6 +1804,18 @@ const styles = StyleSheet.create({
   infoLabel: { fontSize: 14, color: colors.text, fontWeight: '500' },
   infoValue: { fontSize: 14, color: colors.primary, fontWeight: '600' },
   hint: { fontSize: 12, color: colors.textTertiary, marginBottom: 12 },
+  importButton: {
+    minHeight: 46,
+    backgroundColor: colors.primary,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  importButtonDisabled: {
+    opacity: 0.7,
+  },
+  importButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
   rangeList: { marginBottom: 12 },
   rangeItem: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',

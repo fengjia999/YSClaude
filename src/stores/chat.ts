@@ -25,16 +25,25 @@ import {
   deleteConversation,
   deleteMessage,
   getMessagesByConversation,
+  getConversationMessagePage,
+  getConversationMessagePageAroundMessage,
+  getConversationMessageCount,
   getHiddenRanges,
   updateHiddenRanges,
   getFavoriteDiaries,
   getAllConversations,
 } from '../db/operations';
 
+const MESSAGE_PAGE_SIZE = 20;
+
 interface ChatState {
   conversationId: string | null;
   messages: Message[];
   hiddenRanges: HiddenRange[];
+  hasOlderMessages: boolean;
+  isLoadingOlderMessages: boolean;
+  messageFloorOffset: number;
+  pendingScrollMessageId: string | null;
   isStreaming: boolean;
   error: string | null;
 
@@ -46,6 +55,9 @@ interface ChatState {
   stopStreaming: () => void;
   newConversation: () => void;
   loadConversation: (id: string) => Promise<void>;
+  loadConversationAroundMessage: (conversationId: string, messageId: string) => Promise<void>;
+  loadOlderMessages: () => Promise<void>;
+  clearPendingScrollMessage: () => void;
   setError: (error: string | null) => void;
   editMessage: (id: string, content: string) => Promise<void>;
   removeMessage: (id: string) => Promise<void>;
@@ -90,16 +102,16 @@ function buildVisionContent(text: string, dataUrl: string): any[] {
   return parts;
 }
 
-function rangesForMessageIds(messages: Message[], ids: Set<string>): HiddenRange[] {
+function rangesForMessageIds(messages: Message[], ids: Set<string>, offset = 0): HiddenRange[] {
   return messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((message, index) => ({ message, floor: index + 1 }))
+    .map((message, index) => ({ message, floor: offset + index + 1 }))
     .filter(({ message }) => ids.has(message.id))
     .map(({ floor }) => ({ from: floor, to: floor }));
 }
 
-function floorForMessageId(messages: Message[], id: string): number | null {
-  let floor = 0;
+function floorForMessageId(messages: Message[], id: string, offset = 0): number | null {
+  let floor = offset;
   for (const message of messages) {
     if (message.role !== 'user' && message.role !== 'assistant') continue;
     floor += 1;
@@ -144,7 +156,10 @@ async function hideAutoHideMessagesAfterResponse(
 ): Promise<void> {
   if (autoHideAfterResponseIds.size === 0) return;
 
-  const ranges = rangesForMessageIds(historyMessages, autoHideAfterResponseIds);
+  const ranges = rangesForMessageIds(
+    historyMessages,
+    autoHideAfterResponseIds
+  );
   if (ranges.length === 0) return;
 
   const hiddenIds = new Set(
@@ -400,8 +415,8 @@ async function streamAssistantResponse(
   await insertMessage(conversationId, assistantMessage);
   transientResponseMessageIds.push(assistantMessage.id);
 
-  const allMessages = get().messages;
-  const historyMessages = allMessages.slice(0, -1);
+  const allMessages = await getMessagesByConversation(conversationId);
+  const historyMessages = allMessages.filter((message) => message.id !== assistantMessage.id);
   const pendingWebCruise = getPendingWebCruiseNotice(historyMessages);
   // 隐藏楼层现在按对话独立存储，从 chat store 自身读取。
   const hiddenRanges = get().hiddenRanges;
@@ -527,9 +542,9 @@ async function streamAssistantResponse(
     const remainingMessages = currentMessages.filter((message) => !transientIds.has(message.id));
     set({ messages: remainingMessages });
 
-    if (remainingMessages.length === 0) {
+    if (remainingMessages.length === 0 && (await getConversationMessageCount(conversationId)) === 0) {
       await deleteConversation(conversationId);
-      set({ conversationId: null, hiddenRanges: [] });
+      set({ conversationId: null, hiddenRanges: [], hasOlderMessages: false, messageFloorOffset: 0 });
     }
 
     return remainingMessages;
@@ -622,6 +637,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversationId: null,
   messages: [],
   hiddenRanges: [],
+  hasOlderMessages: false,
+  isLoadingOlderMessages: false,
+  messageFloorOffset: 0,
+  pendingScrollMessageId: null,
   isStreaming: false,
   error: null,
 
@@ -652,7 +671,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         updatedAt: now,
       };
       await createConversation(conv);
-      set({ conversationId });
+      set({ conversationId, hasOlderMessages: false, messageFloorOffset: 0 });
     }
 
     const userMessage: Message = {
@@ -699,7 +718,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         updatedAt: now,
       };
       await createConversation(conv);
-      set({ conversationId });
+      set({ conversationId, hasOlderMessages: false, messageFloorOffset: 0 });
     }
 
     const systemMessage: Message = {
@@ -744,7 +763,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         updatedAt: now,
       };
       await createConversation(conv);
-      set({ conversationId });
+      set({ conversationId, hasOlderMessages: false, messageFloorOffset: 0 });
       messages = get().messages;
     }
 
@@ -788,7 +807,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     if (!previousConversationId && failedConversationId && remainingMessages.length === 0) {
       await deleteConversation(failedConversationId);
-      set({ conversationId: null, hiddenRanges: [] });
+      set({ conversationId: null, hiddenRanges: [], hasOlderMessages: false, messageFloorOffset: 0 });
     } else if (previousConversation) {
       await updateConversation(previousConversation.id, { updatedAt: previousConversation.updatedAt });
     }
@@ -800,16 +819,82 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   newConversation: () => {
-    set({ conversationId: null, messages: [], hiddenRanges: [], error: null });
+    set({
+      conversationId: null,
+      messages: [],
+      hiddenRanges: [],
+      hasOlderMessages: false,
+      isLoadingOlderMessages: false,
+      messageFloorOffset: 0,
+      pendingScrollMessageId: null,
+      error: null,
+    });
   },
 
   loadConversation: async (id: string) => {
-    const messages = await getMessagesByConversation(id);
+    const page = await getConversationMessagePage(id, { limit: MESSAGE_PAGE_SIZE });
     const hiddenRanges = await getHiddenRanges(id);
-    set({ conversationId: id, messages, hiddenRanges, error: null });
+    set({
+      conversationId: id,
+      messages: page.messages,
+      hiddenRanges,
+      hasOlderMessages: page.hasMore,
+      isLoadingOlderMessages: false,
+      messageFloorOffset: page.floorOffset,
+      pendingScrollMessageId: null,
+      error: null,
+    });
+  },
+
+  loadConversationAroundMessage: async (conversationId: string, messageId: string) => {
+    const page = await getConversationMessagePageAroundMessage(
+      conversationId,
+      messageId,
+      MESSAGE_PAGE_SIZE
+    );
+    const hiddenRanges = await getHiddenRanges(conversationId);
+    set({
+      conversationId,
+      messages: page.messages,
+      hiddenRanges,
+      hasOlderMessages: page.hasMore,
+      isLoadingOlderMessages: false,
+      messageFloorOffset: page.floorOffset,
+      pendingScrollMessageId: messageId,
+      error: null,
+    });
+  },
+
+  loadOlderMessages: async () => {
+    const { conversationId, messages, hasOlderMessages, isLoadingOlderMessages } = get();
+    if (!conversationId || !hasOlderMessages || isLoadingOlderMessages || messages.length === 0) return;
+
+    set({ isLoadingOlderMessages: true });
+    try {
+      const page = await getConversationMessagePage(conversationId, {
+        limit: MESSAGE_PAGE_SIZE,
+        beforeCreatedAt: messages[0].createdAt,
+      });
+      const existingIds = new Set(messages.map((message) => message.id));
+      const olderMessages = page.messages.filter((message) => !existingIds.has(message.id));
+      set((state) => ({
+        messages: [...olderMessages, ...state.messages],
+        hasOlderMessages: page.hasMore,
+        isLoadingOlderMessages: false,
+        messageFloorOffset: page.floorOffset,
+        error: null,
+      }));
+    } catch (error: any) {
+      set({
+        isLoadingOlderMessages: false,
+        error: error?.message || '加载更早消息失败',
+      });
+    }
   },
 
   setError: (error) => set({ error }),
+
+  clearPendingScrollMessage: () => set({ pendingScrollMessageId: null }),
 
   // 隐藏楼层：新增范围 → 合并 → 落库。无活跃对话时忽略。
   addHiddenRange: async (range: HiddenRange) => {
@@ -857,8 +942,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   removeMessage: async (id: string) => {
-    const { conversationId, hiddenRanges, messages } = get();
-    const deletedFloor = floorForMessageId(messages, id);
+    const { conversationId, hiddenRanges, messages, messageFloorOffset } = get();
+    const deletedFloor = floorForMessageId(messages, id, messageFloorOffset);
     const nextHiddenRanges =
       deletedFloor === null
         ? hiddenRanges
@@ -870,9 +955,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     const nextMessages = messages.filter((m) => m.id !== id);
-    if (conversationId && nextMessages.length === 0) {
+    if (conversationId && nextMessages.length === 0 && (await getConversationMessageCount(conversationId)) === 0) {
       await deleteConversation(conversationId);
-      set({ conversationId: null, messages: [], hiddenRanges: [], error: null });
+      set({ conversationId: null, messages: [], hiddenRanges: [], hasOlderMessages: false, messageFloorOffset: 0, error: null });
       return;
     }
 
@@ -916,3 +1001,4 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await streamAssistantResponse(get, set, conversationId);
   },
 }));
+

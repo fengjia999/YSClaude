@@ -10,6 +10,32 @@ import {
   ReadingMessage,
 } from '../types';
 
+interface MessageRow {
+  id: string;
+  role: string;
+  content: string;
+  tool_calls: string | null;
+  tool_call_id: string | null;
+  tool_invocations: string | null;
+  image_uri: string | null;
+  created_at: number;
+}
+
+export interface ConversationMessagePage {
+  messages: Message[];
+  hasMore: boolean;
+  floorOffset: number;
+}
+
+export interface ChatSearchResult {
+  messageId: string;
+  conversationId: string;
+  conversationTitle: string;
+  role: Message['role'];
+  content: string;
+  createdAt: number;
+}
+
 export async function createConversation(conv: Conversation): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
@@ -152,20 +178,8 @@ export async function deleteMessage(id: string): Promise<void> {
   await db.runAsync('DELETE FROM messages WHERE id = ?', [id]);
 }
 
-export async function getMessagesByConversation(conversationId: string): Promise<Message[]> {
-  const db = await getDatabase();
-  const rows = await db.getAllAsync<{
-    id: string;
-    role: string;
-    content: string;
-    tool_calls: string | null;
-    tool_call_id: string | null;
-    tool_invocations: string | null;
-    image_uri: string | null;
-    created_at: number;
-  }>('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC', [conversationId]);
-
-  return rows.map((row) => ({
+function mapMessageRow(row: MessageRow): Message {
+  return {
     id: row.id,
     role: row.role as Message['role'],
     content: row.content,
@@ -174,7 +188,222 @@ export async function getMessagesByConversation(conversationId: string): Promise
     toolInvocations: row.tool_invocations ? JSON.parse(row.tool_invocations) : undefined,
     imageUri: row.image_uri || undefined,
     createdAt: row.created_at,
+  };
+}
+
+export async function getMessagesByConversation(conversationId: string): Promise<Message[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<MessageRow>(
+    'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC',
+    [conversationId]
+  );
+
+  return rows.map(mapMessageRow);
+}
+
+export async function getConversationMessagePage(
+  conversationId: string,
+  options: { limit: number; beforeCreatedAt?: number }
+): Promise<ConversationMessagePage> {
+  const db = await getDatabase();
+  const pageLimit = Math.max(1, options.limit);
+  const params: any[] = [conversationId];
+  let where = 'conversation_id = ?';
+
+  if (options.beforeCreatedAt !== undefined) {
+    where += ' AND created_at < ?';
+    params.push(options.beforeCreatedAt);
+  }
+
+  params.push(pageLimit + 1);
+  const rows = await db.getAllAsync<MessageRow>(
+    `SELECT * FROM messages WHERE ${where} ORDER BY created_at DESC LIMIT ?`,
+    params
+  );
+  const visibleRows = rows.slice(0, pageLimit).reverse();
+  const messages = visibleRows.map(mapMessageRow);
+  const firstCreatedAt = messages[0]?.createdAt;
+
+  return {
+    messages,
+    hasMore: rows.length > pageLimit,
+    floorOffset:
+      firstCreatedAt === undefined
+        ? 0
+        : await getConversationFloorOffset(conversationId, firstCreatedAt),
+  };
+}
+
+export async function getConversationMessagePageAroundMessage(
+  conversationId: string,
+  messageId: string,
+  limit = 20
+): Promise<ConversationMessagePage> {
+  const db = await getDatabase();
+  const target = await db.getFirstAsync<MessageRow>(
+    'SELECT * FROM messages WHERE conversation_id = ? AND id = ?',
+    [conversationId, messageId]
+  );
+
+  if (!target) {
+    return getConversationMessagePage(conversationId, { limit });
+  }
+
+  const pageLimit = Math.max(1, limit);
+  const beforeLimit = Math.floor((pageLimit - 1) / 2);
+  const afterLimit = pageLimit - 1 - beforeLimit;
+  const beforeRows = beforeLimit > 0
+    ? await db.getAllAsync<MessageRow>(
+        `SELECT * FROM messages
+          WHERE conversation_id = ? AND created_at < ?
+          ORDER BY created_at DESC
+          LIMIT ?`,
+        [conversationId, target.created_at, beforeLimit]
+      )
+    : [];
+  const afterRows = afterLimit > 0
+    ? await db.getAllAsync<MessageRow>(
+        `SELECT * FROM messages
+          WHERE conversation_id = ? AND created_at > ?
+          ORDER BY created_at ASC
+          LIMIT ?`,
+        [conversationId, target.created_at, afterLimit]
+      )
+    : [];
+  const messages = [...beforeRows.reverse(), target, ...afterRows].map(mapMessageRow);
+  const firstCreatedAt = messages[0]?.createdAt;
+
+  return {
+    messages,
+    hasMore:
+      firstCreatedAt === undefined
+        ? false
+        : (await getConversationFloorOffset(conversationId, firstCreatedAt)) > 0,
+    floorOffset:
+      firstCreatedAt === undefined
+        ? 0
+        : await getConversationFloorOffset(conversationId, firstCreatedAt),
+  };
+}
+
+export async function searchMessages(
+  query: string,
+  options: { conversationId?: string; limit?: number } = {}
+): Promise<ChatSearchResult[]> {
+  const keyword = query.trim();
+  if (!keyword) return [];
+
+  const db = await getDatabase();
+  const params: any[] = [likePattern(keyword)];
+  let where = `m.content LIKE ? ESCAPE '\\'`;
+
+  if (options.conversationId) {
+    where += ' AND m.conversation_id = ?';
+    params.push(options.conversationId);
+  }
+
+  params.push(Math.max(1, options.limit ?? 50));
+  const rows = await db.getAllAsync<{
+    message_id: string;
+    conversation_id: string;
+    conversation_title: string;
+    role: string;
+    content: string;
+    created_at: number;
+  }>(
+    `SELECT
+        m.id as message_id,
+        m.conversation_id as conversation_id,
+        c.title as conversation_title,
+        m.role as role,
+        m.content as content,
+        m.created_at as created_at
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE ${where}
+      ORDER BY m.created_at DESC
+      LIMIT ?`,
+    params
+  );
+
+  return rows.map((row) => ({
+    messageId: row.message_id,
+    conversationId: row.conversation_id,
+    conversationTitle: row.conversation_title,
+    role: row.role as Message['role'],
+    content: row.content,
+    createdAt: row.created_at,
   }));
+}
+
+export async function getConversationMessageCount(conversationId: string): Promise<number> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ count: number }>(
+    'SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?',
+    [conversationId]
+  );
+  return row?.count ?? 0;
+}
+
+export async function getConversationMessageDates(conversationId: string): Promise<string[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{ created_at: number }>(
+    `SELECT created_at
+       FROM messages
+      WHERE conversation_id = ?
+      ORDER BY created_at ASC`,
+    [conversationId]
+  );
+  const dates = new Set<string>();
+  rows.forEach((row) => dates.add(localDateKey(row.created_at)));
+  return [...dates];
+}
+
+export async function getFirstMessageInDateRange(
+  conversationId: string,
+  startAt: number,
+  endAt: number
+): Promise<Message | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<MessageRow>(
+    `SELECT *
+       FROM messages
+      WHERE conversation_id = ?
+        AND created_at >= ?
+        AND created_at < ?
+      ORDER BY created_at ASC
+      LIMIT 1`,
+    [conversationId, startAt, endAt]
+  );
+  return row ? mapMessageRow(row) : null;
+}
+
+async function getConversationFloorOffset(
+  conversationId: string,
+  beforeCreatedAt: number
+): Promise<number> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ count: number }>(
+    `SELECT COUNT(*) as count
+       FROM messages
+      WHERE conversation_id = ?
+        AND created_at < ?
+        AND role IN ('user', 'assistant')`,
+    [conversationId, beforeCreatedAt]
+  );
+  return row?.count ?? 0;
+}
+
+function likePattern(value: string): string {
+  return `%${value.replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
+}
+
+function localDateKey(timestamp: number): string {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 /* ==================== 日记 Diary CRUD ==================== */
