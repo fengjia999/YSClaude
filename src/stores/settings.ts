@@ -68,6 +68,10 @@ export interface ReadingConfig {
   conversationMessageLimit: number;
 }
 
+export interface FloatingBallConfig {
+  enabled: boolean;
+}
+
 interface SettingsState {
   _hydrated: boolean;
   apiConfigs: NamedAPIConfig[];
@@ -84,6 +88,7 @@ interface SettingsState {
   hotboardConfig: HotboardConfig;
   nativeToolConfig: NativeToolConfig;
   readingConfig: ReadingConfig;
+  floatingBallConfig: FloatingBallConfig;
 
   setActiveConfig: (index: number) => void;
   saveAPIConfig: (config: NamedAPIConfig) => void;
@@ -100,6 +105,7 @@ interface SettingsState {
   setHotboardConfig: (config: Partial<HotboardConfig>) => void;
   setNativeToolConfig: (config: Partial<NativeToolConfig>) => void;
   setReadingConfig: (config: Partial<ReadingConfig>) => void;
+  setFloatingBallConfig: (config: Partial<FloatingBallConfig>) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -164,6 +170,9 @@ export const useSettingsStore = create<SettingsState>()(
         sourceCharLimit: 4000,
         conversationMessageLimit: 8,
       },
+      floatingBallConfig: {
+        enabled: false,
+      },
 
       setActiveConfig: (index) => set({ activeConfigIndex: index }),
 
@@ -208,6 +217,8 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ nativeToolConfig: { ...state.nativeToolConfig, ...config } })),
       setReadingConfig: (config) =>
         set((state) => ({ readingConfig: { ...state.readingConfig, ...config } })),
+      setFloatingBallConfig: (config) =>
+        set((state) => ({ floatingBallConfig: { ...state.floatingBallConfig, ...config } })),
     }),
     {
       name: 'ysclaude-settings',
@@ -227,6 +238,7 @@ export const useSettingsStore = create<SettingsState>()(
         hotboardConfig: state.hotboardConfig,
         nativeToolConfig: state.nativeToolConfig,
         readingConfig: state.readingConfig,
+        floatingBallConfig: state.floatingBallConfig,
       }),
       onRehydrateStorage: () => () => {
         useSettingsStore.setState({ _hydrated: true });

@@ -9,7 +9,8 @@ class AndroidSystemToolsPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
     return listOf(
       AndroidSystemToolsModule(reactContext),
-      AndroidFilePickerModule(reactContext)
+      AndroidFilePickerModule(reactContext),
+      FloatingBallModule(reactContext)
     )
   }
 

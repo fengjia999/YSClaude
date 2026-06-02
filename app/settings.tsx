@@ -20,8 +20,14 @@ import {
   HOTBOARD_PLATFORMS,
   normalizeHotboardPlatformTypes,
 } from '../src/utils/hotboardPlatforms';
+import {
+  canDrawFloatingBall,
+  hideFloatingBall,
+  openFloatingBallPermissionSettings,
+  showFloatingBall,
+} from '../src/services/floatingBall';
 
-const TABS = ['API 配置', '对话设置', 'TTS 配置', 'Tool 设置', '日记'] as const;
+const TABS = ['API 配置', '对话设置', 'TTS 配置', 'Tool 设置', '日记', '悬浮球'] as const;
 type ToastFn = (message: string) => void;
 
 export default function SettingsScreen() {
@@ -79,6 +85,7 @@ export default function SettingsScreen() {
       {activeTab === 2 && <TTSConfigTab showToast={showToast} />}
       {activeTab === 3 && <ToolConfigTab showToast={showToast} />}
       {activeTab === 4 && <DiaryTab showToast={showToast} />}
+      {activeTab === 5 && <FloatingBallTab showToast={showToast} />}
 
       {toastMessage && (
         <View pointerEvents="none" style={styles.toast}>
@@ -86,6 +93,64 @@ export default function SettingsScreen() {
         </View>
       )}
     </View>
+  );
+}
+
+/* ==================== 悬浮球 Tab ==================== */
+
+function FloatingBallTab({ showToast }: { showToast: ToastFn }) {
+  const { floatingBallConfig, setFloatingBallConfig } = useSettingsStore();
+  const [busy, setBusy] = useState(false);
+
+  async function handleToggle(value: boolean) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (!value) {
+        await hideFloatingBall();
+        setFloatingBallConfig({ enabled: false });
+        showToast('悬浮球已关闭');
+        return;
+      }
+
+      const granted = await canDrawFloatingBall();
+      if (!granted) {
+        setFloatingBallConfig({ enabled: false });
+        Alert.alert(
+          '需要悬浮窗权限',
+          '请在系统设置中允许 YSClaude 显示在其他应用上层，返回后再开启悬浮球。',
+          [
+            { text: '取消', style: 'cancel' },
+            { text: '去设置', onPress: () => openFloatingBallPermissionSettings().catch(() => undefined) },
+          ]
+        );
+        return;
+      }
+
+      await showFloatingBall();
+      setFloatingBallConfig({ enabled: true });
+      showToast('悬浮球已开启');
+    } catch (error: any) {
+      setFloatingBallConfig({ enabled: false });
+      Alert.alert('悬浮球不可用', error?.message || '请重新安装包含原生模块的新包');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ScrollView style={styles.content}>
+      <View style={styles.switchRow}>
+        <Text style={styles.label}>开启悬浮球</Text>
+        <Switch
+          value={floatingBallConfig.enabled}
+          onValueChange={handleToggle}
+          disabled={busy}
+          trackColor={{ false: colors.border, true: colors.primary }}
+          thumbColor="#FFFFFF"
+        />
+      </View>
+    </ScrollView>
   );
 }
 

@@ -11,6 +11,8 @@ import {
   ensurePermission,
 } from '../src/services/notifications';
 import { WebViewPanel } from '../src/components/WebViewPanel';
+import { useSettingsStore } from '../src/stores/settings';
+import { hideFloatingBall, showFloatingBall } from '../src/services/floatingBall';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -22,12 +24,24 @@ export default function RootLayout() {
     'TiemposText': require('../assets/TiemposText.otf'),
     'TiemposText-Bold': require('../assets/TiemposText-bold.otf'),
   });
+  const settingsHydrated = useSettingsStore((state) => state._hydrated);
+  const floatingBallEnabled = useSettingsStore((state) => state.floatingBallConfig.enabled);
 
   useEffect(() => {
     if (fontsLoaded) {
       SplashScreen.hideAsync();
     }
   }, [fontsLoaded]);
+
+  useEffect(() => {
+    if (!settingsHydrated) return;
+
+    if (floatingBallEnabled) {
+      showFloatingBall().catch(() => undefined);
+    } else {
+      hideFloatingBall().catch(() => undefined);
+    }
+  }, [settingsHydrated, floatingBallEnabled]);
 
   useEffect(() => {
     // 设置通知 handler 和 Android 通知渠道
