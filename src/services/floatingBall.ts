@@ -10,6 +10,17 @@ interface FloatingBallModule {
   isShowing: () => Promise<boolean>;
   showMessage: (text: string) => Promise<boolean>;
   hideMessage: () => Promise<boolean>;
+  showDesktopLyric: (
+    text: string,
+    lyricProgress: number,
+    title: string,
+    artist: string,
+    artworkUrl: string,
+    songProgress: number,
+    isPlaying: boolean,
+    backgroundUri: string
+  ) => Promise<boolean>;
+  hideDesktopLyric: () => Promise<boolean>;
   openApp: () => Promise<boolean>;
   captureScreen: () => Promise<string | null>;
 }
@@ -21,8 +32,11 @@ interface FloatingBallMessageOptions {
 export type FloatingBallToolAction =
   | 'screen_share'
   | 'get_reply'
+  | 'toggle_music'
   | 'open_app'
   | { action: 'text_input'; text?: string };
+
+export type DesktopLyricAction = 'previous' | 'toggle_play' | 'next' | 'close';
 
 const nativeModule = NativeModules.FloatingBall as FloatingBallModule | undefined;
 
@@ -72,6 +86,32 @@ export async function hideFloatingBallMessage(): Promise<void> {
   stopTTS().catch(() => {});
 }
 
+export async function showDesktopLyric(
+  text: string,
+  lyricProgress = 0,
+  title = '',
+  artist = '',
+  artworkUrl = '',
+  songProgress = 0,
+  isPlaying = false,
+  backgroundUri = ''
+): Promise<void> {
+  await ensureFloatingBall().showDesktopLyric(
+    text,
+    lyricProgress,
+    title,
+    artist,
+    artworkUrl,
+    songProgress,
+    isPlaying,
+    backgroundUri
+  );
+}
+
+export async function hideDesktopLyric(): Promise<void> {
+  await ensureFloatingBall().hideDesktopLyric();
+}
+
 export async function openYSClaudeFromFloatingBall(): Promise<void> {
   await ensureFloatingBall().openApp();
 }
@@ -84,6 +124,12 @@ export function addFloatingBallToolActionListener(
   listener: (action: FloatingBallToolAction) => void
 ): { remove: () => void } {
   return DeviceEventEmitter.addListener('FloatingBallToolAction', listener);
+}
+
+export function addDesktopLyricActionListener(
+  listener: (action: DesktopLyricAction) => void
+): { remove: () => void } {
+  return DeviceEventEmitter.addListener('DesktopLyricAction', listener);
 }
 
 function playFloatingBallTTS(text: string): void {

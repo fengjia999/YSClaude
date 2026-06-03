@@ -540,6 +540,9 @@ export default function ChatScreen() {
           <Pressable style={styles.headerButton} onPress={openCalendar} disabled={!conversationId}>
             <Image source={require('../assets/calendar.png')} style={[styles.calendarIcon, headerImageTintStyle]} resizeMode="contain" />
           </Pressable>
+          <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
+            <Image source={require('../assets/music.png')} style={[styles.musicIcon, headerImageTintStyle]} resizeMode="contain" />
+          </Pressable>
           <Pressable style={styles.headerButton} onPress={() => router.push('/settings')}>
             <Image source={require('../assets/setting.png')} style={[styles.settingIcon, headerImageTintStyle]} resizeMode="contain" />
           </Pressable>
@@ -755,6 +758,10 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     height: 22,
   },
   calendarIcon: {
+    width: 23,
+    height: 23,
+  },
+  musicIcon: {
     width: 23,
     height: 23,
   },

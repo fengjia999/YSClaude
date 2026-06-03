@@ -1,14 +1,21 @@
 package com.ysclaude.app
 
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Outline
+import android.graphics.LinearGradient
+import android.graphics.Path
+import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.media.ImageReader
@@ -24,6 +31,7 @@ import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewOutlineProvider
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
@@ -57,8 +65,8 @@ class FloatingBallModule(
   private val defaultBallImageSize = readAssetPixelSize(NORMAL_IDLE)
   private val touchTargetSize = dp(96)
   private val toolSize = dp(38)
-  private val expandedWidth = dp(206)
-  private val expandedHeight = dp(138)
+  private val expandedWidth = dp(238)
+  private val expandedHeight = dp(152)
   private val bubbleWidth = dp(268)
   private val inputWidth = dp(286)
   private val touchSlop = ViewConfiguration.get(reactContext).scaledTouchSlop
@@ -67,16 +75,19 @@ class FloatingBallModule(
     Color.rgb(255, 232, 238),
     Color.rgb(232, 241, 255),
     Color.rgb(232, 248, 238),
-    Color.rgb(255, 244, 214)
+    Color.rgb(255, 244, 214),
+    Color.rgb(238, 235, 255)
   )
 
   private var rootView: FrameLayout? = null
   private var ballView: ImageView? = null
   private var bubbleView: TextView? = null
   private var bubbleParams: WindowManager.LayoutParams? = null
+  private var desktopLyricView: DesktopLyricCardView? = null
+  private var desktopLyricParams: WindowManager.LayoutParams? = null
   private var inputView: LinearLayout? = null
   private var inputParams: WindowManager.LayoutParams? = null
-  private var toolbarViews: List<TextView> = emptyList()
+  private var toolbarViews: List<View> = emptyList()
   private var layoutParams: WindowManager.LayoutParams? = null
   private var ballWidth = defaultBallImageSize.width
   private var ballHeight = defaultBallImageSize.height
@@ -89,6 +100,11 @@ class FloatingBallModule(
   private var downEventTime = 0L
   private var downParamX = 0
   private var downParamY = 0
+  private var desktopLyricLastRawX = 0f
+  private var desktopLyricLastRawY = 0f
+  private var desktopLyricDownParamX = 0
+  private var desktopLyricDownParamY = 0
+  private var desktopLyricDidDrag = false
   private var didDrag = false
   private var didLongPress = false
 
@@ -201,6 +217,44 @@ class FloatingBallModule(
   }
 
   @ReactMethod
+  fun showDesktopLyric(
+    text: String,
+    lyricProgress: Double,
+    title: String,
+    artist: String,
+    artworkUrl: String,
+    songProgress: Double,
+    isPlaying: Boolean,
+    backgroundUri: String,
+    promise: Promise
+  ) {
+    mainHandler.post {
+      try {
+        if (!canDrawOverlays()) {
+          promise.reject("OVERLAY_PERMISSION_REQUIRED", "Desktop lyric overlay permission is not granted")
+          return@post
+        }
+        showDesktopLyricInternal(text, lyricProgress, title, artist, artworkUrl, songProgress, isPlaying, backgroundUri)
+        promise.resolve(true)
+      } catch (error: Exception) {
+        promise.reject("SHOW_DESKTOP_LYRIC_FAILED", error)
+      }
+    }
+  }
+
+  @ReactMethod
+  fun hideDesktopLyric(promise: Promise) {
+    mainHandler.post {
+      try {
+        hideDesktopLyricInternal()
+        promise.resolve(true)
+      } catch (error: Exception) {
+        promise.reject("HIDE_DESKTOP_LYRIC_FAILED", error)
+      }
+    }
+  }
+
+  @ReactMethod
   fun openApp(promise: Promise) {
     try {
       openAppInternal()
@@ -250,19 +304,41 @@ class FloatingBallModule(
     root.addView(image, collapsedBallLayoutParams())
 
     val labels = listOf("📷", "✎", "↻", "↗")
-    val actions = listOf(ACTION_SCREEN_SHARE, ACTION_TEXT_INPUT, ACTION_GET_REPLY, ACTION_OPEN_APP)
-    val tools = (1..4).map { index ->
-      TextView(reactContext).apply {
-        text = labels[index - 1]
-        textSize = 18f
-        setTextColor(Color.rgb(86, 82, 92))
-        gravity = Gravity.CENTER
-        background = circleDrawable(toolColors[index - 1])
-        elevation = dp(5).toFloat()
-        alpha = 0.96f
-        visibility = View.GONE
-        setOnClickListener {
-          handleToolAction(actions[index - 1])
+    val actions = listOf(
+      ACTION_SCREEN_SHARE,
+      ACTION_TEXT_INPUT,
+      ACTION_GET_REPLY,
+      ACTION_TOGGLE_MUSIC,
+      ACTION_OPEN_APP
+    )
+    var labelIndex = 0
+    val tools = actions.mapIndexed { index, action ->
+      if (action == ACTION_TOGGLE_MUSIC) {
+        ImageView(reactContext).apply {
+          setImageResource(R.drawable.music)
+          scaleType = ImageView.ScaleType.CENTER_INSIDE
+          setPadding(dp(10), dp(10), dp(10), dp(10))
+          background = circleDrawable(toolColors[index])
+          elevation = dp(5).toFloat()
+          alpha = 0.96f
+          visibility = View.GONE
+          setOnClickListener {
+            handleToolAction(action)
+          }
+        }
+      } else {
+        TextView(reactContext).apply {
+          text = labels[labelIndex++]
+          textSize = 18f
+          setTextColor(Color.rgb(86, 82, 92))
+          gravity = Gravity.CENTER
+          background = circleDrawable(toolColors[index])
+          elevation = dp(5).toFloat()
+          alpha = 0.96f
+          visibility = View.GONE
+          setOnClickListener {
+            handleToolAction(action)
+          }
         }
       }
     }
@@ -309,7 +385,13 @@ class FloatingBallModule(
     layoutParams = null
     isExpanded = false
     isEdgeHanging = false
-    FloatingBallForegroundService.stop(reactContext)
+    stopForegroundServiceIfNoOverlay()
+  }
+
+  private fun stopForegroundServiceIfNoOverlay() {
+    if (rootView == null && desktopLyricView == null) {
+      FloatingBallForegroundService.stop(reactContext)
+    }
   }
 
   private fun handleTouch(view: View, event: MotionEvent): Boolean {
@@ -609,10 +691,11 @@ class FloatingBallModule(
     val ballCenterX = ballLeft + ballWidth / 2
     val ballCenterY = ballTop + ballHeight / 2
     val positions = listOf(
-      (ballCenterX - dp(64) - toolSize / 2) to (ballCenterY - dp(24) - toolSize / 2),
-      (ballCenterX - dp(36) - toolSize / 2) to (ballCenterY - dp(56) - toolSize / 2),
-      (ballCenterX + dp(36) - toolSize / 2) to (ballCenterY - dp(56) - toolSize / 2),
-      (ballCenterX + dp(64) - toolSize / 2) to (ballCenterY - dp(24) - toolSize / 2)
+      (ballCenterX - dp(80) - toolSize / 2) to (ballCenterY - dp(22) - toolSize / 2),
+      (ballCenterX - dp(46) - toolSize / 2) to (ballCenterY - dp(62) - toolSize / 2),
+      (ballCenterX - toolSize / 2) to (ballCenterY - dp(78) - toolSize / 2),
+      (ballCenterX + dp(46) - toolSize / 2) to (ballCenterY - dp(62) - toolSize / 2),
+      (ballCenterX + dp(80) - toolSize / 2) to (ballCenterY - dp(22) - toolSize / 2)
     )
     toolbarViews.forEachIndexed { index, tool ->
       val (left, top) = positions[index]
@@ -708,6 +791,117 @@ class FloatingBallModule(
     bubbleParams = null
   }
 
+  private fun showDesktopLyricInternal(
+    rawText: String,
+    rawLyricProgress: Double,
+    rawTitle: String,
+    rawArtist: String,
+    rawArtworkUrl: String,
+    rawSongProgress: Double,
+    isPlaying: Boolean,
+    rawBackgroundUri: String
+  ) {
+    val text = normalizeDesktopLyricText(rawText)
+    if (text.isBlank()) {
+      hideDesktopLyricInternal()
+      return
+    }
+
+    FloatingBallForegroundService.start(reactContext)
+
+    val lyric = desktopLyricView ?: DesktopLyricCardView(reactContext, ::emitDesktopLyricAction).apply {
+      elevation = 0f
+      translationZ = 0f
+      setOnTouchListener(::handleDesktopLyricTouch)
+    }.also {
+      desktopLyricView = it
+    }
+
+    lyric.update(
+      text,
+      rawLyricProgress.toFloat(),
+      normalizeDesktopLyricText(rawTitle).ifBlank { "YSClaude Music" },
+      normalizeDesktopLyricText(rawArtist),
+      rawArtworkUrl.trim(),
+      rawSongProgress.toFloat(),
+      isPlaying,
+      rawBackgroundUri.trim()
+    )
+    if (lyric.parent == null) {
+      val width = (screenWidth() * 0.6f).toInt()
+      desktopLyricParams = WindowManager.LayoutParams(
+        width,
+        lyric.preferredHeight(),
+        overlayType(),
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        android.graphics.PixelFormat.TRANSLUCENT
+      ).apply {
+        gravity = Gravity.TOP or Gravity.START
+        x = (screenWidth() - width) / 2
+        y = (screenHeight() - dp(190)).coerceAtLeast(dp(24))
+      }
+      windowManager.addView(lyric, desktopLyricParams)
+    } else {
+      desktopLyricParams?.let { params ->
+        params.height = lyric.preferredHeight()
+        runCatching { windowManager.updateViewLayout(lyric, params) }
+      }
+    }
+  }
+
+  private fun hideDesktopLyricInternal() {
+    desktopLyricView?.let { view ->
+      if (view.parent != null) {
+        runCatching { windowManager.removeView(view) }
+      }
+    }
+    desktopLyricView = null
+    desktopLyricParams = null
+    stopForegroundServiceIfNoOverlay()
+  }
+
+  private fun handleDesktopLyricTouch(view: View, event: MotionEvent): Boolean {
+    val params = desktopLyricParams ?: return true
+    when (event.actionMasked) {
+      MotionEvent.ACTION_DOWN -> {
+        desktopLyricLastRawX = event.rawX
+        desktopLyricLastRawY = event.rawY
+        desktopLyricDownParamX = params.x
+        desktopLyricDownParamY = params.y
+        desktopLyricDidDrag = false
+        return true
+      }
+
+      MotionEvent.ACTION_MOVE -> {
+        val dx = event.rawX - desktopLyricLastRawX
+        val dy = event.rawY - desktopLyricLastRawY
+        desktopLyricDidDrag = desktopLyricDidDrag || abs(dx) > touchSlop || abs(dy) > touchSlop
+        params.x = (desktopLyricDownParamX + dx).toInt()
+          .coerceIn(0, (screenWidth() - params.width).coerceAtLeast(0))
+        params.y = (desktopLyricDownParamY + dy).toInt()
+          .coerceIn(dp(12), screenHeight() - dp(80))
+        runCatching { windowManager.updateViewLayout(view, params) }
+        return true
+      }
+
+      MotionEvent.ACTION_UP -> {
+        if (!desktopLyricDidDrag) {
+          (view as? DesktopLyricCardView)?.toggleExpanded()
+          params.height = (view as? DesktopLyricCardView)?.preferredHeight() ?: params.height
+          runCatching { windowManager.updateViewLayout(view, params) }
+        }
+        return true
+      }
+    }
+    return true
+  }
+
+  private fun emitDesktopLyricAction(action: String) {
+    reactContext
+      .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+      .emit(DESKTOP_LYRIC_ACTION_EVENT, action)
+  }
+
   private fun updateMessagePosition() {
     val params = layoutParams ?: return
     val bubble = bubbleView ?: return
@@ -734,6 +928,15 @@ class FloatingBallModule(
       .trim()
       .let { text ->
         if (text.length > 180) text.take(180).trimEnd() + "..." else text
+      }
+  }
+
+  private fun normalizeDesktopLyricText(rawText: String): String {
+    return rawText
+      .replace(Regex("\\s+"), " ")
+      .trim()
+      .let { text ->
+        if (text.length > 120) text.take(120).trimEnd() + "..." else text
       }
   }
 
@@ -890,9 +1093,11 @@ class FloatingBallModule(
     private val FALLBACK_IMAGE_SIZE = ImageSize(46, 44)
 
     private const val TOOL_ACTION_EVENT = "FloatingBallToolAction"
+    private const val DESKTOP_LYRIC_ACTION_EVENT = "DesktopLyricAction"
     private const val ACTION_SCREEN_SHARE = "screen_share"
     private const val ACTION_TEXT_INPUT = "text_input"
     private const val ACTION_GET_REPLY = "get_reply"
+    private const val ACTION_TOGGLE_MUSIC = "toggle_music"
     private const val ACTION_OPEN_APP = "open_app"
 
     private const val NORMAL_IDLE = "clawd-idle"
@@ -978,6 +1183,362 @@ class ScreenCapturePermissionActivity : Activity() {
   }
 }
 
+private class DesktopLyricCardView(
+  context: Context,
+  private val onAction: (String) -> Unit
+) : FrameLayout(context) {
+  private val backgroundView = RoundedImageView(context) { dp(18).toFloat() }.apply {
+    scaleType = ImageView.ScaleType.FIT_XY
+    visibility = View.GONE
+  }
+  private val lyricText = DesktopLyricTextView(context).apply {
+    textSize = 17f
+    gravity = Gravity.CENTER
+    maxLines = 2
+    ellipsize = TextUtils.TruncateAt.END
+    includeFontPadding = false
+    setLineSpacing(dp(2).toFloat(), 1.0f)
+    setTextColor(Color.WHITE)
+    setShadowLayer(dp(2).toFloat(), 0f, dp(1).toFloat(), Color.argb(88, 0, 0, 0))
+  }
+  private val coverView = ImageView(context).apply {
+    scaleType = ImageView.ScaleType.CENTER_CROP
+    background = roundedDrawable(Color.argb(82, 255, 255, 255), dp(12))
+  }
+  private val titleView = TextView(context).apply {
+    textSize = 15f
+    setTextColor(Color.rgb(22, 22, 22))
+    maxLines = 1
+    ellipsize = TextUtils.TruncateAt.END
+    includeFontPadding = false
+  }
+  private val artistView = TextView(context).apply {
+    textSize = 12f
+    setTextColor(Color.argb(172, 22, 22, 22))
+    maxLines = 1
+    ellipsize = TextUtils.TruncateAt.END
+    includeFontPadding = false
+  }
+  private val progressView = DesktopMusicProgressView(context)
+  private val playPauseButton = controlButton(">", "toggle_play")
+  private val root = LinearLayout(context).apply {
+    orientation = LinearLayout.VERTICAL
+    gravity = Gravity.CENTER
+  }
+  private val expandedContent = LinearLayout(context).apply {
+    orientation = LinearLayout.VERTICAL
+    visibility = View.GONE
+  }
+  private var isExpanded = false
+  private var lastArtworkUrl = ""
+  private var lastBackgroundUri = ""
+  private val clipPath = Path()
+  private val clipRect = RectF()
+
+  init {
+    isClickable = true
+    setWillNotDraw(false)
+    applyExpandedState()
+    clipToOutline = true
+    outlineProvider = object : ViewOutlineProvider() {
+      override fun getOutline(view: View, outline: Outline) {
+        outline.setRoundRect(0, 0, view.width, view.height, dp(18).toFloat())
+      }
+    }
+    background = roundedDrawable(Color.TRANSPARENT, dp(18), Color.TRANSPARENT)
+
+    addView(backgroundView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+
+    addView(root, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    root.addView(lyricText, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+
+    val infoRow = LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      setPadding(0, dp(12), 0, 0)
+    }
+    infoRow.addView(coverView, LinearLayout.LayoutParams(dp(56), dp(56)))
+
+    val infoColumn = LinearLayout(context).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(dp(12), 0, 0, 0)
+    }
+    infoColumn.addView(titleView, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(22)))
+    infoColumn.addView(artistView, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(20)))
+    infoColumn.addView(progressView, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(18)).apply {
+      topMargin = dp(6)
+    })
+    infoRow.addView(infoColumn, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+
+    val controls = LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER
+      setPadding(0, dp(12), 0, 0)
+      addView(controlButton("|<", "previous"), LinearLayout.LayoutParams(dp(42), dp(36)))
+      addView(playPauseButton, LinearLayout.LayoutParams(dp(48), dp(36)).apply {
+        leftMargin = dp(8)
+        rightMargin = dp(8)
+      })
+      addView(controlButton(">|", "next"), LinearLayout.LayoutParams(dp(42), dp(36)))
+      addView(controlButton("x", "close"), LinearLayout.LayoutParams(dp(42), dp(36)).apply {
+        leftMargin = dp(14)
+      })
+    }
+
+    expandedContent.addView(infoRow, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+    expandedContent.addView(controls, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+    root.addView(expandedContent, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+  }
+
+  fun update(
+    lyric: String,
+    lyricProgress: Float,
+    title: String,
+    artist: String,
+    artworkUrl: String,
+    songProgress: Float,
+    isPlaying: Boolean,
+    backgroundUri: String
+  ) {
+    lyricText.setLyricText(lyric)
+    lyricText.setLyricProgress(lyricProgress)
+    titleView.text = title
+    artistView.text = artist.ifBlank { "Unknown Artist" }
+    progressView.setProgress(songProgress)
+    playPauseButton.text = if (isPlaying) "II" else ">"
+    if (artworkUrl != lastArtworkUrl) {
+      lastArtworkUrl = artworkUrl
+      if (artworkUrl.isBlank()) {
+        coverView.setImageDrawable(null)
+      } else {
+        Glide.with(context).load(artworkUrl).into(coverView)
+      }
+    }
+    if (backgroundUri.isBlank()) {
+      lastBackgroundUri = ""
+      backgroundView.visibility = View.GONE
+      backgroundView.setImageDrawable(null)
+      backgroundView.background = null
+      backgroundView.clearColorFilter()
+    } else {
+      backgroundView.visibility = View.VISIBLE
+      backgroundView.background = null
+      backgroundView.clearColorFilter()
+      backgroundView.alpha = 1f
+      if (backgroundUri != lastBackgroundUri) {
+        lastBackgroundUri = backgroundUri
+        Glide.with(context).load(backgroundUri).into(backgroundView)
+      }
+    }
+  }
+
+  fun toggleExpanded() {
+    isExpanded = !isExpanded
+    expandedContent.visibility = if (isExpanded) View.VISIBLE else View.GONE
+    applyExpandedState()
+    requestLayout()
+  }
+
+  private fun applyExpandedState() {
+    lyricText.maxLines = if (isExpanded) 2 else 1
+    root.gravity = if (isExpanded) Gravity.CENTER_HORIZONTAL else Gravity.CENTER
+    val verticalPadding = if (isExpanded) dp(10) else dp(6)
+    setPadding(dp(14), verticalPadding, dp(14), verticalPadding)
+  }
+
+  fun preferredHeight(): Int {
+    return if (isExpanded) dp(186) else dp(48)
+  }
+
+  override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    val exactWidth = MeasureSpec.getSize(widthMeasureSpec)
+    val exactHeight = preferredHeight()
+    super.onMeasure(
+      MeasureSpec.makeMeasureSpec(exactWidth, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(exactHeight, MeasureSpec.EXACTLY)
+    )
+    setMeasuredDimension(exactWidth, exactHeight)
+  }
+
+  override fun dispatchDraw(canvas: Canvas) {
+    val radius = dp(18).toFloat()
+    clipRect.set(0f, 0f, width.toFloat(), height.toFloat())
+    clipPath.reset()
+    clipPath.addRoundRect(clipRect, radius, radius, Path.Direction.CW)
+    val saveCount = canvas.save()
+    canvas.clipPath(clipPath)
+    super.dispatchDraw(canvas)
+    canvas.restoreToCount(saveCount)
+  }
+
+  override fun draw(canvas: Canvas) {
+    val radius = dp(18).toFloat()
+    clipRect.set(0f, 0f, width.toFloat(), height.toFloat())
+    clipPath.reset()
+    clipPath.addRoundRect(clipRect, radius, radius, Path.Direction.CW)
+    val saveCount = canvas.save()
+    canvas.clipPath(clipPath)
+    super.draw(canvas)
+    canvas.restoreToCount(saveCount)
+  }
+
+  private fun controlButton(label: String, action: String): TextView {
+    return TextView(context).apply {
+      text = label
+      textSize = if (label == "x") 17f else 15f
+      typeface = android.graphics.Typeface.DEFAULT_BOLD
+      setTextColor(Color.rgb(20, 20, 20))
+      gravity = Gravity.CENTER
+      includeFontPadding = false
+      background = roundedDrawable(Color.argb(96, 255, 255, 255), dp(18))
+      setOnClickListener { onAction(action) }
+    }
+  }
+
+  private fun roundedDrawable(color: Int, radius: Int, strokeColor: Int = Color.argb(92, 255, 255, 255)): GradientDrawable {
+    return GradientDrawable().apply {
+      shape = GradientDrawable.RECTANGLE
+      cornerRadius = radius.toFloat()
+      setColor(color)
+      setStroke(dp(1), strokeColor)
+    }
+  }
+
+  private fun dp(value: Int): Int {
+    return (value * resources.displayMetrics.density).toInt()
+  }
+}
+
+private class RoundedImageView(
+  context: Context,
+  private val radiusProvider: () -> Float
+) : ImageView(context) {
+  private val clipPath = Path()
+  private val clipRect = RectF()
+
+  override fun draw(canvas: Canvas) {
+    clipRect.set(0f, 0f, width.toFloat(), height.toFloat())
+    clipPath.reset()
+    val radius = radiusProvider()
+    clipPath.addRoundRect(clipRect, radius, radius, Path.Direction.CW)
+    val saveCount = canvas.save()
+    canvas.clipPath(clipPath)
+    super.draw(canvas)
+    canvas.restoreToCount(saveCount)
+  }
+}
+
+
+private class DesktopMusicProgressView(context: Context) : View(context) {
+  private val trackPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.argb(82, 255, 255, 255)
+  }
+  private val fillPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.rgb(20, 20, 20)
+  }
+  private var progress = 0f
+
+  fun setProgress(nextProgress: Float) {
+    val boundedProgress = nextProgress.coerceIn(0f, 1f)
+    if (abs(progress - boundedProgress) < 0.001f) return
+    progress = boundedProgress
+    invalidate()
+  }
+
+  override fun onDraw(canvas: android.graphics.Canvas) {
+    super.onDraw(canvas)
+    val centerY = height / 2f
+    val barHeight = 4f * resources.displayMetrics.density
+    val radius = barHeight / 2f
+    canvas.drawRoundRect(0f, centerY - radius, width.toFloat(), centerY + radius, radius, radius, trackPaint)
+    canvas.drawRoundRect(0f, centerY - radius, width * progress, centerY + radius, radius, radius, fillPaint)
+  }
+}
+
+private class DesktopLyricTextView(context: Context) : TextView(context) {
+  private val fadeWidth = 18f * resources.displayMetrics.density
+  private var lyricProgress = 0f
+  private var displayedLyric = ""
+  private var progressAnimator: ValueAnimator? = null
+
+  fun setLyricText(nextText: String) {
+    if (displayedLyric == nextText) return
+    displayedLyric = nextText
+    progressAnimator?.cancel()
+    progressAnimator = null
+    lyricProgress = 0f
+    text = nextText
+    invalidate()
+  }
+
+  fun setLyricProgress(progress: Float) {
+    val nextProgress = progress.coerceIn(0f, 1f)
+    if (abs(lyricProgress - nextProgress) < 0.001f) return
+    progressAnimator?.cancel()
+    progressAnimator = ValueAnimator.ofFloat(lyricProgress, nextProgress).apply {
+      duration = PROGRESS_ANIMATION_MS
+      interpolator = android.view.animation.LinearInterpolator()
+      addUpdateListener { animator ->
+        lyricProgress = animator.animatedValue as Float
+        invalidate()
+      }
+      start()
+    }
+  }
+
+  override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+    super.onSizeChanged(width, height, oldWidth, oldHeight)
+    invalidate()
+  }
+
+  override fun onDraw(canvas: android.graphics.Canvas) {
+    paint.shader = null
+    paint.color = Color.WHITE
+    super.onDraw(canvas)
+
+    if (width <= 0 || lyricProgress <= 0f) return
+
+    val playedWidth = width * lyricProgress
+    val saveCount = canvas.save()
+    canvas.clipRect(0f, 0f, playedWidth, height.toFloat())
+    paint.shader = playedTextShader(playedWidth)
+    paint.color = PLAYED_TEXT_COLOR
+    super.onDraw(canvas)
+    paint.shader = null
+    canvas.restoreToCount(saveCount)
+  }
+
+  private fun playedTextShader(playedWidth: Float): LinearGradient? {
+    if (playedWidth >= width - 1f) return null
+    if (playedWidth <= fadeWidth) {
+      return LinearGradient(
+        0f,
+        0f,
+        playedWidth.coerceAtLeast(1f),
+        0f,
+        intArrayOf(PLAYED_TEXT_COLOR, Color.WHITE),
+        floatArrayOf(0f, 1f),
+        Shader.TileMode.CLAMP
+      )
+    }
+
+    return LinearGradient(
+      0f,
+      0f,
+      playedWidth,
+      0f,
+      intArrayOf(PLAYED_TEXT_COLOR, PLAYED_TEXT_COLOR, Color.WHITE),
+      floatArrayOf(0f, ((playedWidth - fadeWidth) / playedWidth).coerceIn(0f, 1f), 1f),
+      Shader.TileMode.CLAMP
+    )
+  }
+
+  companion object {
+    private val PLAYED_TEXT_COLOR = Color.rgb(0, 128, 245)
+    private const val PROGRESS_ANIMATION_MS = 180L
+  }
+}
+
 class FloatingBallForegroundService : Service() {
   override fun onBind(intent: Intent?) = null
 
@@ -991,7 +1552,7 @@ class FloatingBallForegroundService : Service() {
       val channel = NotificationChannel(
         CHANNEL_ID,
         "悬浮球",
-        NotificationManager.IMPORTANCE_LOW
+        NotificationManager.IMPORTANCE_DEFAULT
       ).apply {
         setShowBadge(false)
       }
@@ -1005,7 +1566,9 @@ class FloatingBallForegroundService : Service() {
       .setContentText("点开悬浮球可快速输入、截图和获取回复")
       .setOngoing(true)
       .setSilent(true)
-      .setPriority(NotificationCompat.PRIORITY_LOW)
+      .setCategory(NotificationCompat.CATEGORY_SERVICE)
+      .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+      .setPriority(NotificationCompat.PRIORITY_HIGH)
       .build()
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -1020,7 +1583,7 @@ class FloatingBallForegroundService : Service() {
   }
 
   companion object {
-    private const val CHANNEL_ID = "ysclaude-floating-ball"
+    private const val CHANNEL_ID = "ysclaude-floating-overlay-priority"
     private const val NOTIFICATION_ID = 7205
 
     fun start(context: Context) {

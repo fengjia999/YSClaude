@@ -20,8 +20,10 @@
       "permissions": [
         "android.permission.PACKAGE_USAGE_STATS",
         "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION",
         "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.READ_CALENDAR",
         "android.permission.WRITE_CALENDAR"
       ],
@@ -52,6 +54,12 @@
           "sounds": [
             "./assets/messagealert.mp3"
           ]
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "enableBackgroundPlayback": true
         }
       ],
       [

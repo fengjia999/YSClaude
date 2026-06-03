@@ -131,7 +131,7 @@ android {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
     sourceSets {
-        main.assets.srcDirs += ['../../assets/clawd']
+        main.assets.srcDirs += ['../../assets/clawd', '../../assets']
     }
 }
 

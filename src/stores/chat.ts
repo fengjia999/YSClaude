@@ -11,6 +11,7 @@ import { formatWebViewObservation } from '../services/toolModules/webView';
 import { formatCurrentTime, formatTimeMarker, TIME_GAP_THRESHOLD_MS } from '../utils/time';
 import { mergeRanges, subtractRange } from '../utils/ranges';
 import { buildStickerSystemInstruction } from '../utils/stickers';
+import { useMusicStore } from './music';
 import {
   WEB_CRUISE_NOTICE_TEXT,
   WEB_CRUISE_SYSTEM_PROMPT,
@@ -467,6 +468,11 @@ async function streamAssistantResponse(
 
   if (pendingWebCruise) {
     fullSystemPrompt += `\n\n---\n\n${WEB_CRUISE_SYSTEM_PROMPT}`;
+  }
+
+  const listeningContext = useMusicStore.getState().getListeningContextPrompt();
+  if (listeningContext) {
+    fullSystemPrompt += `\n\n---\n\n${listeningContext}`;
   }
 
   try {

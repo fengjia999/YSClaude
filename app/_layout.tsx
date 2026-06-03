@@ -19,6 +19,7 @@ import {
   showFloatingBall,
 } from '../src/services/floatingBall';
 import { handleFloatingBallToolAction } from '../src/services/floatingToolActions';
+import { startDesktopLyricSync, stopDesktopLyricSync } from '../src/services/desktopLyrics';
 
 
 let colors = lightColors;
@@ -63,6 +64,11 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
+    startDesktopLyricSync();
+    return () => stopDesktopLyricSync();
+  }, []);
+
+  useEffect(() => {
     // 设置通知 handler 和 Android 通知渠道
     initNotifications();
     // 开始追踪前后台状态
@@ -91,6 +97,14 @@ export default function RootLayout() {
         />
         <Stack.Screen
           name="settings"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="music"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="music-playlists"
           options={{ animation: 'slide_from_right', presentation: 'modal' }}
         />
         <Stack.Screen

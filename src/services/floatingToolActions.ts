@@ -1,12 +1,14 @@
 import { router } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
 import { useChatStore } from '../stores/chat';
+import { useMusicStore } from '../stores/music';
 import { useSettingsStore } from '../stores/settings';
 import { Conversation, Message } from '../types';
 import { createConversation, getAllConversations } from '../db/operations';
 import {
   captureFloatingBallScreen,
   FloatingBallToolAction,
+  hideDesktopLyric,
   openYSClaudeFromFloatingBall,
   showFloatingBallMessage,
 } from './floatingBall';
@@ -82,9 +84,21 @@ async function handleOpenApp(): Promise<void> {
   router.replace('/');
 }
 
+async function handleToggleMusic(): Promise<void> {
+  const music = useMusicStore.getState();
+  const enabled = !music.desktopLyricsEnabled;
+  if (enabled && !music.isOpen) {
+    music.openPlayer();
+  }
+  music.setDesktopLyricsEnabled(enabled);
+  if (!enabled) {
+    await hideDesktopLyric();
+  }
+}
+
 export async function handleFloatingBallToolAction(action: FloatingBallToolAction): Promise<void> {
   const actionName = typeof action === 'string' ? action : action.action;
-  if (actionBusy && actionName !== 'open_app') return;
+  if (actionBusy && actionName !== 'open_app' && actionName !== 'toggle_music') return;
   actionBusy = true;
   try {
     switch (actionName) {
@@ -96,6 +110,9 @@ export async function handleFloatingBallToolAction(action: FloatingBallToolActio
         break;
       case 'get_reply':
         await handleGetReply();
+        break;
+      case 'toggle_music':
+        await handleToggleMusic();
         break;
       case 'open_app':
         await handleOpenApp();
