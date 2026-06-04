@@ -588,6 +588,9 @@ export default function ChatScreen() {
           <Pressable style={styles.headerButton} onPress={showWebViewPanel}>
             <Image source={require('../assets/web.png')} style={[styles.webIcon, headerImageTintStyle]} resizeMode="contain" />
           </Pressable>
+          <Pressable style={styles.headerButton} onPress={() => router.push('/game')}>
+            <Image source={require('../assets/game.png')} style={[styles.gameIcon, headerImageTintStyle]} resizeMode="contain" />
+          </Pressable>
         </View>
         <View style={styles.headerRightGroup}>
           <Pressable style={styles.headerButton} onPress={() => router.push('/focus')}>
@@ -848,6 +851,10 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     height: 24,
   },
   webIcon: {
+    width: 24,
+    height: 24,
+  },
+  gameIcon: {
     width: 24,
     height: 24,
   },

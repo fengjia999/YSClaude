@@ -1,12 +1,21 @@
 import { fetch as expoFetch } from 'expo/fetch';
 import { ToolDefinition } from './tools';
 
+export interface ChatMessage {
+  role: string;
+  content: string | any[];
+  tool_calls?: any[];
+  tool_call_id?: string;
+}
+
 interface ChatRequest {
   baseUrl: string;
   apiKey: string;
   model: string;
-  messages: { role: string; content: string | any[]; tool_calls?: any[]; tool_call_id?: string }[];
+  messages: ChatMessage[];
   maxTokens?: number;
+  temperature?: number;
+  sessionId?: string;
 }
 
 interface ChatRequestWithTools extends ChatRequest {
@@ -146,7 +155,7 @@ function expandConcatenatedToolNames(
 export async function chatCompletion(
   request: ChatRequestWithTools
 ): Promise<ChatCompletionResponse> {
-  const { baseUrl, apiKey, model, messages, maxTokens, tools } = request;
+  const { baseUrl, apiKey, model, messages, maxTokens, temperature, tools, sessionId } = request;
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
 
@@ -158,8 +167,14 @@ export async function chatCompletion(
   if (maxTokens) {
     body.max_tokens = maxTokens;
   }
+  if (typeof temperature === 'number') {
+    body.temperature = temperature;
+  }
   if (tools && tools.length > 0) {
     body.tools = tools;
+  }
+  if (sessionId) {
+    body.session_id = sessionId;
   }
 
   const response = await fetch(url, {
@@ -184,7 +199,7 @@ export async function streamChatCompletion(
   onToken: (token: string) => void,
   signal?: AbortSignal
 ): Promise<StreamChatCompletionResult> {
-  const { baseUrl, apiKey, model, messages, maxTokens, tools } = request;
+  const { baseUrl, apiKey, model, messages, maxTokens, temperature, tools, sessionId } = request;
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
 
@@ -196,8 +211,14 @@ export async function streamChatCompletion(
   if (maxTokens) {
     body.max_tokens = maxTokens;
   }
+  if (typeof temperature === 'number') {
+    body.temperature = temperature;
+  }
   if (tools && tools.length > 0) {
     body.tools = tools;
+  }
+  if (sessionId) {
+    body.session_id = sessionId;
   }
 
   const response = await expoFetch(url, {
@@ -322,7 +343,7 @@ export async function streamChat(
   onToken: (token: string) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const { baseUrl, apiKey, model, messages, maxTokens } = request;
+  const { baseUrl, apiKey, model, messages, maxTokens, temperature, sessionId } = request;
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
 
@@ -333,6 +354,12 @@ export async function streamChat(
   };
   if (maxTokens) {
     body.max_tokens = maxTokens;
+  }
+  if (typeof temperature === 'number') {
+    body.temperature = temperature;
+  }
+  if (sessionId) {
+    body.session_id = sessionId;
   }
 
   const response = await expoFetch(url, {

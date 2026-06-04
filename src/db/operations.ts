@@ -145,6 +145,39 @@ export async function updateHiddenRanges(
   ]);
 }
 
+export async function getPendingResponseBoundaryMessageId(
+  conversationId: string
+): Promise<string | null | undefined> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ pending_response_boundary_message_id: string | null }>(
+    'SELECT pending_response_boundary_message_id FROM conversations WHERE id = ?',
+    [conversationId]
+  );
+  if (!row || row.pending_response_boundary_message_id === null) return undefined;
+  return row.pending_response_boundary_message_id || null;
+}
+
+export async function setPendingResponseBoundaryMessageId(
+  conversationId: string,
+  messageId: string | null
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    'UPDATE conversations SET pending_response_boundary_message_id = ? WHERE id = ?',
+    [messageId ?? '', conversationId]
+  );
+}
+
+export async function clearPendingResponseBoundaryMessageId(
+  conversationId: string
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    'UPDATE conversations SET pending_response_boundary_message_id = NULL WHERE id = ?',
+    [conversationId]
+  );
+}
+
 export async function insertMessage(conversationId: string, msg: Message): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(

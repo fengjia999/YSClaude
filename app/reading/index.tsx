@@ -34,6 +34,7 @@ import {
 } from '../../src/db/operations';
 import { parseReadingBookAsset, pickReadingBookDocument } from '../../src/services/readingImport';
 import { useSettingsStore } from '../../src/stores/settings';
+import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 
 
 let colors = lightColors;
@@ -612,6 +613,7 @@ function ReadingSummaryTab({ showToast }: { showToast: ToastFn }) {
 }
 
 function ReadingSettingsTab({ showToast }: { showToast: ToastFn }) {
+  const keyboardHeight = useKeyboardHeight();
   const { readingConfig, setReadingConfig, apiConfigs, activeConfigIndex } = useSettingsStore();
   const [baseUrl, setBaseUrl] = useState(readingConfig.baseUrl);
   const [apiKey, setApiKey] = useState(readingConfig.apiKey);
@@ -693,7 +695,11 @@ function ReadingSettingsTab({ showToast }: { showToast: ToastFn }) {
   }
 
   return (
-    <ScrollView style={styles.settingsContent} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      style={styles.settingsContent}
+      contentContainerStyle={{ paddingBottom: keyboardHeight + 28 }}
+      keyboardShouldPersistTaps="handled"
+    >
       <Text style={styles.sectionTitle}>共读 API</Text>
       <View style={styles.field}>
         <Text style={styles.label}>Base URL</Text>

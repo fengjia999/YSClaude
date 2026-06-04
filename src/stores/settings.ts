@@ -78,6 +78,10 @@ export interface PeriodConfig {
   sendToAI: boolean;
 }
 
+export interface PromptCacheConfig {
+  enabled: boolean;
+}
+
 interface SettingsState {
   _hydrated: boolean;
   apiConfigs: NamedAPIConfig[];
@@ -96,6 +100,7 @@ interface SettingsState {
   readingConfig: ReadingConfig;
   floatingBallConfig: FloatingBallConfig;
   periodConfig: PeriodConfig;
+  promptCacheConfig: PromptCacheConfig;
 
   setActiveConfig: (index: number) => void;
   saveAPIConfig: (config: NamedAPIConfig) => void;
@@ -114,6 +119,7 @@ interface SettingsState {
   setReadingConfig: (config: Partial<ReadingConfig>) => void;
   setFloatingBallConfig: (config: Partial<FloatingBallConfig>) => void;
   setPeriodConfig: (config: Partial<PeriodConfig>) => void;
+  setPromptCacheConfig: (config: Partial<PromptCacheConfig>) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -187,6 +193,9 @@ export const useSettingsStore = create<SettingsState>()(
       periodConfig: {
         sendToAI: false,
       },
+      promptCacheConfig: {
+        enabled: false,
+      },
 
       setActiveConfig: (index) => set({ activeConfigIndex: index }),
 
@@ -235,6 +244,8 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ floatingBallConfig: { ...state.floatingBallConfig, ...config } })),
       setPeriodConfig: (config) =>
         set((state) => ({ periodConfig: { ...state.periodConfig, ...config } })),
+      setPromptCacheConfig: (config) =>
+        set((state) => ({ promptCacheConfig: { ...(state.promptCacheConfig || { enabled: false }), ...config } })),
     }),
     {
       name: 'ysclaude-settings',
@@ -256,6 +267,7 @@ export const useSettingsStore = create<SettingsState>()(
         readingConfig: state.readingConfig,
         floatingBallConfig: state.floatingBallConfig,
         periodConfig: state.periodConfig,
+        promptCacheConfig: state.promptCacheConfig,
       }),
       onRehydrateStorage: () => () => {
         useSettingsStore.setState({ _hydrated: true });

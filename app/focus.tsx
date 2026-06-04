@@ -19,6 +19,7 @@ import { FocusSession, FocusTask, FocusTimerMode } from '../src/types';
 import { lightColors, useThemeColors, type ThemeColors } from '../src/theme/colors';
 import { fonts } from '../src/theme/fonts';
 import { focusElapsedMs, localDateKeyForFocus, useFocusStore } from '../src/stores/focus';
+import { useKeyboardHeight } from '../src/hooks/useKeyboardHeight';
 
 let colors = lightColors;
 
@@ -753,6 +754,7 @@ function CreateTaskModal({
   onClose: () => void;
   onCreate: (input: { title: string; timerMode: FocusTimerMode; durationMinutes: number; targetCount?: number }) => Promise<void>;
 }) {
+  const keyboardHeight = useKeyboardHeight();
   const [title, setTitle] = useState('');
   const [timerMode, setTimerMode] = useState<FocusTimerMode>('countdown');
   const [durationText, setDurationText] = useState('25');
@@ -799,7 +801,7 @@ function CreateTaskModal({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.modalOverlay} onPress={onClose}>
-        <View style={styles.modalPanel} onStartShouldSetResponder={() => true}>
+        <View style={[styles.modalPanel, { marginBottom: keyboardHeight }]} onStartShouldSetResponder={() => true}>
           <Text style={styles.modalTitle}>新建任务</Text>
           <TextInput
             style={styles.input}
@@ -876,6 +878,7 @@ function TaskEditorModal({
   onDelete: (task: FocusTask) => Promise<void>;
   onManualComplete: (task: FocusTask, minutes: number) => Promise<void>;
 }) {
+  const keyboardHeight = useKeyboardHeight();
   const [title, setTitle] = useState('');
   const [timerMode, setTimerMode] = useState<FocusTimerMode>('countdown');
   const [durationText, setDurationText] = useState('25');
@@ -954,7 +957,7 @@ function TaskEditorModal({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.modalOverlay} onPress={onClose}>
-        <View style={styles.modalPanel} onStartShouldSetResponder={() => true}>
+        <View style={[styles.modalPanel, { marginBottom: keyboardHeight }]} onStartShouldSetResponder={() => true}>
           <Text style={styles.modalTitle}>编辑任务</Text>
           <TextInput
             style={styles.input}
@@ -1051,6 +1054,7 @@ function DateJumpModal({
   onClose: () => void;
   onJump: (dateKey: string) => Promise<void>;
 }) {
+  const keyboardHeight = useKeyboardHeight();
   const [text, setText] = useState(selectedDateKey);
   const busyRef = useRef(false);
 
@@ -1076,7 +1080,7 @@ function DateJumpModal({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.modalOverlay} onPress={onClose}>
-        <View style={styles.modalPanel} onStartShouldSetResponder={() => true}>
+        <View style={[styles.modalPanel, { marginBottom: keyboardHeight }]} onStartShouldSetResponder={() => true}>
           <Text style={styles.modalTitle}>跳转日期</Text>
           <TextInput
             style={styles.input}

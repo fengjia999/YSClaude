@@ -44,7 +44,8 @@ async function initTables(database: SQLite.SQLiteDatabase) {
       system_prompt TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      pending_response_boundary_message_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -388,6 +389,16 @@ async function runMigrations(database: SQLite.SQLiteDatabase) {
 
       PRAGMA user_version = 11;
     `);
+  }
+
+  // v12: persist the pending response boundary per conversation.
+  if (!(await hasColumn(database, 'conversations', 'pending_response_boundary_message_id'))) {
+    await database.execAsync(
+      `ALTER TABLE conversations ADD COLUMN pending_response_boundary_message_id TEXT;`
+    );
+  }
+  if (version < 12) {
+    await database.execAsync('PRAGMA user_version = 12;');
   }
 }
 

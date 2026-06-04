@@ -2,13 +2,13 @@
 import { Message, Conversation, HiddenRange, ToolInvocation } from '../types';
 import { randomUUID } from 'expo-crypto';
 import { File } from 'expo-file-system';
-import { streamChat, streamChatCompletion } from '../services/api';
+import { ChatMessage, streamChat, streamChatCompletion } from '../services/api';
 import { notifyReplyReady } from '../services/notifications';
 import { useSettingsStore } from './settings';
 import { getToolDefinitions, executeTool } from '../services/tools';
 import { observeActiveWebView } from '../services/webviewController';
 import { formatWebViewObservation } from '../services/toolModules/webView';
-import { formatCurrentTime, formatTimeMarker, TIME_GAP_THRESHOLD_MS } from '../utils/time';
+import { formatCurrentTime, formatFullTime, formatTimeMarker, TIME_GAP_THRESHOLD_MS } from '../utils/time';
 import { mergeRanges, subtractRange } from '../utils/ranges';
 import { buildStickerSystemInstruction } from '../utils/stickers';
 import { useMusicStore } from './music';
@@ -33,6 +33,9 @@ import {
   getConversationMessageCount,
   getHiddenRanges,
   updateHiddenRanges,
+  getPendingResponseBoundaryMessageId,
+  setPendingResponseBoundaryMessageId,
+  clearPendingResponseBoundaryMessageId,
   getFavoriteDiaries,
   getAllPeriodRecords,
   getAllConversations,
@@ -186,6 +189,8 @@ interface AttachedWebViewContext {
   apiContent: string;
 }
 
+const PROMPT_CACHE_CONTROL = { type: 'ephemeral' };
+
 function contentContainsHttpUrl(content: string | any[]): boolean {
   if (typeof content === 'string') {
     return HTTP_URL_RE.test(content);
@@ -202,6 +207,101 @@ function contentContainsHttpUrl(content: string | any[]): boolean {
 
 function messagesContainHttpUrl(messages: { role: string; content: string | any[] }[]): boolean {
   return messages.some((message) => contentContainsHttpUrl(message.content));
+}
+
+function cloneContent(content: string | any[]): string | any[] {
+  if (!Array.isArray(content)) return content;
+  return content.map((part) =>
+    part && typeof part === 'object' ? { ...part } : part
+  );
+}
+
+function isTextOnlyContent(content: any[]): boolean {
+  return content.every((part) =>
+    part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string'
+  );
+}
+
+function markPromptCacheBreakpoint(messages: ChatMessage[]): ChatMessage[] {
+  const next = messages.map((message) => ({
+    ...message,
+    content: cloneContent(message.content),
+  }));
+
+  for (let i = next.length - 1; i >= 0; i--) {
+    const content = next[i].content;
+    if (typeof content === 'string' && content.trim()) {
+      next[i] = {
+        ...next[i],
+        content: [
+          {
+            type: 'text',
+            text: content,
+            cache_control: PROMPT_CACHE_CONTROL,
+          },
+        ],
+      };
+      return next;
+    }
+
+    if (Array.isArray(content) && isTextOnlyContent(content)) {
+      const textIndex = [...content]
+        .reverse()
+        .findIndex((part) => typeof part.text === 'string' && part.text.trim());
+      if (textIndex < 0) continue;
+
+      const targetIndex = content.length - 1 - textIndex;
+      const markedContent = content.map((part, index) =>
+        index === targetIndex
+          ? { ...part, cache_control: PROMPT_CACHE_CONTROL }
+          : part
+      );
+      next[i] = { ...next[i], content: markedContent };
+      return next;
+    }
+  }
+
+  return next;
+}
+
+function buildRequestMessages(
+  systemPrompt: string,
+  historyMessages: ChatMessage[],
+  suffixMessages: ChatMessage[],
+  promptCacheEnabled: boolean
+): ChatMessage[] {
+  const cacheablePrefix = [
+    { role: 'system', content: systemPrompt },
+    ...historyMessages,
+  ];
+  const prefix = promptCacheEnabled
+    ? markPromptCacheBreakpoint(cacheablePrefix)
+    : cacheablePrefix;
+
+  return [
+    ...prefix,
+    ...suffixMessages,
+  ];
+}
+
+function prependRuntimeContext(message: ChatMessage, runtimeContext: string): ChatMessage {
+  if (!runtimeContext.trim()) return message;
+
+  const header = `${runtimeContext}\n\n---\n\n用户最新输入：\n`;
+  if (typeof message.content === 'string') {
+    return {
+      ...message,
+      content: `${header}${message.content}`,
+    };
+  }
+
+  return {
+    ...message,
+    content: [
+      { type: 'text', text: header },
+      ...message.content,
+    ],
+  };
 }
 
 function truncateInlineText(value: string, maxLength: number): string {
@@ -253,21 +353,20 @@ function isAbortError(err: any): boolean {
  */
 async function runToolLoop(
   config: { baseUrl: string; apiKey: string; model: string },
-  systemPrompt: string,
-  apiMessages: { role: string; content: string | any[] }[],
+  requestMessages: ChatMessage[],
   maxTokens: number | undefined,
   onToken: (token: string) => void,
   // 每发生一次工具调用就回调一次，用于实时把记录推到 UI
   onToolInvocation?: (inv: ToolInvocation) => void,
   signal?: AbortSignal,
-  options?: { webCruiseEnabled?: boolean }
+  options?: { webCruiseEnabled?: boolean; sessionId?: string }
 ): Promise<boolean> {
   const settings = useSettingsStore.getState();
   const webCruiseEnabled = !!options?.webCruiseEnabled;
   const memoryEnabled = settings.memoryVaultConfig.enabled && !!settings.memoryVaultConfig.baseUrl;
   const webEnabled = settings.webSearchConfig.enabled && !!settings.webSearchConfig.tavilyApiKey;
   const webPageReaderEnabled =
-    !!settings.webPageReaderConfig?.enabled && messagesContainHttpUrl(apiMessages);
+    !!settings.webPageReaderConfig?.enabled && messagesContainHttpUrl(requestMessages);
   const webInteractionEnabled =
     webCruiseEnabled ||
     !!settings.webInteractionConfig?.enabled;
@@ -292,11 +391,10 @@ async function runToolLoop(
     webCruiseEnabled ? 10 : 0
   );
 
-  // 构建对话消息（单个 system 消息 + 对话历史）
-  const messages: any[] = [
-    { role: 'system', content: systemPrompt },
-    ...apiMessages,
-  ];
+  const messages: any[] = requestMessages.map((message) => ({
+    ...message,
+    content: cloneContent(message.content),
+  }));
 
   let toolCallCount = 0;
 
@@ -308,6 +406,7 @@ async function runToolLoop(
       messages,
       maxTokens,
       tools,
+      sessionId: options?.sessionId,
     }, onToken, signal);
 
     const toolCalls = message.tool_calls;
@@ -435,6 +534,13 @@ async function streamAssistantResponse(
       );
     });
 
+  const boundaryMessageId = await getPendingResponseBoundaryMessageId(conversationId);
+  const timestampMessageIndex = boundaryMessageId
+    ? filtered.findIndex((message) => message.id === boundaryMessageId)
+    : -1;
+  const previousMessageTime =
+    timestampMessageIndex >= 0 ? formatFullTime(filtered[timestampMessageIndex].createdAt) : null;
+
   // 相邻消息间隔超过阈值时，在该消息 content 前插入一行独立时间标记。
   // 第一条消息始终带标记，作为对话起点的时间锚点。
   const apiMessagesPromises = filtered.map(async (m, index) => {
@@ -444,8 +550,11 @@ async function streamAssistantResponse(
     if (settings.stripThinking) {
       msgContent = msgContent.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
     }
-    const textContent = needMarker
-      ? `[时间 ${formatTimeMarker(m.createdAt)}]\n${msgContent}`
+    const prefixLines = [
+      needMarker ? `[时间 ${formatTimeMarker(m.createdAt)}]` : null,
+    ].filter(Boolean);
+    const textContent = prefixLines.length > 0
+      ? `${prefixLines.join('\n')}\n${msgContent}`
       : msgContent;
 
     if (m.imageUri) {
@@ -458,29 +567,30 @@ async function streamAssistantResponse(
   });
 
   const apiMessages = await Promise.all(apiMessagesPromises);
-  if (attachedWebViewContext) {
-    apiMessages.push({
-      role: 'user',
-      content: attachedWebViewContext.apiContent,
-    });
-  }
+  const latestUserMessage = apiMessages[apiMessages.length - 1]?.role === 'user'
+    ? apiMessages[apiMessages.length - 1]
+    : null;
+  const historyApiMessages = latestUserMessage
+    ? apiMessages.slice(0, -1)
+    : apiMessages;
 
-  // 构建完整的 system prompt：时间 + 用户设置的提示词 + 收藏日记
-  // 全部合并为单个 system 消息，避免部分 API 中转不支持多个 system 消息的问题。
-  let fullSystemPrompt = `当前时间：${formatCurrentTime()}\n\n${settings.systemPrompt}\n\n${buildStickerSystemInstruction()}`;
-
+  const runtimeSections: string[] = [];
   if (pendingWebCruise) {
-    fullSystemPrompt += `\n\n---\n\n${WEB_CRUISE_SYSTEM_PROMPT}`;
-  }
-
-  const focusEventContext = buildFocusEventSystemPrompt(historyMessages);
-  if (focusEventContext) {
-    fullSystemPrompt += `\n\n---\n\n${focusEventContext}`;
+    runtimeSections.push(WEB_CRUISE_SYSTEM_PROMPT);
   }
 
   const listeningContext = useMusicStore.getState().getListeningContextPrompt();
   if (listeningContext) {
-    fullSystemPrompt += `\n\n---\n\n${listeningContext}`;
+    runtimeSections.push(listeningContext);
+  }
+
+  if (attachedWebViewContext) {
+    runtimeSections.push(attachedWebViewContext.apiContent);
+  }
+
+  const focusEventContext = buildFocusEventSystemPrompt(historyMessages);
+  if (focusEventContext) {
+    runtimeSections.push(focusEventContext);
   }
 
   if (settings.periodConfig?.sendToAI) {
@@ -488,12 +598,30 @@ async function streamAssistantResponse(
       const periodRecords = await getAllPeriodRecords();
       const periodContext = buildPeriodSystemPrompt(periodRecords);
       if (periodContext) {
-        fullSystemPrompt += `\n\n---\n\n${periodContext}`;
+        runtimeSections.push(periodContext);
       }
     } catch (err) {
       console.warn('[Chat] 读取生理期记录失败:', err);
     }
   }
+
+  if (previousMessageTime) {
+    runtimeSections.push(`上一条消息时间：${previousMessageTime}`);
+  }
+  runtimeSections.push(`当前时间：${formatCurrentTime()}`);
+
+  const runtimeContext = [
+    '以下是本轮运行时上下文和应用附加信息：',
+    ...runtimeSections,
+  ].join('\n\n---\n\n');
+
+  const suffixMessages: ChatMessage[] = latestUserMessage
+    ? [prependRuntimeContext(latestUserMessage, runtimeContext)]
+    : [{ role: 'user', content: runtimeContext }];
+
+  const stableSystemSections = [
+    settings.systemPrompt.trim() || 'You are a helpful assistant.',
+  ];
 
   try {
     const favoriteDiaries = await getFavoriteDiaries();
@@ -501,11 +629,16 @@ async function streamAssistantResponse(
       const memoryContent = favoriteDiaries
         .map((d) => `${d.title}\n${d.content}`)
         .join('\n\n---\n\n');
-      fullSystemPrompt += `\n\n---\n\n以下是你的近期日记：\n\n${memoryContent}`;
+      stableSystemSections.push(`以下是你的近期日记：\n\n${memoryContent}`);
     }
   } catch (err) {
     console.warn('[Chat] 读取收藏日记失败:', err);
   }
+
+  stableSystemSections.push(buildStickerSystemInstruction());
+  const fullSystemPrompt = stableSystemSections.join('\n\n---\n\n');
+  const promptCacheEnabled = !!settings.promptCacheConfig?.enabled;
+  const sessionId = promptCacheEnabled ? conversationId : undefined;
 
   abortController = new AbortController();
 
@@ -582,23 +715,24 @@ async function streamAssistantResponse(
     !message.content.trim() &&
     (!message.toolInvocations || message.toolInvocations.length === 0);
 
-  // 流式路径要发送的完整消息：单个 system 消息（含身份设定 + 收藏日记）+ 对话历史。
-  const outgoingMessages = [
-    { role: 'system', content: fullSystemPrompt },
-    ...apiMessages,
-  ];
+  // 流式路径要发送的完整消息：稳定 system + 历史对话用于缓存，运行时上下文与最新输入放在后缀。
+  const outgoingMessages = buildRequestMessages(
+    fullSystemPrompt,
+    historyApiMessages,
+    suffixMessages,
+    promptCacheEnabled
+  );
 
   try {
     let requestStarted = false;
     const handledByToolLoop = await runToolLoop(
       { baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model },
-      fullSystemPrompt,
-      apiMessages,
+      outgoingMessages,
       settings.maxOutputTokens || undefined,
       onToken,
       appendToolInvocation,
       abortController.signal,
-      { webCruiseEnabled: !!pendingWebCruise }
+      { webCruiseEnabled: !!pendingWebCruise, sessionId }
     );
     requestStarted = true;
 
@@ -610,6 +744,7 @@ async function streamAssistantResponse(
           model: config.model,
           messages: outgoingMessages,
           maxTokens: settings.maxOutputTokens || undefined,
+          sessionId,
         },
         onToken,
         abortController.signal
@@ -698,6 +833,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       };
       await createConversation(conv);
       set({ conversationId, hasOlderMessages: false, messageFloorOffset: 0 });
+    }
+
+    if ((await getPendingResponseBoundaryMessageId(conversationId)) === undefined) {
+      const existingMessages = await getMessagesByConversation(conversationId);
+      const boundaryMessage = [...existingMessages]
+        .reverse()
+        .find((message) => message.role === 'user' || message.role === 'assistant');
+      await setPendingResponseBoundaryMessageId(conversationId, boundaryMessage?.id ?? null);
     }
 
     const userMessage: Message = {
@@ -798,7 +941,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (last?.role === 'assistant' && last.content === '') return;
 
     set({ isStreaming: true, error: null });
-    await streamAssistantResponse(get, set, conversationId);
+    try {
+      await streamAssistantResponse(get, set, conversationId);
+    } finally {
+      await clearPendingResponseBoundaryMessageId(conversationId);
+    }
   },
 
   markMessagesForAutoHideAfterResponse: (ids: string[]) => {

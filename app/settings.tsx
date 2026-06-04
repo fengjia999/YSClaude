@@ -28,17 +28,20 @@ import {
   openFloatingBallPermissionSettings,
   showFloatingBall,
 } from '../src/services/floatingBall';
+import { useKeyboardHeight } from '../src/hooks/useKeyboardHeight';
 
 
 let colors = lightColors;
 const TABS = ['API 配置', '对话设置', 'TTS 配置', 'Tool 设置', '日记', '悬浮球'] as const;
 type ToastFn = (message: string) => void;
+type SettingsTabProps = { showToast: ToastFn; keyboardBottomInset: number };
 
 export default function SettingsScreen() {
   colors = useThemeColors();
   styles = useMemo(() => createStyles(colors), [colors]);
 
   const router = useRouter();
+  const keyboardHeight = useKeyboardHeight();
   const [activeTab, setActiveTab] = useState(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -63,7 +66,7 @@ export default function SettingsScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingBottom: keyboardHeight }]}>
       <View style={styles.header}>
         <Pressable style={styles.backButton} onPress={() => router.back()}>
           <Text style={styles.backIcon}>←</Text>
@@ -87,12 +90,12 @@ export default function SettingsScreen() {
         ))}
       </ScrollView>
 
-      {activeTab === 0 && <APIConfigTab showToast={showToast} />}
-      {activeTab === 1 && <ChatSettingsTab showToast={showToast} />}
-      {activeTab === 2 && <TTSConfigTab showToast={showToast} />}
-      {activeTab === 3 && <ToolConfigTab showToast={showToast} />}
-      {activeTab === 4 && <DiaryTab showToast={showToast} />}
-      {activeTab === 5 && <FloatingBallTab showToast={showToast} />}
+      {activeTab === 0 && <APIConfigTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 1 && <ChatSettingsTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 2 && <TTSConfigTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 3 && <ToolConfigTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 4 && <DiaryTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 5 && <FloatingBallTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
 
       {toastMessage && (
         <View pointerEvents="none" style={styles.toast}>
@@ -105,7 +108,7 @@ export default function SettingsScreen() {
 
 /* ==================== 悬浮球 Tab ==================== */
 
-function FloatingBallTab({ showToast }: { showToast: ToastFn }) {
+function FloatingBallTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const { floatingBallConfig, setFloatingBallConfig, ttsConfig } = useSettingsStore();
   const [busy, setBusy] = useState(false);
 
@@ -156,7 +159,11 @@ function FloatingBallTab({ showToast }: { showToast: ToastFn }) {
   }
 
   return (
-    <ScrollView style={styles.content}>
+    <ScrollView
+      style={styles.content}
+      contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }}
+      keyboardShouldPersistTaps="handled"
+    >
       <View style={styles.switchRow}>
         <Text style={styles.label}>开启悬浮球</Text>
         <Switch
@@ -186,7 +193,7 @@ function FloatingBallTab({ showToast }: { showToast: ToastFn }) {
 
 /* ==================== API 配置 Tab ==================== */
 
-function APIConfigTab({ showToast }: { showToast: ToastFn }) {
+function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const { _hydrated, apiConfigs, activeConfigIndex, saveAPIConfig, removeAPIConfig, setActiveConfig } = useSettingsStore();
 
   const [name, setName] = useState('');
@@ -321,7 +328,11 @@ function APIConfigTab({ showToast }: { showToast: ToastFn }) {
   }
 
   return (
-    <ScrollView style={styles.content}>
+    <ScrollView
+      style={styles.content}
+      contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }}
+      keyboardShouldPersistTaps="handled"
+    >
       {apiConfigs.length > 0 && (
         <>
           <Text style={styles.sectionTitle}>已保存配置</Text>
@@ -408,16 +419,18 @@ function APIConfigTab({ showToast }: { showToast: ToastFn }) {
 
 /* ==================== 对话设置 Tab ==================== */
 
-function ChatSettingsTab({ showToast }: { showToast: ToastFn }) {
+function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const {
     maxOutputTokens,
     systemPrompt,
     stripThinking,
     periodConfig,
+    promptCacheConfig,
     setSystemPrompt,
     setMaxOutputTokens,
     setStripThinking,
     setPeriodConfig,
+    setPromptCacheConfig,
   } = useSettingsStore();
   // 隐藏楼层现在按对话独立存储，数据源改为 chat store
   const {
@@ -536,7 +549,11 @@ function ChatSettingsTab({ showToast }: { showToast: ToastFn }) {
   const loadedFloorTo = messageFloorOffset + messageCount;
 
   return (
-    <ScrollView style={styles.content}>
+    <ScrollView
+      style={styles.content}
+      contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }}
+      keyboardShouldPersistTaps="handled"
+    >
       {/* System Prompt */}
       <Text style={styles.sectionTitle}>System Prompt</Text>
       <Text style={styles.hint}>此内容会放在所有消息最前面发送给 AI</Text>
@@ -670,6 +687,20 @@ function ChatSettingsTab({ showToast }: { showToast: ToastFn }) {
         />
       </View>
 
+      <Text style={styles.sectionTitle}>Prompt 缓存</Text>
+      <Text style={styles.hint}>开启后，请求会透传 session_id，并在稳定的 system prompt 与历史对话末尾添加 cache_control。仅在你的 API 中转支持该字段时开启。</Text>
+      <View style={styles.switchRow}>
+        <Text style={styles.label}>启用 cache_control</Text>
+        <Switch
+          value={!!promptCacheConfig?.enabled}
+          onValueChange={(value) => {
+            setPromptCacheConfig({ enabled: value });
+            showToast(value ? 'Prompt 缓存已开启' : 'Prompt 缓存已关闭');
+          }}
+          trackColor={{ true: colors.primary }}
+        />
+      </View>
+
       <Text style={styles.sectionTitle}>生理信息</Text>
       <Text style={styles.hint}>开启后，仅在预计生理期前两天或经期内，把本地记录推算出的简短提醒附带给 AI。默认关闭。</Text>
       <View style={styles.switchRow}>
@@ -691,7 +722,7 @@ function ChatSettingsTab({ showToast }: { showToast: ToastFn }) {
 
 const TTS_MODELS = ['speech-02-hd', 'speech-02-turbo', 'speech-2.8-hd'];
 
-function TTSConfigTab({ showToast }: { showToast: ToastFn }) {
+function TTSConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const { ttsConfig, setTTSConfig } = useSettingsStore();
   const [groupId, setGroupId] = useState(ttsConfig.groupId);
   const [apiKey, setApiKey] = useState(ttsConfig.apiKey);
@@ -744,7 +775,11 @@ function TTSConfigTab({ showToast }: { showToast: ToastFn }) {
   }
 
   return (
-    <ScrollView style={styles.content}>
+    <ScrollView
+      style={styles.content}
+      contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }}
+      keyboardShouldPersistTaps="handled"
+    >
       <Text style={styles.sectionTitle}>MiniMax TTS</Text>
       <Text style={styles.hint}>使用 MiniMax 语音合成服务，需要 Group ID 和 API Key</Text>
 
@@ -815,7 +850,7 @@ function TTSConfigTab({ showToast }: { showToast: ToastFn }) {
 
 /* ==================== Tool 设置 Tab ==================== */
 
-function ToolConfigTab({ showToast }: { showToast: ToastFn }) {
+function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const {
     memoryVaultConfig,
     webSearchConfig,
@@ -1014,7 +1049,11 @@ function ToolConfigTab({ showToast }: { showToast: ToastFn }) {
   ];
 
   return (
-    <ScrollView style={styles.content}>
+    <ScrollView
+      style={styles.content}
+      contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }}
+      keyboardShouldPersistTaps="handled"
+    >
       {/* ===== 记忆库 Memory Vault ===== */}
       <Text style={styles.sectionTitle}>记忆库 Memory Vault</Text>
       <Text style={styles.hint}>AI 可自主调用记忆库进行语义搜索和日记查询</Text>
@@ -1251,7 +1290,7 @@ function ToolConfigTab({ showToast }: { showToast: ToastFn }) {
 
 /* ==================== 日记 Tab ==================== */
 
-function DiaryTab({ showToast }: { showToast: ToastFn }) {
+function DiaryTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const { diaries, loadDiaries, addDiary, editDiary, toggleFavorite, removeDiary } = useDiaryStore();
   // 隐藏楼层随对话独立，与待总结的消息同源，统一从 chat store 取
   const { messages, hiddenRanges } = useChatStore();
@@ -1463,7 +1502,11 @@ function DiaryTab({ showToast }: { showToast: ToastFn }) {
   }
 
   return (
-    <ScrollView style={styles.content}>
+    <ScrollView
+      style={styles.content}
+      contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }}
+      keyboardShouldPersistTaps="handled"
+    >
       {/* AI 日记总结 */}
       <Text style={styles.sectionTitle}>AI 日记总结</Text>
       <Text style={styles.hint}>选择消息范围，让 AI 以第一人称流水账总结为日记（自动排除已隐藏消息，留空则全部）</Text>
