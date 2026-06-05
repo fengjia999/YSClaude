@@ -1,265 +1,266 @@
 # YSClaude
 
+YSClaude 是一个个人向的移动端 AI 客户端，基于 React Native + Expo 构建。主体验是 OpenAI 兼容对话，同时集成了工具调用、网页面板、AI 共读、日记、音乐/AI 电台、番茄专注和多角色副本等模块。
+
+当前项目使用 Expo SDK 56。Expo 56 的版本化文档见 <https://docs.expo.dev/versions/v56.0.0/>；该版本对应 React Native 0.85、React 19.2.3，最低 Node.js 版本为 22.13.x。
+
 ## 技术栈
 
-| 层面 | 选型 |
-|------|------|
-| 框架 | React Native + Expo (SDK 56) |
+| 领域 | 当前选型 |
+| --- | --- |
+| App 框架 | Expo SDK 56 + React Native 0.85.3 |
+| React | React 19.2.3 / React DOM 19.2.3 |
 | 路由 | expo-router |
-| 状态管理 | Zustand (persist) |
-| 本地存储 | expo-sqlite |
-| API 格式 | OpenAI 兼容 (`/v1/chat/completions`) |
+| 状态管理 | Zustand + zustand persist |
+| 本地存储 | expo-sqlite，自定义 KV storage 适配 |
+| 网络模型接口 | OpenAI 兼容 `/v1/chat/completions` 与 `/v1/models` |
 | Markdown | @ronradtke/react-native-markdown-display |
-| TTS | MiniMax T2A (expo-audio + expo-file-system) |
+| 音频 | expo-audio |
 | WebView | react-native-webview |
-| 文件导入 | Android ACTION_GET_CONTENT 来源选择器 / expo-file-system |
-| EPUB 解析 | fflate / fast-xml-parser |
-| 设备能力 | expo-device / expo-battery / expo-calendar |
-| 打包 | EAS Build → APK |
+| 文件与图片 | expo-file-system、expo-image-picker、Android 文件来源选择器 |
+| 电子书解析 | fflate、fast-xml-parser |
+| 系统能力 | expo-device、expo-battery、expo-calendar、expo-notifications |
+| 图标/图形 | lucide-react-native、react-native-svg |
+| 构建 | EAS Build，可产出 Android APK |
 
-## 功能
+## 当前功能
 
-### 核心（已完成）
-- 文本对话（OpenAI 兼容格式）
-- 流式输出（SSE 逐 token 渲染）
-- Markdown 渲染（代码块深色高亮，长表格在气泡内横向滚动）
-- 对话历史管理（SQLite 持久化、恢复、删除、重命名）
-- 多 API 配置管理（命名保存、同名覆盖、拉取模型列表、测试连接）
-- 多模型随时切换
-- TTS 语音播放（MiniMax 语音合成，支持自定义 Voice ID）
-- System Prompt 自定义（自动在最前注入当前时间）
-- 空输入触发回复：输入框为空时也可点击发送键直接请求 AI 回复
-- 消息隐藏（节省 token）
-  - 按对话独立保存，切换对话自动加载各自的隐藏范围
-  - 重叠或相邻范围自动合并（如 1-6 与 3-7 合并为 1-7）
-  - 填写起止楼层后实时预览该范围的首尾两条消息
-  - 已隐藏楼层在聊天界面降低透明度并标注「已隐藏」
-- AI 输出长度限制
-- 时间戳分隔（相邻消息间隔 ≥ 30 分钟时，聊天页插入居中小字时间，并同步告知 AI）
-- 图片消息 + AI 识图
-  - 点击输入栏左侧加号从相册选择图片，发送前可在输入框内预览/取消
-  - 图片以无气泡形式直接展示在对话内（圆角缩略图）
-  - 自动转 base64 data URL，以 OpenAI 视觉格式（`image_url` 多段内容）发送给模型，让 AI 识别图片内容
-  - 图片随消息持久化（SQLite 存储本地 URI），重开历史对话仍可见
-- 聊天页 UI
-  - 悬浮输入框：仅输入框气泡悬浮于聊天内容之上，两侧与下方留透明空隙，滚动时可透出底层聊天记录
-  - 工具调用展示：AI 回复中实际发生的工具调用以「时钟图标 + 动作描述 + 展开箭头」单行展示于正文上方，每次调用一行，随消息持久化（重开历史对话仍可见）
-  - 工具调用详情：点击工具调用行可展开参数与执行结果，便于调试工具链行为
-  - 思维链折叠：AI 输出中 `<thinking>...</thinking>` 包裹的内容拆分为可点击展开的「Thought process」胶囊，正文仅渲染剩余部分
-- 日记系统
-  - AI 日记总结：选择消息范围，AI 以第一人称流水账形式自动总结为日记
-  - 手动添加：在日记 tab 点「+ 新建」可手动撰写日记（标题留空自动生成）
-  - 手动编辑：支持创建、编辑、删除日记
-  - 收藏功能：收藏的日记会作为近期日记注入 AI 上下文，让 AI 了解你的生活（仅注入标题+正文，不含时间戳，日期由用户自行写入标题）
-  - AI 日记查询：AI 可通过 `query_diary` 工具按日期查询日记内容
-  - 上传云端：每条日记可单独上传到 Memory Vault 云端记忆库（上传时确认日期，标题并入正文）
-  - SQLite 持久化存储
-- AI 共读
-  - 顶栏 reading 图标进入共读书架，支持导入 `txt` / `epub`
-  - Android 导入使用系统级 `ACTION_GET_CONTENT` 来源选择器，可从系统文件管理器、MT 管理器、QQ 等已注册文件提供服务的应用选择文件
-  - EPUB 会解析书名、作者、章节正文，并尽量提取封面；TXT 会按文件名生成书名
-  - 书籍、阅读位置和每本书的共读消息均通过 SQLite 持久化
-  - 长按书籍可编辑书名、作者和封面；删除书籍会同步删除该书共读记录
-  - 阅读页提供独立浮动共读面板，可拖动、右下角缩放，也可折叠为 reading 图标悬浮球
-  - 回车键只发送用户消息，点击 `AI` 按钮单独请求回复；长按共读消息可编辑或删除
-  - 请求回复时会附带 system prompt、书名、作者、当前位置前方原文片段、最近共读对话和用户新输入
-  - 共读可使用独立 OpenAI 兼容 API 配置，也可一键复制普通对话 API 配置
+### AI 对话
 
-### 扩展
-- MCP Tool 调用
-  - Memory Vault 记忆库语义检索
-  - 日记查询（按日期）
-  - 日记上传：将本地日记单条上传到云端记忆库（管理接口，需管理员 Token）
-  - Tavily 联网搜索
-  - 网页读取：用户发送链接后，AI 可调用 `read_web_page` 抓取标题、正文和摘要；可选配置 JS 渲染读取服务兜底
-  - 网页交互：AI 可在 App 内打开可见 WebView 面板，并通过 `webview_open` / `webview_observe` / `webview_click_element` / `webview_click_selector` / `webview_tap` / `webview_wait` 进行简单网页操作
-  - 设备原生 Tools：可选开启 `read_device_info`、`read_battery_status`、`read_app_usage_stats`、`calendar_list_events`、`calendar_create_event`、`calendar_update_event`、`calendar_delete_event`
-  - 日历工具：通过 Expo Calendar 读写系统日历；首次使用会请求系统日历权限
-  - 应用使用统计：Android 专属能力，依赖 `AndroidSystemTools` 原生模块；未打入原生模块时会返回需要重新安装 development build 的说明
-  - 流式 Tool 调用：启用工具后仍使用流式输出；模型需要工具时暂停执行工具，再继续流式回复
-  - 流式 tool_call 合并：兼容部分模型把工具名或多个工具调用分片输出的情况，减少工具名串联或调用错位
-  - 工具调用可视化：AI 调用工具时在回复上方逐行展示「调用了什么工具 + 参数」（clock 图标 + 描述 + 箭头），点击可查看参数和结果，随消息持久化
-- WebView 网页面板
-  - AI 打开网页时，用户端同步显示可见窗口；用户也可点击顶栏 web 图标主动打开
-  - WebView 以悬浮窗展示，可拖动位置、拖动右下角缩放大小
-  - 收起后变为贴边小图标，仍保持网页会话；关闭后清空当前网页会话，后续不再自动附带网页上下文
-  - 新会话默认进入网页首页：首页包含 Bing 搜索框，以及直接读取收藏夹生成的快捷方式网格
-  - 地址栏支持输入 URL 后回车打开；菜单内提供回退、刷新、收藏/取消收藏、收藏夹、移动端/网页端 UA 切换
-  - 默认使用移动端 UA；切换网页端 UA 后支持双指缩放、横向/纵向拖动查看 PC 页面
-  - 支持清除浏览数据：可单独清除图片/网页缓存，或清除缓存、Cookie 和当前站点存储
-  - 同一链接重复打开时优先复用当前页面状态，不强制刷新
-  - 用户发送消息获取回复时，如果 WebView 当前有打开页面，会插入一条仅用户可见的系统提示，并把当前网页观察内容附带给 AI
-  - 普通 DOM 点击优先使用元素编号 / selector，坐标点击主要用于 canvas 或无标准控件的页面
-- 思维链展示：AI 输出中 `<thinking></thinking>` 包裹的内容自动折叠为「Thought process」胶囊，单击展开查看
-- AI 网页巡游
+- OpenAI 兼容 API 配置，支持保存多个命名配置、切换模型、拉取模型列表和测试连接。
+- 流式回复，支持停止生成、重新生成、编辑消息、删除消息、历史对话分页加载。
+- 支持空输入触发 AI 继续回复，适合让模型基于当前上下文主动继续。
+- 支持图片消息：从相册选择图片后转换为 `image_url` 多段内容发送给视觉模型，图片 URI 随消息落库。
+- 支持 Markdown 渲染、代码块、表格横向滚动、`<thinking>...</thinking>` 思维内容折叠。
+- 支持消息楼层与隐藏范围。隐藏范围按对话独立保存，重叠/相邻范围会合并，发送给模型时会跳过隐藏楼层。
+- 自动注入运行时上下文：当前时间、相邻消息时间间隔、正在听的歌曲、打开的网页、专注事件、生理期记录等。
+- 可选 Prompt Cache：对兼容的服务端在请求消息中添加 ephemeral cache control 标记。
 
-  AI 网页巡游是聊天页左下角加号菜单中的工具入口。点击后会在对话中插入一条可见系统消息「已启用 AI 网页巡游」，这条消息不会立刻触发回复；用户可以继续补充想看的平台或方向，然后点击发送键开始巡游。
+### Tool 与网页能力
 
-  巡游工作流会先调用 UAPI 热榜接口获取热搜，再从榜单中挑选 1-3 个带链接的话题，用 App 内 WebView 打开网页查看内容，最后只选择 1 个话题自然回复用户。热榜接口需要在设置页的 Tool 设置中开启 AI 网页巡游 Hotboard，并填写 UAPI API Key；支持的平台可在可折叠的平台面板中勾选。
+- Memory Vault：语义检索、日记查询、日记上传。
+- Tavily Web Search：联网搜索实时信息。
+- Web Page Reader：检测用户消息中的链接，读取网页标题、正文与摘要；可配置动态渲染服务。
+- Web Interaction：App 内可见 WebView 面板，AI 可打开、观察、点击元素/selector、坐标点击和等待。
+- AI 网页巡游：通过 UAPI 热榜挑选话题，结合 WebView 查看网页后生成自然回复。
+- Native Tools：读取设备信息、电池状态、应用使用统计和系统日历；日历能力依赖 Expo Calendar 权限。
+- 工具调用过程会显示在 AI 气泡上方，并持久化参数、结果与状态，便于调试。
 
-  巡游模式下通过 WebView 打开的网页会使用桌面端 User-Agent，普通 WebView 网页交互仍使用默认 User-Agent。针对部分站点的登录、注册、打开 App、下载客户端遮罩，WebView 会注入保守的清理脚本优先点击关闭按钮；桌面页面会额外启用横向和纵向滚动，方便在移动端小窗口中查看 PC 版页面。
+### WebView 面板
 
-  精简版 Claude 客户端，React Native + Expo 构建，打包为 Android APK。个人使用。
+- 可由用户主动打开，也可由 AI 工具打开。
+- 支持拖动、缩放、收起为贴边悬浮入口、关闭会话。
+- 内置首页、Bing 搜索框、收藏夹、地址栏、刷新/返回、收藏/取消收藏、UA 切换、缓存/Cookie 清理。
+- 当面板有活动页面时，下次聊天请求会自动观察当前网页并附带给 AI。
 
-## TTS 配置
+### AI 共读
 
-使用 MiniMax 语音合成服务，需在设置 > TTS 配置中填写：
+- 书架支持导入 `txt` / `epub`，解析正文、章节、作者和封面。
+- 阅读页按章节阅读，保存阅读进度，支持目录跳转和章节底部自动切换。
+- 长按句子可添加/移除划线，高亮记录独立存储。
+- 共读对话独立于主聊天，可编辑/删除消息，显示楼层。
+- 共读面板可拖动、缩放、折叠为悬浮球。
+- AI 回复时会带入书名、作者、当前位置前方原文片段和最近共读对话。
+- 可按楼层范围总结共读聊天，并保存为读书总结。
+- 总结页按书聚合划线、AI 总结和手动读书心得；删除书后仍保留快照展示历史记录。
 
-- **Group ID** — MiniMax 控制台获取
-- **API Key** — MiniMax API 密钥
-- **Voice ID** — 音色 ID（如 `male-qn-qingse`、`Wise_Woman` 等）
-- **模型** — `speech-02-hd` / `speech-02-turbo` / `speech-2.8-hd`
-- 语速、音量、音调可调
+### 日记
 
-配置完成后可点击「测试播放」验证，保存后持久化到本地。
+- 在设置页「日记」tab 管理日记，支持新建、编辑、删除、收藏。
+- 可从聊天消息范围生成第一人称日记总结。
+- 收藏日记会注入主聊天 system 上下文，帮助 AI 了解近期生活记录。
+- 可上传单篇日记到 Memory Vault；上传时确认日期，标题会并入正文。
 
-## 记忆库（Memory Vault）配置
+### 音乐与 AI 电台
 
-在设置 > Tool 设置 > 记忆库中配置，连接自建的 Memory Vault 记忆向量库（FastAPI + ChromaDB）：
+- 内置「一起听」播放器，支持播放/暂停、上一首/下一首、进度拖动、列表循环、单曲循环和随机播放。
+- 支持时间轴歌词滚动，点击歌词可跳转播放进度。
+- 支持桌面歌词开关和自定义桌面歌词背景。
+- 歌单管理支持连接网易云 API，二维码登录，读取歌单并导入可播放歌曲。
+- AI 电台会基于当前歌单生成固定节目、AI 主持串场和收尾，使用 TTS 播放主持词。
+- 音乐播放上下文会自动附带到主聊天，AI 可知道当前歌曲、歌手、进度和歌词。
 
-- **记忆库地址** — 服务的 Base URL（如 `https://your-memory-vault.com`）
-- **管理员 Token** — 上传日记所需的认证 token（对应服务端的 `ADMIN_TOKEN`）。语义搜索 / 日记查询走公开接口无需 token，仅**上传日记**用到
-- **返回条数 / Token 预算 / 最大查询次数** — 语义搜索参数
+### 番茄专注
 
-配置后可点击「测试连接」验证（请求 `/health`）。
+- 支持今日任务、倒计时/正计时、目标次数、暂停、继续、完成和放弃。
+- 支持手动补记一次专注。
+- 统计页支持按日期查看专注次数、总时长、任务分布饼图与明细。
+- 专注事件会被主聊天读取为运行时上下文。
 
-**上传本地日记到云端**：在日记 tab 点任意日记的「上传」按钮，确认/修改日期（`YYYY-MM-DD`）后上传。日记标题会并入正文（`标题\n正文`）一起上传，调用服务端 `POST /api/diary`（仅保存原文，不自动 LLM 拆分）。
+### Game 副本
 
-> 注意：云端日记以日期为主键（一个日期对应一篇），同一天重复上传可能覆盖。
+- 支持创建独立多角色副本，包含旁白、总结 AI 和任意角色。
+- 每个角色可绑定独立 OpenAI 兼容 API preset，支持 temperature 和 max tokens。
+- 支持副本牌面、角色头像、角色气泡颜色、用户头像和头像显示开关。
+- 房间中用户先发言，再手动选择旁白、总结 AI 或角色生成回复。
+- 支持消息编辑/删除、清空房间、隐藏楼层范围，隐藏消息不会发给副本 AI。
 
-## Tool 设置
+### 美化、悬浮球与设备入口
 
-在设置 > Tool 设置中可分别开启以下工具能力：
+- 设置页「美化」支持自定义顶栏图标、输入框图标、聊天背景、输入框背景、用户/AI 头像、昵称、字体大小、气泡颜色、透明度、圆角和主题快照。
+- 设置页「悬浮球」支持 Android 悬浮球开关，以及 TTS 相关悬浮操作。
+- 顶栏中间的 Clawd 入口进入 M5Stack 页面，目前是硬件连接配置预留页。
+- 支持浅色/深色主题，使用内置 Sohne、Sohne Mono、Tiempos Text 字体。
 
-- **记忆库 Memory Vault** — 连接自建记忆库，供 AI 搜索记忆和查询日记
-- **联网搜索 Web Search** — 配置 Tavily API Key 后，AI 可搜索实时信息
-- **网页读取 Web Page Reader** — 开启后，用户发送 `http/https` 链接时，AI 可调用 `read_web_page` 读取网页正文
-  - 静态网页会直接抓取 HTML 并提取正文
-  - 动态网页可选配置 Playwright 等后端渲染读取服务地址
-- **网页交互 Web Interaction** — 开启后，AI 可根据对话需要自主在 App 内打开可见 WebView 窗口并进行简单操作
-  - 支持打开、观察、点击元素、点击 selector、坐标点击、等待
-  - AI 打开网页时可自主选择移动端或桌面端 UA，适合绕开移动端 App 引导并查看完整网页内容
-  - 适合简单网页交互和轻量前端小游戏
-  - 每轮最大操作次数可配置，防止无限循环
-- **设备原生 Tools** — 可按能力分别开启设备信息、电池状态、应用使用统计和日历日程管理
-  - 设备信息：读取品牌、型号、系统版本、设备类型、内存、运行时长等
-  - 电池状态：读取电量、充电状态、低电量模式和 Android 电池优化状态
-  - 应用使用统计：Android 专属；首次使用需到系统「使用情况访问权限」中授权，且需要包含 `AndroidSystemTools` 的 development build
-  - 日历日程：支持读取、创建、修改、删除系统日历日程，首次使用会请求日历权限
+## 配置入口
 
-网页交互窗口会出现在 App 内，用户可拖动标题栏改变位置，也可拖动右下角调整大小。收起窗口会保留当前页面状态，后续 AI 可继续观察和操作；关闭窗口会结束当前网页会话。
+### API 配置
 
-主动打开或 AI 打开的 WebView 页面都会进入同一套上下文判断：窗口处于打开或收起状态时会随下一次 API 请求自动观察并附带给 AI；用户关闭窗口后会清空当前 URL，不再发送网页信息。
+设置页「API 配置」中填写：
 
-## AI 共读配置
+- `Base URL`：OpenAI 兼容接口地址，例如 `https://api.openai.com/v1`
+- `API Key`
+- `Model`
+- 配置名称
 
-在顶栏点击 reading 图标进入 AI 共读。书架页可以导入 `txt` / `epub`，Android 会弹出系统级文件来源选择器，让用户从系统文件管理器、MT 管理器、QQ 等应用中选择文件；也可以长按书籍编辑元数据和封面。阅读页会保存阅读进度，并在请求 AI 回复时把当前位置前方的一段原文作为上下文。
+模型列表拉取使用 `${Base URL}/models`，聊天请求使用 `${Base URL}/chat/completions`。
 
-共读对话完全独立于普通聊天。阅读页的对话面板悬浮在正文上方，支持拖动、缩放和折叠为 reading 图标悬浮球；用户回车只发送自己的消息，点击 `AI` 按钮才会调用共读 API 获取回复。每条共读消息可以长按编辑或删除。
+### 对话设置
 
-每次 AI 请求会组装：`system prompt + 书名 + 作者 + 当前阅读位置向前截取的 N 字原文 + 最近 M 条共读对话 + 用户新输入`。原文字数和对话条数都从当前阅读位置或最新消息向前计数。
+设置页「对话设置」中可配置：
 
-共读设置支持：
+- 主聊天 System Prompt 与 Prompt 预设。
+- 最大输出 token。
+- 是否从上下文中剔除 `<thinking>...</thinking>`。
+- 隐藏楼层范围。
+- 是否启用 Prompt Cache。
+- 是否把生理期记录附带给 AI。
 
-- **Base URL / API Key / Model** — OpenAI 兼容接口
-- **复制普通对话 API** — 将当前聊天 API 配置复制到共读配置
-- **System Prompt** — 控制共读助手的语气和边界
-- **原文字数** — 每次提问附带的原文片段长度
-- **对话条数** — 每次请求带入的最近共读消息数量
+### TTS 配置
 
-## 运行
+设置页「TTS 配置」使用 MiniMax T2A：
+
+- `Group ID`
+- `API Key`
+- `Voice ID`
+- 模型，例如 `speech-02-hd`、`speech-02-turbo`、`speech-2.8-hd`
+- 语速、音量、音调
+
+TTS 用于普通消息朗读，也用于 AI 电台主持词。
+
+### Tool 设置
+
+设置页「Tool 设置」可分别启用：
+
+- Memory Vault：填写 Base URL、管理员 Token、返回条数、token 预算、最大调用次数。
+- Web Search：填写 Tavily API Key 和最大结果数。
+- Web Page Reader：开启链接读取，可选渲染服务地址。
+- Web Interaction：设置每轮最大网页操作次数。
+- AI 网页巡游 Hotboard：填写 UAPI API Key 并选择热榜平台。
+- Native Tools：设备信息、电池状态、应用使用统计、日历。
+
+### 共读设置
+
+AI 共读页「设置」中可配置独立 API，也可以复制当前主聊天 API：
+
+- `Base URL`
+- `API Key`
+- `Model`
+- 共读 System Prompt
+- 总结 System Prompt
+- 每次附带的原文字数
+- 每次附带的最近对话条数
+
+### 网易云音乐
+
+音乐页进入「歌单管理」后填写网易云 API 地址，例如局域网中的 NeteaseCloudMusicApi 服务地址。登录流程为：
+
+1. 填写 API 地址。
+2. 点击获取二维码。
+3. 用网易云音乐扫码。
+4. 点击确认登录。
+5. 刷新歌单并导入。
+
+## 运行与检查
+
+本项目在 Windows PowerShell 下开发时请使用 `npm.cmd` 和 `npx.cmd`，避免 PowerShell 执行被拦截的 `.ps1` shim。
 
 ```bash
 # 安装依赖
 npm.cmd install
 
-# 启动开发服务器
+# 启动 Expo 开发服务器
 npx.cmd expo start
 
-# 手机测试（Expo Go 扫码）
-npx.cmd expo start --tunnel
+# Android development build
+npm.cmd run android
 
-# 浏览器预览
-npx.cmd expo start --web
+# Web 预览
+npm.cmd run web
 
 # 类型检查
 npm.cmd run typecheck
 ```
 
+部分能力需要 development build 或 Android 权限：
+
+- 应用使用统计依赖 Android 原生能力和系统「使用情况访问权限」。
+- 悬浮球需要系统悬浮窗权限。
+- 日历工具首次使用会请求系统日历权限。
+- 后台音频、通知和 TTS 依赖对应 Expo 插件与权限配置。
+
+## 构建
+
+`eas.json` 已包含 development、preview 和 production profile：
+
+```bash
+# 内部分发 APK
+npx.cmd eas build --platform android --profile preview
+
+# development client APK
+npx.cmd eas build --platform android --profile development
+```
+
+Android 包名为 `com.ysclaude.app`。Expo owner 为 `linwang_004`，EAS projectId 已写入 `app.json`。
+
 ## 项目结构
 
-```
-app/                        # expo-router 页面
-├── _layout.tsx             # 根布局（Stack）
-├── index.tsx               # 对话主界面
-├── history.tsx             # 对话历史（☰ 触发）
-├── settings.tsx            # 设置页（⋯ 触发）
+```text
+app/
+├── _layout.tsx              # 根布局、字体、通知、WebViewPanel、悬浮球和全局监听
+├── index.tsx                # 主聊天页
+├── history.tsx              # 历史对话
+├── settings.tsx             # 设置页：API/对话/TTS/Tool/日记/悬浮球/美化
+├── focus.tsx                # 番茄专注
+├── music.tsx                # 播放器与 AI 电台入口
+├── music-playlists.tsx      # 网易云歌单管理
+├── m5stack.tsx              # Clawd/M5Stack 设备配置预留
+├── chat/[id].tsx            # 历史对话详情
 ├── reading/
-│   ├── index.tsx           # AI 共读书架 + 共读设置
-│   └── [id].tsx            # 书籍阅读页 + 共读对话面板
-└── chat/[id].tsx           # 历史对话详情
+│   ├── index.tsx            # 共读书架、总结、共读设置
+│   └── [id].tsx             # 阅读页、划线、目录、共读面板
+└── game/
+    ├── index.tsx            # 副本列表、API preset、场景配置
+    └── [id].tsx             # 副本房间
 
 src/
-├── components/
-│   ├── ChatBubble.tsx      # 消息气泡 + 操作图标 + 工具调用行 + 思维链折叠
-│   ├── ChatInput.tsx       # 输入框 + 工具栏
-│   ├── ModelSelector.tsx   # 模型切换弹窗
-│   ├── StickerContent.tsx  # 表情包 token 分段 + 助手 Markdown 渲染
-│   ├── TimeDivider.tsx     # 消息间居中时间分隔（间隔 >30min 时显示）
-│   └── WebViewPanel.tsx    # AI 网页交互面板（可拖动、可缩放）
-├── services/
-│   ├── api.ts              # 流式 API 调用（SSE + stream tool_calls）
-│   ├── androidFilePicker.ts # Android 系统级文件来源选择桥
-│   ├── nativeTools.ts      # 设备信息 / 电池 / 应用使用统计 / 日历工具实现
-│   ├── readingImport.ts    # txt / epub 导入、SAF 来源选择、正文/章节/封面解析
-│   ├── tts.ts              # MiniMax TTS 语音合成
-│   ├── tools.ts            # 工具定义与执行（记忆库 / 搜索 / 网页读取 / 网页交互 / 设备原生）
-│   ├── toolModules/        # 工具模块拆分实现
-│   └── webviewController.ts # Tool 与 WebViewPanel 的控制桥
-├── utils/
-│   ├── time.ts             # 时间格式化 + 消息间隔时间戳阈值
-│   └── ranges.ts           # 隐藏楼层范围合并（重叠/相邻自动合并）
-├── stores/
-│   ├── chat.ts             # 对话状态 + 隐藏楼层（按对话独立）+ 持久化
-│   ├── diary.ts            # 日记状态 + CRUD
-│   └── settings.ts         # 配置状态（zustand persist + sqlite）
-├── db/
-│   ├── database.ts         # SQLite 初始化 + schema
-│   ├── operations.ts       # 对话/消息/日记/隐藏楼层/共读书籍 CRUD
-│   └── kv-storage.ts       # KV 存储适配器
-├── hooks/
-│   └── useKeyboardHeight.ts # 软键盘高度监听（edge-to-edge 输入框避让）
-├── types/
-│   └── index.ts            # TypeScript 类型定义
-└── theme/
-    ├── colors.ts           # 主题配色
-    └── fonts.ts            # 字体配置
+├── components/              # 聊天气泡、输入框、模型选择器、WebView 面板等
+├── db/                      # SQLite 初始化、迁移、CRUD、KV storage
+├── hooks/                   # 键盘高度等通用 hook
+├── services/                # API、TTS、工具、WebView、音乐、导入、通知等服务
+├── services/toolModules/    # Memory Vault、Web Search、网页读取、WebView、Native Tool、Hotboard
+├── stores/                  # chat/settings/diary/focus/music/netease/radio/game/period
+├── theme/                   # 颜色与字体
+├── types/                   # 全局 TypeScript 类型
+└── utils/                   # 时间、楼层范围、贴纸、热榜平台、专注/生理期上下文等
 ```
 
-## 开发阶段
+## 数据持久化
 
-| 阶段 | 内容 | 状态 |
-|------|------|------|
-| P0 | 项目骨架 + 对话 + 流式 + Markdown | ✅ |
-| P1 | SQLite 持久化 + 历史管理 + 多配置 | ✅ |
-| P2 | TTS 语音合成 + System Prompt + 对话设置 | ✅ |
-| P3 | MCP Tool 框架 | - |
-| P4 | Memory Vault + Tavily 搜索 | ✅ |
-| P5 | EAS Build 打包 APK | - |
-| P6 | 时间感知（system 注入当前时间 + 消息时间戳分隔） | ✅ |
+- SQLite 数据库名：`ysclaude.db`
+- 表：对话、消息、日记、生理期记录、共读书籍、共读消息、阅读笔记、划线、专注任务、专注会话等。
+- Zustand persist 通过 `src/db/kv-storage.ts` 落到 SQLite，保存设置、音乐、网易云、游戏副本等状态。
+- 数据库迁移基于 `PRAGMA user_version`，并额外用列存在性检查避免全新安装重复 ALTER。
 
-## UI 设计
+## 主要外部服务
 
-- 浅色暖米色主题，参考 Claude 官方客户端
-- 顶栏：☰ 历史 / ✎ 新建 / ⋯ 设置
-- 对话气泡：用户右对齐浅棕色，助手左对齐无背景 + Markdown
-- 底部输入框：大圆角，内嵌模型选择器 pill
-- 助手消息下方操作图标行（复制 / 删除 / TTS 播放）
-
-## 未来规划
-
-  - AI后台消息
-  - 文件操作
+- OpenAI 兼容聊天/模型接口。
+- MiniMax T2A。
+- Memory Vault，自建记忆库服务。
+- Tavily Search。
+- UAPI 热榜。
+- 可选网页渲染读取服务。
+- NeteaseCloudMusicApi 或兼容网易云接口。
 
 ## License
 
