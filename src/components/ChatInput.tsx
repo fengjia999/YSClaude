@@ -7,7 +7,7 @@ import { BlurView } from 'expo-blur';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 
 import { useSettingsStore } from '../stores/settings';
-import { USER_STICKERS } from '../utils/stickers';
+import { buildStickerDefinitions, normalizeStickerName, type StickerDefinition } from '../utils/stickers';
 
 
 let colors = lightColors;
@@ -16,6 +16,13 @@ const STICKER_PANEL_HEIGHT = Math.min(420, Dimensions.get('window').height * 0.4
 function clampNumber(value: number | undefined, fallback: number, min: number, max: number) {
   if (!Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(min, value as number));
+}
+
+function getStickerSuggestionQuery(value: string): string {
+  const trimmed = normalizeStickerName(value);
+  if (!trimmed) return '';
+  const parts = trimmed.split(/\s+/);
+  return parts[parts.length - 1] || '';
 }
 
 interface Props {
@@ -51,9 +58,33 @@ export function ChatInput({
   const shouldInvertResponseIcon = isDarkTheme && (isStreaming || !isInputFocused);
   const responseTouchStartedRef = useRef(false);
   const insets = useSafeAreaInsets();
-  const { apiConfigs, activeConfigIndex, appearanceConfig } = useSettingsStore();
+  const { apiConfigs, activeConfigIndex, appearanceConfig, stickerConfig } = useSettingsStore();
   const current = apiConfigs[activeConfigIndex];
   const currentModel = current?.name || current?.model || '未配置';
+  const userStickers = useMemo(
+    () => buildStickerDefinitions(stickerConfig?.userStickers),
+    [stickerConfig?.userStickers]
+  );
+  const stickerSuggestionsEnabled = stickerConfig?.stickerSuggestionsEnabled ?? true;
+  const suggestedStickers = useMemo<StickerDefinition[]>(() => {
+    if (!stickerSuggestionsEnabled || disabled || isStreaming || stickerPickerVisible || optionsMenuVisible) {
+      return [];
+    }
+    const query = getStickerSuggestionQuery(text);
+    if (!query) return [];
+
+    return userStickers
+      .filter((sticker) => sticker.name.includes(query))
+      .slice(0, 8);
+  }, [
+    disabled,
+    isStreaming,
+    optionsMenuVisible,
+    stickerPickerVisible,
+    stickerSuggestionsEnabled,
+    text,
+    userStickers,
+  ]);
 
   const inputIconUris = appearanceConfig?.inputIconUris || {};
   const inputStyle = appearanceConfig?.inputStyle || 'default';
@@ -154,6 +185,27 @@ export function ChatInput({
 
   return (
     <View style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+      {suggestedStickers.length > 0 && (
+        <View style={styles.suggestionPanel}>
+          <ScrollView
+            horizontal
+            keyboardShouldPersistTaps="handled"
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.suggestionList}
+          >
+            {suggestedStickers.map((sticker) => (
+              <Pressable
+                key={sticker.id}
+                style={styles.suggestionItem}
+                onPress={() => void handleSendSticker(sticker.token)}
+              >
+                <Image source={sticker.image} style={styles.suggestionImage} resizeMode="contain" />
+                <Text style={styles.suggestionName} numberOfLines={1}>{sticker.name}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      )}
       <View style={[styles.container, { backgroundColor: inputPanelBackground }, hasCustomInputSurface && styles.customContainer]}>
         {inputBackgroundImageUri && (
           <Image source={{ uri: inputBackgroundImageUri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
@@ -239,16 +291,23 @@ export function ChatInput({
               showsVerticalScrollIndicator
               persistentScrollbar
             >
-              {USER_STICKERS.map((sticker) => (
-                <Pressable
-                  key={sticker.name}
-                  style={styles.stickerItem}
-                  onPress={() => void handleSendSticker(sticker.token)}
-                >
-                  <Image source={sticker.image} style={styles.stickerImage} resizeMode="contain" />
-                  <Text style={styles.stickerName}>{sticker.name}</Text>
-                </Pressable>
-              ))}
+              {userStickers.length === 0 ? (
+                <View style={styles.stickerEmpty}>
+                  <Text style={styles.stickerEmptyText}>还没有自定义表情包</Text>
+                  <Text style={styles.stickerEmptyHint}>到设置里的表情包页添加自己的表情包</Text>
+                </View>
+              ) : (
+                userStickers.map((sticker) => (
+                  <Pressable
+                    key={sticker.id}
+                    style={styles.stickerItem}
+                    onPress={() => void handleSendSticker(sticker.token)}
+                  >
+                    <Image source={sticker.image} style={styles.stickerImage} resizeMode="contain" />
+                    <Text style={styles.stickerName} numberOfLines={1}>{sticker.name}</Text>
+                  </Pressable>
+                ))
+              )}
             </ScrollView>
           </View>
         </Pressable>
@@ -289,6 +348,44 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.18)',
+  },
+  suggestionPanel: {
+    minHeight: 84,
+    marginBottom: 8,
+    borderRadius: 16,
+    backgroundColor: colors.inputBackground,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
+  },
+  suggestionList: {
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  suggestionItem: {
+    width: 72,
+    height: 68,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: colors.surfaceHover,
+    paddingHorizontal: 6,
+  },
+  suggestionImage: {
+    width: 42,
+    height: 42,
+  },
+  suggestionName: {
+    width: '100%',
+    marginTop: 3,
+    fontSize: 11,
+    color: colors.textSecondary,
+    textAlign: 'center',
   },
   previewRow: {
     marginBottom: 8,
@@ -411,6 +508,24 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'space-between',
     gap: 8,
     paddingBottom: 4,
+  },
+  stickerEmpty: {
+    width: '100%',
+    minHeight: STICKER_PANEL_HEIGHT - 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  stickerEmptyText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.text,
+    marginBottom: 6,
+  },
+  stickerEmptyHint: {
+    fontSize: 12,
+    color: colors.textTertiary,
+    textAlign: 'center',
   },
   stickerItem: {
     width: '30%',

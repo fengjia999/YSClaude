@@ -1,6 +1,8 @@
 import {
+  copyShizukuFile,
   listShizukuDirectory,
   listShizukuRoots,
+  moveShizukuFile,
   readShizukuFile,
   replaceShizukuText,
   writeShizukuFile,
@@ -92,6 +94,48 @@ const SHIZUKU_REPLACE_TOOL: ToolDefinition = {
   },
 };
 
+const SHIZUKU_COPY_TOOL: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'shizuku_file_copy',
+    description:
+      '通过 Shizuku 在授权路径根之间复制单个文件。源和目标都必须是各自授权根内的相对文件路径，不能使用绝对路径或 ..。默认不覆盖目标文件。',
+    parameters: {
+      type: 'object',
+      properties: {
+        source_root_id: { type: 'string', description: '源授权路径根 ID，可从 shizuku_file_list_roots 获取；省略时使用默认根' },
+        source_path: { type: 'string', description: '源授权根内的相对文件路径' },
+        target_root_id: { type: 'string', description: '目标授权路径根 ID；省略时使用源授权根' },
+        target_path: { type: 'string', description: '目标授权根内的相对文件路径' },
+        overwrite: { type: 'boolean', description: '目标文件已存在时是否覆盖；默认 false' },
+        create_parent_dirs: { type: 'boolean', description: '目标父目录不存在时是否自动创建；默认 true' },
+      },
+      required: ['source_path', 'target_path'],
+    },
+  },
+};
+
+const SHIZUKU_MOVE_TOOL: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'shizuku_file_move',
+    description:
+      '通过 Shizuku 在授权路径根之间移动单个文件。源和目标都必须是各自授权根内的相对文件路径，不能使用绝对路径或 ..。默认不覆盖目标文件；跨存储移动会复制成功后删除源文件。',
+    parameters: {
+      type: 'object',
+      properties: {
+        source_root_id: { type: 'string', description: '源授权路径根 ID，可从 shizuku_file_list_roots 获取；省略时使用默认根' },
+        source_path: { type: 'string', description: '源授权根内的相对文件路径' },
+        target_root_id: { type: 'string', description: '目标授权路径根 ID；省略时使用源授权根' },
+        target_path: { type: 'string', description: '目标授权根内的相对文件路径' },
+        overwrite: { type: 'boolean', description: '目标文件已存在时是否覆盖；默认 false' },
+        create_parent_dirs: { type: 'boolean', description: '目标父目录不存在时是否自动创建；默认 true' },
+      },
+      required: ['source_path', 'target_path'],
+    },
+  },
+};
+
 export const shizukuFileTool: ToolModule = {
   id: 'shizuku-file',
   labels: {
@@ -100,10 +144,20 @@ export const shizukuFileTool: ToolModule = {
     shizuku_file_read: '读取 Shizuku 文件',
     shizuku_file_write: '写入 Shizuku 文件',
     shizuku_file_replace: '修改 Shizuku 文件',
+    shizuku_file_copy: '复制 Shizuku 文件',
+    shizuku_file_move: '移动 Shizuku 文件',
   },
   getDefinitions: (config) =>
     config.shizukuFile?.enabled
-      ? [SHIZUKU_LIST_ROOTS_TOOL, SHIZUKU_LIST_TOOL, SHIZUKU_READ_TOOL, SHIZUKU_WRITE_TOOL, SHIZUKU_REPLACE_TOOL]
+      ? [
+          SHIZUKU_LIST_ROOTS_TOOL,
+          SHIZUKU_LIST_TOOL,
+          SHIZUKU_READ_TOOL,
+          SHIZUKU_WRITE_TOOL,
+          SHIZUKU_REPLACE_TOOL,
+          SHIZUKU_COPY_TOOL,
+          SHIZUKU_MOVE_TOOL,
+        ]
       : [],
   execute: async (toolName, args, context) => {
     switch (toolName) {
@@ -117,6 +171,10 @@ export const shizukuFileTool: ToolModule = {
         return await writeShizukuFile(args, context.shizukuFileConfig);
       case 'shizuku_file_replace':
         return await replaceShizukuText(args, context.shizukuFileConfig);
+      case 'shizuku_file_copy':
+        return await copyShizukuFile(args, context.shizukuFileConfig);
+      case 'shizuku_file_move':
+        return await moveShizukuFile(args, context.shizukuFileConfig);
       default:
         return undefined;
     }

@@ -125,6 +125,7 @@ export default function ChatScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const appearanceConfig = useSettingsStore((state) => state.appearanceConfig);
+  const hotboardConfig = useSettingsStore((state) => state.hotboardConfig);
   const topBarIconUris = appearanceConfig?.topBarIconUris || {};
   const topBarIconsHidden = !!appearanceConfig?.topBarIconsHidden;
   const topBarFadeHidden = !!appearanceConfig?.topBarFadeHidden;
@@ -165,12 +166,14 @@ export default function ChatScreen() {
   const [visibleFloorMessageId, setVisibleFloorMessageId] = useState<string | null>(null);
   const [inputBarHeight, setInputBarHeight] = useState(INPUT_BAR_FALLBACK_HEIGHT);
   const [isInitialPositioning, setIsInitialPositioning] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const flatListRef = useRef<FlatList<Message>>(null);
   const blurTargetRef = useRef<View | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const scrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollFollowUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialPositioningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listHeightRef = useRef(0);
   const contentHeightRef = useRef(0);
   const keyboardLiftRef = useRef(0);
@@ -320,8 +323,34 @@ export default function ChatScreen() {
       if (initialPositioningTimerRef.current !== null) {
         clearTimeout(initialPositioningTimerRef.current);
       }
+      if (toastTimerRef.current !== null) {
+        clearTimeout(toastTimerRef.current);
+      }
     };
   }, []);
+
+  const showToast = useCallback((message: string) => {
+    if (toastTimerRef.current !== null) {
+      clearTimeout(toastTimerRef.current);
+    }
+    setToastMessage(message);
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+      toastTimerRef.current = null;
+    }, 1800);
+  }, []);
+
+  const handleEnableWebCruise = useCallback(async () => {
+    if (!hotboardConfig?.enabled) {
+      showToast('请先在 Tool 设置中开启 AI 网页巡游热榜');
+      return;
+    }
+    if (!hotboardConfig.apiKey.trim()) {
+      showToast('请先在 Tool 设置中填写 UAPI API Key');
+      return;
+    }
+    await enableWebCruise();
+  }, [enableWebCruise, hotboardConfig, showToast]);
 
   useLayoutEffect(() => {
     if (!conversationId || messages.length === 0 || pendingScrollMessageId) {
@@ -717,7 +746,7 @@ export default function ChatScreen() {
             await addUserMessage(text, imageUri);
           }}
           onTriggerResponse={triggerResponse}
-          onEnableWebCruise={enableWebCruise}
+          onEnableWebCruise={handleEnableWebCruise}
           disabled={isStreaming}
           isStreaming={isStreaming}
           onStop={stopStreaming}
@@ -727,6 +756,12 @@ export default function ChatScreen() {
 
       {showModelSelector && (
         <ModelSelector onClose={() => setShowModelSelector(false)} />
+      )}
+
+      {toastMessage && (
+        <View pointerEvents="none" style={styles.toast}>
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </View>
       )}
 
       <Modal visible={calendarVisible} transparent animationType="fade" onRequestClose={() => setCalendarVisible(false)}>
@@ -952,6 +987,26 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   errorText: {
     fontSize: 13,
     color: colors.danger,
+  },
+  toast: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    bottom: 150,
+    alignItems: 'center',
+    zIndex: 20,
+  },
+  toastText: {
+    maxWidth: '100%',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 18,
+    backgroundColor: colors.text,
+    color: colors.background,
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+    overflow: 'hidden',
   },
   messageList: {
     flex: 1,

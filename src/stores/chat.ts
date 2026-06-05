@@ -644,7 +644,10 @@ async function streamAssistantResponse(
     console.warn('[Chat] 读取收藏日记失败:', err);
   }
 
-  stableSystemSections.push(buildStickerSystemInstruction());
+  const stickerInstruction = buildStickerSystemInstruction(settings.stickerConfig?.assistantStickers);
+  if (stickerInstruction) {
+    stableSystemSections.push(stickerInstruction);
+  }
   const fullSystemPrompt = stableSystemSections.join('\n\n---\n\n');
   const promptCacheEnabled = !!settings.promptCacheConfig?.enabled;
   const sessionId = promptCacheEnabled ? conversationId : undefined;
@@ -882,6 +885,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     let { conversationId } = get();
     const settings = useSettingsStore.getState();
     if (!settings._hydrated) return;
+    if (!settings.hotboardConfig?.enabled || !settings.hotboardConfig.apiKey.trim()) {
+      set({ error: '请先在 Tool 设置中开启 AI 网页巡游热榜并填写 UAPI API Key' });
+      return;
+    }
     const config = settings.apiConfigs[settings.activeConfigIndex];
 
     if (!conversationId) {

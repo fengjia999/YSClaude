@@ -10,7 +10,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { lightColors, useThemeColors, type ThemeColors } from '../src/theme/colors';
 
 import { fonts } from '../src/theme/fonts';
-import { useSettingsStore, NamedAPIConfig, TTSConfig, MemoryVaultConfig, WebSearchConfig, type ChatInputIconKey, type ChatInputAppearanceStyle, type ShizukuFileRoot } from '../src/stores/settings';
+import { useSettingsStore, NamedAPIConfig, TTSConfig, MemoryVaultConfig, WebSearchConfig, type ChatInputIconKey, type ChatInputAppearanceStyle, type ShizukuFileRoot, type StickerOwner, type CustomSticker } from '../src/stores/settings';
 import { TopBarIcon, TOP_BAR_ICON_ITEMS } from '../src/components/TopBarIcon';
 import type { TopBarIconKey } from '../src/utils/topBarIconTypes';
 import { useChatStore } from '../src/stores/chat';
@@ -40,10 +40,11 @@ import {
   showFloatingBall,
 } from '../src/services/floatingBall';
 import { useKeyboardHeight } from '../src/hooks/useKeyboardHeight';
+import { buildStickerDefinitions, normalizeStickerName } from '../src/utils/stickers';
 
 
 let colors = lightColors;
-const TABS = ['API 配置', '对话设置', 'TTS 配置', 'Tool 设置', '日记', '悬浮球', '美化'] as const;
+const TABS = ['API 配置', '对话设置', 'TTS 配置', 'Tool 设置', '日记', '悬浮球', '表情包', '美化'] as const;
 type ToastFn = (message: string) => void;
 type SettingsTabProps = { showToast: ToastFn; keyboardBottomInset: number };
 const CUSTOM_TOP_BAR_ICON_MAX_BYTES = 2 * 1024 * 1024;
@@ -52,6 +53,9 @@ const CUSTOM_TOP_BAR_ICON_MAX_SIDE = 2048;
 const CUSTOM_BACKGROUND_MAX_BYTES = 8 * 1024 * 1024;
 const CUSTOM_BACKGROUND_MIN_SIDE = 320;
 const CUSTOM_BACKGROUND_MAX_SIDE = 6000;
+const CUSTOM_STICKER_MAX_BYTES = 5 * 1024 * 1024;
+const CUSTOM_STICKER_MIN_SIDE = 32;
+const CUSTOM_STICKER_MAX_SIDE = 4096;
 const CHAT_INPUT_ICON_ITEMS: Array<{ key: ChatInputIconKey; label: string }> = [
   { key: 'options', label: '左侧菜单' },
   { key: 'sticker', label: '贴纸' },
@@ -121,7 +125,8 @@ export default function SettingsScreen() {
       {activeTab === 3 && <ToolConfigTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
       {activeTab === 4 && <DiaryTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
       {activeTab === 5 && <FloatingBallTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
-      {activeTab === 6 && <AppearanceTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 6 && <StickerTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 7 && <AppearanceTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
 
       {toastMessage && (
         <View pointerEvents="none" style={styles.toast}>
@@ -210,6 +215,25 @@ function validateBackgroundAsset(asset: ImagePicker.ImagePickerAsset): string | 
   return null;
 }
 
+function validateStickerAsset(asset: ImagePicker.ImagePickerAsset): string | null {
+  if (asset.fileSize && asset.fileSize > CUSTOM_STICKER_MAX_BYTES) {
+    return '图片不能超过 5MB';
+  }
+  if (
+    asset.width < CUSTOM_STICKER_MIN_SIDE ||
+    asset.height < CUSTOM_STICKER_MIN_SIDE
+  ) {
+    return `图片边长至少 ${CUSTOM_STICKER_MIN_SIDE}px`;
+  }
+  if (
+    asset.width > CUSTOM_STICKER_MAX_SIDE ||
+    asset.height > CUSTOM_STICKER_MAX_SIDE
+  ) {
+    return `图片边长不能超过 ${CUSTOM_STICKER_MAX_SIDE}px`;
+  }
+  return null;
+}
+
 function isHexColor(value: string): boolean {
   return /^#[0-9A-Fa-f]{6}$/.test(value.trim());
 }
@@ -218,6 +242,307 @@ function parseAppearanceNumber(value: string, fallback: number, min: number, max
   const next = parseInt(value, 10);
   if (!Number.isFinite(next)) return fallback;
   return Math.min(max, Math.max(min, next));
+}
+
+function parseStickerImportLine(line: string): { name: string; uri: string } | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  const match = trimmed.match(/https?:\/\/\S+/i);
+  if (!match || match.index === undefined) return null;
+
+  const uri = match[0].replace(/[，,。；;]+$/, '');
+  const rawName = trimmed.slice(0, match.index).replace(/[\s:：]+$/, '');
+  const name = normalizeStickerName(rawName);
+  if (!name || !uri) return null;
+  return { name, uri };
+}
+
+function StickerTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
+  const {
+    stickerConfig,
+    setStickerSuggestionsEnabled,
+    addSticker,
+    updateSticker,
+    removeSticker,
+  } = useSettingsStore();
+  const [stickerOwner, setStickerOwner] = useState<StickerOwner>('user');
+  const [stickerName, setStickerName] = useState('');
+  const [bulkImportText, setBulkImportText] = useState('');
+  const [pickingSticker, setPickingSticker] = useState<string | null>(null);
+  const userStickers = stickerConfig?.userStickers || [];
+  const assistantStickers = stickerConfig?.assistantStickers || [];
+  const stickerSuggestionsEnabled = stickerConfig?.stickerSuggestionsEnabled ?? true;
+  const currentStickers = stickerOwner === 'user' ? userStickers : assistantStickers;
+
+  function getStickerList(owner: StickerOwner): CustomSticker[] {
+    return owner === 'user' ? userStickers : assistantStickers;
+  }
+
+  function validateStickerName(owner: StickerOwner, name: string, ignoreId?: string): string | null {
+    const normalizedName = normalizeStickerName(name);
+    if (!normalizedName) return '请先填写表情包名称';
+    const duplicated = getStickerList(owner).some(
+      (sticker) => sticker.id !== ignoreId && normalizeStickerName(sticker.name) === normalizedName
+    );
+    if (duplicated) return '同一组里已经有这个名称了';
+    return null;
+  }
+
+  async function pickStickerAsset(): Promise<ImagePicker.ImagePickerAsset | null> {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: false,
+      quality: 0.9,
+    });
+    if (result.canceled || !result.assets[0]?.uri) return null;
+
+    const asset = result.assets[0];
+    const validationError = validateStickerAsset(asset);
+    if (validationError) {
+      Alert.alert('图片不适合作为表情包', validationError);
+      return null;
+    }
+    return asset;
+  }
+
+  async function handleAddSticker() {
+    const owner = stickerOwner;
+    const normalizedName = normalizeStickerName(stickerName);
+    const nameError = validateStickerName(owner, normalizedName);
+    if (nameError) {
+      Alert.alert('无法添加表情包', nameError);
+      return;
+    }
+
+    setPickingSticker(`${owner}-new`);
+    try {
+      const asset = await pickStickerAsset();
+      if (!asset) return;
+
+      const uri = await copyAppearanceImage(asset, 'custom-stickers', `${owner}-sticker`);
+      addSticker(owner, {
+        id: `sticker-${randomUUID()}`,
+        name: normalizedName,
+        uri,
+        createdAt: Date.now(),
+      });
+      setStickerName('');
+      showToast(owner === 'user' ? '我的表情包已添加' : 'AI 表情包已添加');
+    } catch (error: any) {
+      Alert.alert('添加表情包失败', error?.message || '无法读取所选图片');
+    } finally {
+      setPickingSticker(null);
+    }
+  }
+
+  async function handleReplaceStickerImage(owner: StickerOwner, sticker: CustomSticker) {
+    if (pickingSticker) return;
+    setPickingSticker(sticker.id);
+    try {
+      const asset = await pickStickerAsset();
+      if (!asset) return;
+
+      const uri = await copyAppearanceImage(asset, 'custom-stickers', `${owner}-sticker`);
+      updateSticker(owner, sticker.id, { uri });
+      showToast('表情包图片已更新');
+    } catch (error: any) {
+      Alert.alert('替换表情包失败', error?.message || '无法读取所选图片');
+    } finally {
+      setPickingSticker(null);
+    }
+  }
+
+  function handleRenameSticker(owner: StickerOwner, sticker: CustomSticker, value: string) {
+    updateSticker(owner, sticker.id, { name: value });
+  }
+
+  function handleBlurStickerName(owner: StickerOwner, sticker: CustomSticker) {
+    const normalizedName = normalizeStickerName(sticker.name);
+    const nameError = validateStickerName(owner, normalizedName, sticker.id);
+    if (nameError) {
+      Alert.alert('表情包名称不可用', nameError);
+      return;
+    }
+    updateSticker(owner, sticker.id, { name: normalizedName });
+  }
+
+  function handleRemoveSticker(owner: StickerOwner, sticker: CustomSticker) {
+    Alert.alert('删除表情包', `确定删除「${sticker.name || '未命名'}」吗？`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          removeSticker(owner, sticker.id);
+          showToast('表情包已删除');
+        },
+      },
+    ]);
+  }
+
+  function handleBulkImport() {
+    const owner = stickerOwner;
+    const existingNames = new Set(getStickerList(owner).map((sticker) => normalizeStickerName(sticker.name)));
+    const importedNames = new Set<string>();
+    const parsed = bulkImportText
+      .split(/\r?\n/)
+      .map(parseStickerImportLine)
+      .filter((item): item is { name: string; uri: string } => !!item);
+    let importedCount = 0;
+    let skippedCount = 0;
+
+    parsed.forEach((item) => {
+      if (existingNames.has(item.name) || importedNames.has(item.name)) {
+        skippedCount += 1;
+        return;
+      }
+      importedNames.add(item.name);
+      addSticker(owner, {
+        id: `sticker-${randomUUID()}`,
+        name: item.name,
+        uri: item.uri,
+        createdAt: Date.now(),
+      });
+      importedCount += 1;
+    });
+
+    if (importedCount === 0) {
+      Alert.alert('没有可导入的表情包', '请按“名称 链接”一行一个填写，名称和链接之间可用空格、中文冒号或英文冒号。');
+      return;
+    }
+
+    setBulkImportText('');
+    showToast(skippedCount > 0 ? `已导入 ${importedCount} 个，跳过 ${skippedCount} 个重名` : `已导入 ${importedCount} 个表情包`);
+  }
+
+  return (
+    <ScrollView
+      style={styles.content}
+      contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }}
+      keyboardShouldPersistTaps="handled"
+    >
+      <Text style={styles.sectionTitle}>表情包管理</Text>
+      <Text style={styles.hint}>
+        assets 里的用户/AI 表情包会作为默认配置显示，也可以改名、换图或删除。
+      </Text>
+      <View style={styles.switchRow}>
+        <View style={styles.switchText}>
+          <Text style={styles.label}>输入时推荐表情包</Text>
+          <Text style={styles.hint}>在聊天输入框上方显示和文字匹配的“我的表情包”。</Text>
+        </View>
+        <Switch
+          value={stickerSuggestionsEnabled}
+          onValueChange={(value) => {
+            setStickerSuggestionsEnabled(value);
+            showToast(value ? '表情包推荐已开启' : '表情包推荐已关闭');
+          }}
+          trackColor={{ true: colors.primary }}
+        />
+      </View>
+      <View style={styles.segmentedRow}>
+        {([
+          { key: 'user' as const, label: `我的表情包 ${userStickers.length}` },
+          { key: 'assistant' as const, label: `AI 表情包 ${assistantStickers.length}` },
+        ]).map((item) => (
+          <Pressable
+            key={item.key}
+            style={[styles.segmentedButton, stickerOwner === item.key && styles.segmentedButtonActive]}
+            onPress={() => setStickerOwner(item.key)}
+          >
+            <Text style={[styles.segmentedText, stickerOwner === item.key && styles.segmentedTextActive]}>
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      <Text style={styles.sectionTitle}>上传图片</Text>
+      <View style={styles.stickerAddRow}>
+        <TextInput
+          style={[styles.input, styles.stickerNameInput]}
+          value={stickerName}
+          onChangeText={setStickerName}
+          placeholder="表情包名称"
+          placeholderTextColor={colors.textTertiary}
+          returnKeyType="done"
+        />
+        <Pressable
+          style={[styles.appearanceThemeSaveButton, pickingSticker !== null && styles.smallActionButtonDisabled]}
+          onPress={handleAddSticker}
+          disabled={pickingSticker !== null}
+        >
+          {pickingSticker === `${stickerOwner}-new` ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <Text style={styles.saveButtonText}>上传</Text>
+          )}
+        </Pressable>
+      </View>
+
+      <Text style={styles.sectionTitle}>链接批量导入</Text>
+      <TextInput
+        style={[styles.input, styles.multilineInput, styles.bulkImportInput]}
+        value={bulkImportText}
+        onChangeText={setBulkImportText}
+        multiline
+        placeholder={'好喜欢 https://example.com/a.png\n得逞：https://example.com/b.webp\n哭哭: https://example.com/c.jpg'}
+        placeholderTextColor={colors.textTertiary}
+        autoCapitalize="none"
+      />
+      <Pressable style={styles.importButton} onPress={handleBulkImport}>
+        <Text style={styles.importButtonText}>导入链接</Text>
+      </Pressable>
+
+      <Text style={styles.sectionTitle}>当前清单</Text>
+      <View style={styles.customStickerList}>
+        {currentStickers.length === 0 ? (
+          <View style={styles.customStickerEmpty}>
+            <Text style={styles.emptyText}>这一组已经没有表情包了。</Text>
+          </View>
+        ) : (
+          currentStickers.map((sticker) => {
+            const isPicking = pickingSticker === sticker.id;
+            const definition = buildStickerDefinitions([sticker])[0];
+            return (
+              <View key={sticker.id} style={styles.customStickerRow}>
+                <View style={styles.customStickerPreview}>
+                  {definition ? (
+                    <Image source={definition.image} style={styles.customStickerImage} resizeMode="contain" />
+                  ) : (
+                    <Text style={styles.appearanceImagePlaceholder}>ST</Text>
+                  )}
+                </View>
+                <TextInput
+                  style={[styles.input, styles.customStickerNameInput]}
+                  value={sticker.name}
+                  onChangeText={(value) => handleRenameSticker(stickerOwner, sticker, value)}
+                  onBlur={() => handleBlurStickerName(stickerOwner, sticker)}
+                  placeholder="表情包名称"
+                  placeholderTextColor={colors.textTertiary}
+                />
+                <View style={styles.appearanceIconActions}>
+                  <Pressable
+                    style={[styles.smallActionButton, isPicking && styles.smallActionButtonDisabled]}
+                    onPress={() => handleReplaceStickerImage(stickerOwner, sticker)}
+                    disabled={pickingSticker !== null}
+                  >
+                    {isPicking ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.smallActionText}>换图</Text>}
+                  </Pressable>
+                  <Pressable
+                    style={styles.smallActionButton}
+                    onPress={() => handleRemoveSticker(stickerOwner, sticker)}
+                  >
+                    <Text style={styles.smallActionText}>删除</Text>
+                  </Pressable>
+                </View>
+              </View>
+            );
+          })
+        )}
+      </View>
+    </ScrollView>
+  );
 }
 
 function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
@@ -3106,6 +3431,62 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 16,
+  },
+  stickerAddRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  stickerNameInput: {
+    flex: 1,
+    minWidth: 0,
+  },
+  customStickerList: {
+    marginBottom: 18,
+  },
+  customStickerEmpty: {
+    minHeight: 54,
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  customStickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  customStickerPreview: {
+    width: 56,
+    height: 56,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 10,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
+  },
+  customStickerImage: {
+    width: '100%',
+    height: '100%',
+  },
+  customStickerNameInput: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  bulkImportInput: {
+    minHeight: 110,
+    marginBottom: 12,
   },
   appearanceClearButton: {
     minHeight: 40,

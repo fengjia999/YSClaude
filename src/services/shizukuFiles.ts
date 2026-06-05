@@ -22,6 +22,8 @@ interface ShizukuFileModule {
   readFile: (path: string, maxBytes: number) => Promise<string>;
   writeFile: (path: string, content: string, append: boolean, createParents: boolean) => Promise<string>;
   replaceText: (path: string, oldText: string, newText: string, replaceAll: boolean) => Promise<string>;
+  copyFile: (sourcePath: string, targetPath: string, overwrite: boolean, createParents: boolean) => Promise<string>;
+  moveFile: (sourcePath: string, targetPath: string, overwrite: boolean, createParents: boolean) => Promise<string>;
 }
 
 const nativeModule = NativeModules.ShizukuFile as ShizukuFileModule | undefined;
@@ -102,6 +104,33 @@ function resolveTargetPath(root: ShizukuFileRoot, rawPath: unknown): { rootPath:
   return { rootPath, relativePath, targetPath };
 }
 
+function resolveFileOperationTargets(args: Record<string, any>, config: ShizukuFileConfig): {
+  sourceRoot: ShizukuFileRoot;
+  targetRoot: ShizukuFileRoot;
+  source: { rootPath: string; relativePath: string; targetPath: string };
+  target: { rootPath: string; relativePath: string; targetPath: string };
+  overwrite: boolean;
+  createParents: boolean;
+} {
+  const sourceRoot = getRoot(config, args.source_root_id ?? args.sourceRootId ?? args.root_id ?? args.rootId);
+  const targetRootId = args.target_root_id ?? args.targetRootId;
+  const targetRoot = targetRootId === undefined || targetRootId === null || targetRootId === ''
+    ? sourceRoot
+    : getRoot(config, targetRootId);
+  const source = resolveTargetPath(sourceRoot, args.source_path ?? args.sourcePath);
+  const target = resolveTargetPath(targetRoot, args.target_path ?? args.targetPath);
+  if (!source.relativePath) throw new Error('源文件必须指定授权根内的相对文件路径');
+  if (!target.relativePath) throw new Error('目标文件必须指定授权根内的相对文件路径');
+  return {
+    sourceRoot,
+    targetRoot,
+    source,
+    target,
+    overwrite: normalizeBoolean(args.overwrite, false),
+    createParents: normalizeBoolean(args.create_parent_dirs ?? args.createParentDirs, true),
+  };
+}
+
 export function listShizukuRoots(config: ShizukuFileConfig): string {
   if (!config.enabled) throw new Error('Shizuku 文件访问未启用，请先在 Tool 设置中打开');
   return JSON.stringify({
@@ -150,6 +179,54 @@ export async function replaceShizukuText(args: Record<string, any>, config: Shiz
     rootPath: target.rootPath,
     path: target.relativePath,
     replaceAll,
+    output,
+  }, null, 2);
+}
+
+export async function copyShizukuFile(args: Record<string, any>, config: ShizukuFileConfig): Promise<string> {
+  if (!nativeModule?.copyFile) throw new Error('Shizuku 原生模块未加载，请重新安装 development build');
+  const target = resolveFileOperationTargets(args, config);
+  const output = await nativeModule.copyFile(
+    target.source.targetPath,
+    target.target.targetPath,
+    target.overwrite,
+    target.createParents
+  );
+  return JSON.stringify({
+    sourceRootId: target.sourceRoot.id,
+    sourceRootName: target.sourceRoot.name,
+    sourceRootPath: target.source.rootPath,
+    sourcePath: target.source.relativePath,
+    targetRootId: target.targetRoot.id,
+    targetRootName: target.targetRoot.name,
+    targetRootPath: target.target.rootPath,
+    targetPath: target.target.relativePath,
+    overwrite: target.overwrite,
+    createParents: target.createParents,
+    output,
+  }, null, 2);
+}
+
+export async function moveShizukuFile(args: Record<string, any>, config: ShizukuFileConfig): Promise<string> {
+  if (!nativeModule?.moveFile) throw new Error('Shizuku 原生模块未加载，请重新安装 development build');
+  const target = resolveFileOperationTargets(args, config);
+  const output = await nativeModule.moveFile(
+    target.source.targetPath,
+    target.target.targetPath,
+    target.overwrite,
+    target.createParents
+  );
+  return JSON.stringify({
+    sourceRootId: target.sourceRoot.id,
+    sourceRootName: target.sourceRoot.name,
+    sourceRootPath: target.source.rootPath,
+    sourcePath: target.source.relativePath,
+    targetRootId: target.targetRoot.id,
+    targetRootName: target.targetRoot.name,
+    targetRootPath: target.target.rootPath,
+    targetPath: target.target.relativePath,
+    overwrite: target.overwrite,
+    createParents: target.createParents,
     output,
   }, null, 2);
 }

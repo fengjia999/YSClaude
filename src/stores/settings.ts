@@ -143,9 +143,107 @@ export interface PromptCacheConfig {
   enabled: boolean;
 }
 
+export type StickerOwner = 'user' | 'assistant';
+
+export interface CustomSticker {
+  id: string;
+  name: string;
+  uri?: string;
+  assetKey?: string;
+  createdAt: number;
+}
+
+export interface StickerConfig {
+  initialized?: boolean;
+  stickerSuggestionsEnabled?: boolean;
+  userStickers: CustomSticker[];
+  assistantStickers: CustomSticker[];
+}
+
 export interface AppearanceConfig extends AppearanceThemeSnapshot {
   appearanceThemes?: AppearanceTheme[];
   activeAppearanceThemeId?: string;
+}
+
+const DEFAULT_STICKER_NAMES = [
+  '。。。',
+  '吃我一拳',
+  '呆滞',
+  '哭哭',
+  '好喜欢',
+  '委屈',
+  '害羞',
+  '幽怨',
+  '得逞',
+  '微妙',
+  '心虚',
+  '拍拍你的脑袋',
+  '揉你的脸',
+  '摇尾巴',
+  '摇摇',
+  '无能狂怒',
+  '星星眼',
+  '杀心',
+  '理直气壮地卖萌',
+  '痛哭流涕',
+  '睡了',
+  '给你花花（耍帅）',
+  '被打呜呜',
+  '请给我',
+  '赞！',
+  '超震惊',
+  '趴在桌沿看你',
+  '蹭蹭',
+  '鄙视你',
+];
+
+function createDefaultStickerList(owner: StickerOwner): CustomSticker[] {
+  return DEFAULT_STICKER_NAMES.map((name, index) => ({
+    id: `default-${owner}-${index}`,
+    name,
+    assetKey: `${owner}:${name}`,
+    createdAt: 0,
+  }));
+}
+
+function createDefaultStickerConfig(): StickerConfig {
+  return {
+    initialized: true,
+    stickerSuggestionsEnabled: true,
+    userStickers: createDefaultStickerList('user'),
+    assistantStickers: createDefaultStickerList('assistant'),
+  };
+}
+
+function mergeStickerDefaults(defaults: CustomSticker[], current?: CustomSticker[]): CustomSticker[] {
+  const seenIds = new Set<string>();
+  const merged: CustomSticker[] = [];
+
+  [...defaults, ...(current || [])].forEach((sticker) => {
+    if (seenIds.has(sticker.id)) return;
+    seenIds.add(sticker.id);
+    merged.push(sticker);
+  });
+  return merged;
+}
+
+function normalizeStickerConfig(config?: StickerConfig): StickerConfig {
+  const defaults = createDefaultStickerConfig();
+  if (!config?.initialized) {
+    return {
+      initialized: true,
+      stickerSuggestionsEnabled: config?.stickerSuggestionsEnabled ?? true,
+      userStickers: mergeStickerDefaults(defaults.userStickers, config?.userStickers),
+      assistantStickers: mergeStickerDefaults(defaults.assistantStickers, config?.assistantStickers),
+    };
+  }
+
+  return {
+    initialized: true,
+    stickerSuggestionsEnabled: config.stickerSuggestionsEnabled ?? true,
+    userStickers: config.userStickers || [],
+    assistantStickers: config.assistantStickers || [],
+  };
 }
 
 const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig = {
@@ -230,6 +328,7 @@ interface SettingsState {
   floatingBallConfig: FloatingBallConfig;
   periodConfig: PeriodConfig;
   promptCacheConfig: PromptCacheConfig;
+  stickerConfig: StickerConfig;
   appearanceConfig: AppearanceConfig;
 
   setActiveConfig: (index: number) => void;
@@ -251,6 +350,10 @@ interface SettingsState {
   setFloatingBallConfig: (config: Partial<FloatingBallConfig>) => void;
   setPeriodConfig: (config: Partial<PeriodConfig>) => void;
   setPromptCacheConfig: (config: Partial<PromptCacheConfig>) => void;
+  setStickerSuggestionsEnabled: (enabled: boolean) => void;
+  addSticker: (owner: StickerOwner, sticker: CustomSticker) => void;
+  updateSticker: (owner: StickerOwner, id: string, patch: Partial<Pick<CustomSticker, 'name' | 'uri'>>) => void;
+  removeSticker: (owner: StickerOwner, id: string) => void;
   setAppearanceConfig: (config: Partial<AppearanceConfig>) => void;
   setTopBarIconUri: (key: TopBarIconKey, uri: string) => void;
   clearTopBarIconUri: (key: TopBarIconKey) => void;
@@ -344,6 +447,7 @@ export const useSettingsStore = create<SettingsState>()(
       promptCacheConfig: {
         enabled: false,
       },
+      stickerConfig: createDefaultStickerConfig(),
       appearanceConfig: DEFAULT_APPEARANCE_CONFIG,
 
       setActiveConfig: (index) => set({ activeConfigIndex: index }),
@@ -402,6 +506,51 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ periodConfig: { ...state.periodConfig, ...config } })),
       setPromptCacheConfig: (config) =>
         set((state) => ({ promptCacheConfig: { ...(state.promptCacheConfig || { enabled: false }), ...config } })),
+      setStickerSuggestionsEnabled: (enabled) =>
+        set((state) => {
+          const current = normalizeStickerConfig(state.stickerConfig);
+          return {
+            stickerConfig: {
+              ...current,
+              stickerSuggestionsEnabled: enabled,
+            },
+          };
+        }),
+      addSticker: (owner, sticker) =>
+        set((state) => {
+          const current = normalizeStickerConfig(state.stickerConfig);
+          const key = owner === 'user' ? 'userStickers' : 'assistantStickers';
+          return {
+            stickerConfig: {
+              ...current,
+              [key]: [sticker, ...(current[key] || [])],
+            },
+          };
+        }),
+      updateSticker: (owner, id, patch) =>
+        set((state) => {
+          const current = normalizeStickerConfig(state.stickerConfig);
+          const key = owner === 'user' ? 'userStickers' : 'assistantStickers';
+          return {
+            stickerConfig: {
+              ...current,
+              [key]: (current[key] || []).map((sticker) =>
+                sticker.id === id ? { ...sticker, ...patch } : sticker
+              ),
+            },
+          };
+        }),
+      removeSticker: (owner, id) =>
+        set((state) => {
+          const current = normalizeStickerConfig(state.stickerConfig);
+          const key = owner === 'user' ? 'userStickers' : 'assistantStickers';
+          return {
+            stickerConfig: {
+              ...current,
+              [key]: (current[key] || []).filter((sticker) => sticker.id !== id),
+            },
+          };
+        }),
       setAppearanceConfig: (config) =>
         set((state) => ({
           appearanceConfig: {
@@ -564,10 +713,14 @@ export const useSettingsStore = create<SettingsState>()(
         floatingBallConfig: state.floatingBallConfig,
         periodConfig: state.periodConfig,
         promptCacheConfig: state.promptCacheConfig,
+        stickerConfig: state.stickerConfig,
         appearanceConfig: state.appearanceConfig,
       }),
-      onRehydrateStorage: () => () => {
-        useSettingsStore.setState({ _hydrated: true });
+      onRehydrateStorage: () => (state) => {
+        useSettingsStore.setState({
+          _hydrated: true,
+          stickerConfig: normalizeStickerConfig(state?.stickerConfig),
+        });
       },
     }
   )

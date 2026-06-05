@@ -11,7 +11,7 @@ import { useSettingsStore } from '../stores/settings';
 import { playTTS, stopTTS } from '../services/tts';
 import { getToolLabel } from '../services/tools';
 import { StickerContent } from './StickerContent';
-import { hasStickerToken, isStickerOnlyContent } from '../utils/stickers';
+import { buildStickerDefinitions, hasStickerToken, isStickerOnlyContent } from '../utils/stickers';
 import { formatSmartTime } from '../utils/time';
 
 
@@ -158,6 +158,7 @@ export const ChatBubble = React.memo(function ChatBubble({
   styles = useMemo(() => createStyles(colors), [colors]);
   thinkingMarkdownStyles = useMemo(() => createThinkingMarkdownStyles(colors), [colors]);
   const appearanceConfig = useSettingsStore((state) => state.appearanceConfig);
+  const stickerConfig = useSettingsStore((state) => state.stickerConfig);
   const userBubbleColor = appearanceConfig?.userBubbleColor || colors.userBubble;
   const userBubbleTransparent = !!appearanceConfig?.userBubbleTransparent;
   const userBubbleRadius = numberOrDefault(appearanceConfig?.userBubbleRadius, 20, 0, 36);
@@ -184,6 +185,10 @@ export const ChatBubble = React.memo(function ChatBubble({
   );
 
   const isUser = message.role === 'user';
+  const messageStickers = useMemo(
+    () => buildStickerDefinitions(isUser ? stickerConfig?.userStickers : stickerConfig?.assistantStickers),
+    [isUser, stickerConfig?.assistantStickers, stickerConfig?.userStickers]
+  );
   const messageAvatarsVisible = !!appearanceConfig?.messageAvatarsVisible;
   const messageMetaVisible = appearanceConfig?.messageMetaVisible ?? true;
   const messageAvatarRadius = numberOrDefault(appearanceConfig?.messageAvatarRadius, 18, 0, 20);
@@ -192,9 +197,8 @@ export const ChatBubble = React.memo(function ChatBubble({
   const avatarImageUri = isUser ? appearanceConfig?.userAvatarImageUri : appearanceConfig?.assistantAvatarImageUri;
   const avatarName = isUser ? userDisplayName : assistantDisplayName;
   const avatarFallback = isUser ? 'U' : 'AI';
-  const stickerCatalog = isUser ? 'user' : 'assistant';
-  const messageHasSticker = hasStickerToken(message.content, stickerCatalog);
-  const messageIsStickerOnly = isStickerOnlyContent(message.content, stickerCatalog);
+  const messageHasSticker = hasStickerToken(message.content, messageStickers);
+  const messageIsStickerOnly = isStickerOnlyContent(message.content, messageStickers);
   const editMessage = useChatStore((state) => state.editMessage);
   const removeMessage = useChatStore((state) => state.removeMessage);
   const removeToolInvocation = useChatStore((state) => state.removeToolInvocation);
@@ -372,7 +376,7 @@ export const ChatBubble = React.memo(function ChatBubble({
                   style={StyleSheet.absoluteFill}
                 />
               )}
-              <StickerContent content={message.content} variant="user" userTextStyle={userTextStyle} />
+              <StickerContent content={message.content} variant="user" userTextStyle={userTextStyle} stickers={messageStickers} />
             </Pressable>
           )}
           {message.content.length === 0 && !message.imageUri && (
@@ -524,6 +528,7 @@ export const ChatBubble = React.memo(function ChatBubble({
           variant="assistant"
           markdownStyle={markdownStyles}
           markdownRules={markdownRules}
+          stickers={messageStickers}
         />
       </Pressable>
       {message.content.length > 0 && (

@@ -5,7 +5,8 @@ import Markdown from '@ronradtke/react-native-markdown-display';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 
 import { fonts } from '../theme/fonts';
-import { splitStickerContent } from '../utils/stickers';
+import { useSettingsStore } from '../stores/settings';
+import { buildStickerDefinitions, splitStickerContent, type StickerDefinition } from '../utils/stickers';
 
 
 let colors = lightColors;
@@ -15,14 +16,20 @@ interface Props {
   userTextStyle?: StyleProp<TextStyle>;
   markdownStyle?: any;
   markdownRules?: any;
+  stickers?: StickerDefinition[];
 }
 
-export function StickerContent({ content, variant, userTextStyle, markdownStyle, markdownRules }: Props) {
+export function StickerContent({ content, variant, userTextStyle, markdownStyle, markdownRules, stickers }: Props) {
   colors = useThemeColors();
   styles = useMemo(() => createStyles(colors), [colors]);
 
   const isUser = variant === 'user';
-  const chunks = splitStickerContent(content, isUser ? 'user' : 'assistant');
+  const stickerConfig = useSettingsStore((state) => state.stickerConfig);
+  const fallbackStickers = useMemo(
+    () => buildStickerDefinitions(isUser ? stickerConfig?.userStickers : stickerConfig?.assistantStickers),
+    [isUser, stickerConfig?.assistantStickers, stickerConfig?.userStickers]
+  );
+  const chunks = splitStickerContent(content, stickers || fallbackStickers);
 
   return (
     <View style={[styles.container, isUser ? styles.userContainer : styles.assistantContainer]}>
