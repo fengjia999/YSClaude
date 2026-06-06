@@ -57,6 +57,7 @@ export function ChatInput({
   const [optionsMenuVisible, setOptionsMenuVisible] = useState(false);
   const shouldInvertResponseIcon = isDarkTheme && (isStreaming || !isInputFocused);
   const responseTouchStartedRef = useRef(false);
+  const sendInFlightRef = useRef(false);
   const insets = useSafeAreaInsets();
   const { apiConfigs, activeConfigIndex, appearanceConfig, stickerConfig } = useSettingsStore();
   const current = apiConfigs[activeConfigIndex];
@@ -127,9 +128,20 @@ export function ChatInput({
     const trimmed = value.trim();
     if (!trimmed && !pendingImage) return;
     if (disabled) return;
-    await onSend(trimmed, pendingImage || undefined);
+    if (sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
+    const submittedImage = pendingImage || undefined;
     setText('');
     setPendingImage(null);
+    try {
+      await onSend(trimmed, submittedImage);
+    } catch (err) {
+      setText(value);
+      setPendingImage(submittedImage || null);
+      throw err;
+    } finally {
+      sendInFlightRef.current = false;
+    }
   };
 
   const handleChangeText = (next: string) => {
@@ -237,9 +249,12 @@ export function ChatInput({
           style={styles.input}
           value={text}
           onChangeText={handleChangeText}
+          onSubmitEditing={() => void handleSend(text)}
           placeholder="Reply to Claude..."
           placeholderTextColor={colors.textTertiary}
           multiline
+          submitBehavior="submit"
+          returnKeyType="send"
           maxLength={10000}
           editable={!disabled}
           onFocus={() => setIsInputFocused(true)}

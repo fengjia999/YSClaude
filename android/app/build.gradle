@@ -108,6 +108,8 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            applicationIdSuffix ".debug"
+            resValue "string", "app_name", "YSClaude Debug"
         }
         release {
             // Caution! In production, you need to generate your own keystore file.
@@ -129,12 +131,6 @@ android {
     }
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
-    }
-    buildFeatures {
-        aidl true
-    }
-    sourceSets {
-        main.assets.srcDirs += ['../../assets/clawd', '../../assets']
     }
 }
 
@@ -161,9 +157,6 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
-    implementation("com.github.bumptech.glide:glide:4.16.0")
-    implementation("dev.rikka.shizuku:api:13.1.5")
-    implementation("dev.rikka.shizuku:provider:13.1.5")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

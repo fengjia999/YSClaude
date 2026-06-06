@@ -16,11 +16,11 @@ import {
   type ListRenderItem,
 } from 'react-native';
 import Animated, {
+  Easing,
   useAnimatedStyle,
   useAnimatedKeyboard,
-  KeyboardState,
-  useAnimatedReaction,
-  runOnJS,
+  useSharedValue,
+  withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -59,6 +59,39 @@ const INPUT_BAR_FALLBACK_HEIGHT = 128;
 const MESSAGE_BOTTOM_GAP = 16;
 const MESSAGE_TOP_GAP = 104;
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
+
+function ChatMessageEntrance({
+  animate,
+  children,
+}: {
+  animate: boolean;
+  children: React.ReactNode;
+}) {
+  const progress = useSharedValue(animate ? 0 : 1);
+
+  useEffect(() => {
+    if (!animate) {
+      progress.value = 1;
+      return;
+    }
+
+    progress.value = 0;
+    progress.value = withTiming(1, {
+      duration: 180,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [animate, progress]);
+
+  const style = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: [
+      { translateY: (1 - progress.value) * 10 },
+      { scale: 0.985 + progress.value * 0.015 },
+    ],
+  }));
+
+  return <Animated.View style={style}>{children}</Animated.View>;
+}
 
 function startOfMonth(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), 1);
@@ -165,6 +198,7 @@ export default function ChatScreen() {
   const [dismissedDividers, setDismissedDividers] = useState<Set<string>>(new Set());
   const [visibleFloorMessageId, setVisibleFloorMessageId] = useState<string | null>(null);
   const [inputBarHeight, setInputBarHeight] = useState(INPUT_BAR_FALLBACK_HEIGHT);
+  const [enteringMessageIds, setEnteringMessageIds] = useState<Set<string>>(new Set());
   const [isInitialPositioning, setIsInitialPositioning] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const flatListRef = useRef<FlatList<Message>>(null);
@@ -174,9 +208,9 @@ export default function ChatScreen() {
   const scrollFollowUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialPositioningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const enteringMessageTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const listHeightRef = useRef(0);
   const contentHeightRef = useRef(0);
-  const keyboardLiftRef = useRef(0);
   const shouldStickToBottomRef = useRef(true);
   const messageIdsRef = useRef<string[]>([]);
   const conversationIdRef = useRef<string | null>(null);
@@ -273,7 +307,7 @@ export default function ChatScreen() {
 
       if (contentHeight > 0 && listHeight > 0) {
         flatListRef.current?.scrollToOffset({
-          offset: Math.max(0, contentHeight - listHeight + keyboardLiftRef.current),
+          offset: Math.max(0, contentHeight - listHeight),
           animated,
         });
         return;
@@ -304,11 +338,6 @@ export default function ChatScreen() {
     }, delay);
   }, [scrollToEnd]);
 
-  const updateKeyboardLiftAndScroll = useCallback((lift: number) => {
-    keyboardLiftRef.current = Math.ceil(Math.max(lift, 0));
-    scheduleScrollToEnd(24, true);
-  }, [scheduleScrollToEnd]);
-
   useEffect(() => {
     return () => {
       if (scrollFrameRef.current !== null) {
@@ -326,6 +355,8 @@ export default function ChatScreen() {
       if (toastTimerRef.current !== null) {
         clearTimeout(toastTimerRef.current);
       }
+      enteringMessageTimersRef.current.forEach((timer) => clearTimeout(timer));
+      enteringMessageTimersRef.current.clear();
     };
   }, []);
 
@@ -396,28 +427,6 @@ export default function ChatScreen() {
     setVisibleFloorMessageId(messageId);
   }, []);
 
-  useAnimatedReaction(
-    () => ({
-      state: keyboard.state.value,
-      lift: Math.max(keyboard.height.value - insets.bottom, 0),
-    }),
-    (current, previous) => {
-      if (
-        current.state === KeyboardState.OPEN &&
-        previous?.state !== KeyboardState.OPEN
-      ) {
-        runOnJS(updateKeyboardLiftAndScroll)(current.lift);
-      }
-
-      if (
-        current.state === KeyboardState.CLOSED &&
-        previous?.state !== KeyboardState.CLOSED
-      ) {
-        runOnJS(updateKeyboardLiftAndScroll)(0);
-      }
-    },
-  );
-
   useEffect(() => {
     const nextIds = messages.map((message) => message.id);
     const prevIds = messageIdsRef.current;
@@ -437,6 +446,30 @@ export default function ChatScreen() {
 
     if (!pendingScrollMessageId && appended) {
       shouldStickToBottomRef.current = true;
+      if (!conversationChanged && prevIds.length > 0) {
+        const enteringIds = nextIds.slice(prevIds.length);
+        setEnteringMessageIds((current) => {
+          const next = new Set(current);
+          enteringIds.forEach((id) => next.add(id));
+          return next;
+        });
+        enteringIds.forEach((id) => {
+          const existingTimer = enteringMessageTimersRef.current.get(id);
+          if (existingTimer) {
+            clearTimeout(existingTimer);
+          }
+          const timer = setTimeout(() => {
+            enteringMessageTimersRef.current.delete(id);
+            setEnteringMessageIds((current) => {
+              if (!current.has(id)) return current;
+              const next = new Set(current);
+              next.delete(id);
+              return next;
+            });
+          }, 420);
+          enteringMessageTimersRef.current.set(id, timer);
+        });
+      }
       scheduleScrollToEnd(32, true);
     }
   }, [conversationId, messages, pendingScrollMessageId, scheduleScrollToEnd]);
@@ -549,11 +582,11 @@ export default function ChatScreen() {
     return set;
   }, [hiddenRanges]);
 
-  const animatedContainerStyle = useAnimatedStyle(() => {
+  const animatedMessageStyle = useAnimatedStyle(() => {
     const kbHeight = keyboard.height.value;
     const lift = kbHeight > 0 ? Math.max(kbHeight - insets.bottom, 0) : 0;
     return {
-      paddingBottom: lift,
+      transform: [{ translateY: -lift }],
     };
   });
 
@@ -561,7 +594,7 @@ export default function ChatScreen() {
     const kbHeight = keyboard.height.value;
     const lift = kbHeight > 0 ? Math.max(kbHeight - insets.bottom, 0) : 0;
     return {
-      bottom: lift,
+      transform: [{ translateY: -lift }],
     };
   });
 
@@ -584,29 +617,31 @@ export default function ChatScreen() {
               }
             />
           )}
-          <ChatBubble
-            message={item}
-            blurTarget={blurTargetRef}
-            previousUserMessage={prev?.role === 'user' ? prev : null}
-            isHidden={isHidden}
-            floorNumber={floor}
-            showFloorNumber={visibleFloorMessageId === item.id && floor !== undefined}
-            onBubblePress={
-              floor !== undefined ? () => handleBubblePress(item.id) : undefined
-            }
-            isLastAssistant={
-              item.role === 'assistant' &&
-              index === messages.length - 1
-            }
-            showAssistantFooter={
-              item.role === 'assistant' &&
-              item.id === latestAssistantMessageId
-            }
-          />
+          <ChatMessageEntrance animate={enteringMessageIds.has(item.id)}>
+            <ChatBubble
+              message={item}
+              blurTarget={blurTargetRef}
+              previousUserMessage={prev?.role === 'user' ? prev : null}
+              isHidden={isHidden}
+              floorNumber={floor}
+              showFloorNumber={visibleFloorMessageId === item.id && floor !== undefined}
+              onBubblePress={
+                floor !== undefined ? () => handleBubblePress(item.id) : undefined
+              }
+              isLastAssistant={
+                item.role === 'assistant' &&
+                index === messages.length - 1
+              }
+              showAssistantFooter={
+                item.role === 'assistant' &&
+                item.id === latestAssistantMessageId
+              }
+            />
+          </ChatMessageEntrance>
         </>
       );
     },
-    [dismissedDividers, floorMap, handleBubblePress, hiddenFloorSet, latestAssistantMessageId, messages, visibleFloorMessageId]
+    [dismissedDividers, enteringMessageIds, floorMap, handleBubblePress, hiddenFloorSet, latestAssistantMessageId, messages, visibleFloorMessageId]
   );
 
   const renderOlderMessagesHeader = useCallback(() => {
@@ -658,7 +693,7 @@ export default function ChatScreen() {
 
   return (
     <Animated.View
-      style={[styles.container, animatedContainerStyle]}
+      style={styles.container}
       onTouchStart={handleScreenTouchStart}
     >
       <BlurTargetView ref={blurTargetRef} style={styles.backgroundBlurTarget}>
@@ -726,25 +761,27 @@ export default function ChatScreen() {
         </View>
       )}
 
-      {topBarFadeHidden ? (
-        <MaskedView
-          style={styles.messageMask}
-          maskElement={
-            <View style={styles.messageMaskElement}>
-              <LinearGradient
-                colors={['rgba(0,0,0,0)', 'rgba(0,0,0,1)']}
-                locations={[0, 1]}
-                style={styles.messageMaskFade}
-              />
-              <View style={styles.messageMaskSolid} />
-            </View>
-          }
-        >
-          {messageListNode}
-        </MaskedView>
-      ) : (
-        messageListNode
-      )}
+      <Animated.View style={[styles.messageLift, animatedMessageStyle]}>
+        {topBarFadeHidden ? (
+          <MaskedView
+            style={styles.messageMask}
+            maskElement={
+              <View style={styles.messageMaskElement}>
+                <LinearGradient
+                  colors={['rgba(0,0,0,0)', 'rgba(0,0,0,1)']}
+                  locations={[0, 1]}
+                  style={styles.messageMaskFade}
+                />
+                <View style={styles.messageMaskSolid} />
+              </View>
+            }
+          >
+            {messageListNode}
+          </MaskedView>
+        ) : (
+          messageListNode
+        )}
+      </Animated.View>
 
       <Animated.View
         style={[styles.inputFloating, animatedInputStyle]}
@@ -1018,6 +1055,9 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
     overflow: 'hidden',
+  },
+  messageLift: {
+    flex: 1,
   },
   messageList: {
     flex: 1,
