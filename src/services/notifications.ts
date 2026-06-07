@@ -21,6 +21,7 @@ export function startAppStateListener(): () => void {
 
 /** 应用是否处于后台（非 active）。 */
 export function isAppBackgrounded(): boolean {
+  currentAppState = AppState.currentState;
   return currentAppState !== 'active';
 }
 
@@ -38,13 +39,16 @@ export async function initNotifications(): Promise<void> {
 
   // handler：决定应用前台时收到通知如何处理（本流程下一般在后台，但 API 要求设置）
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
+    handleNotification: async () => {
+      const shouldShow = isAppBackgrounded();
+      return {
+        shouldShowAlert: shouldShow,
+        shouldShowBanner: shouldShow,
+        shouldShowList: shouldShow,
+        shouldPlaySound: shouldShow,
+        shouldSetBadge: false,
+      };
+    },
   });
 
   if (Platform.OS === 'android') {
