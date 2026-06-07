@@ -4,11 +4,12 @@ import {
   clickWebViewSelector,
   observeWebView,
   openWebView,
+  screenshotWebView,
   tapWebView,
   waitWebView,
 } from '../webviewController';
 import { normalizeWhitespace, truncateText, validateWebPageUrl } from './shared';
-import { ToolDefinition, ToolModule } from './types';
+import { ToolDefinition, ToolExecutionResult, ToolModule } from './types';
 
 const WEBVIEW_OPEN_TOOL: ToolDefinition = {
   type: 'function',
@@ -129,6 +130,20 @@ const WEBVIEW_WAIT_TOOL: ToolDefinition = {
   },
 };
 
+const WEBVIEW_SCREENSHOT_TOOL: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'webview_screenshot',
+    description:
+      '截取当前用户端 WebView 可见区域，并把截图作为图片返回给 AI 查看。仅在 webview_observe 的文本和元素坐标不足以判断时调用，例如页面主要是图片、canvas、图表、复杂布局、验证码/弹窗位置、小游戏画面或视觉状态变化。',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
 const WEBVIEW_TOOLS = [
   WEBVIEW_OPEN_TOOL,
   WEBVIEW_OBSERVE_TOOL,
@@ -136,6 +151,7 @@ const WEBVIEW_TOOLS = [
   WEBVIEW_CLICK_SELECTOR_TOOL,
   WEBVIEW_TAP_TOOL,
   WEBVIEW_WAIT_TOOL,
+  WEBVIEW_SCREENSHOT_TOOL,
 ];
 
 export const webViewTool: ToolModule = {
@@ -147,6 +163,7 @@ export const webViewTool: ToolModule = {
     webview_click_element: '点击元素',
     webview_click_selector: '点击选择器',
     webview_wait: '等待网页',
+    webview_screenshot: '网页截图',
   },
   getDefinitions: (config) => (config.webInteraction ? WEBVIEW_TOOLS : []),
   execute: async (toolName, args, context) => {
@@ -168,6 +185,8 @@ export const webViewTool: ToolModule = {
         return await executeWebViewClickSelector(args.selector, context.webInteractionConfig);
       case 'webview_wait':
         return await executeWebViewWait(args.ms, context.webInteractionConfig);
+      case 'webview_screenshot':
+        return await executeWebViewScreenshot(context.webInteractionConfig);
       default:
         return undefined;
     }
@@ -250,6 +269,25 @@ async function executeWebViewWait(
   const ms = normalizeWaitMs(rawMs);
   const observation = await waitWebView(ms);
   return formatWebViewObservation(observation);
+}
+
+async function executeWebViewScreenshot(config: WebInteractionConfig): Promise<ToolExecutionResult> {
+  ensureWebInteractionEnabled(config);
+  const screenshot = await screenshotWebView();
+  const text = [
+    '已截取当前 WebView 可见区域截图，并作为图片附在本轮工具结果后。',
+    `网页标题: ${screenshot.title || '无标题'}`,
+    `URL: ${screenshot.url}`,
+    `截图区域: ${screenshot.viewport.width} x ${screenshot.viewport.height}`,
+    '请结合截图中的视觉信息与 webview_observe 的 DOM 文本继续判断；如果需要操作页面，优先使用已有元素 index/selector，必要时再用坐标点击。',
+  ].join('\n');
+
+  return {
+    type: 'image',
+    text,
+    displayContent: text,
+    dataUrl: screenshot.dataUrl,
+  };
 }
 
 function ensureWebInteractionEnabled(config: WebInteractionConfig): void {

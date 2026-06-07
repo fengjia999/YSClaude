@@ -27,6 +27,18 @@ export interface WebViewTapResult {
   selector?: string;
 }
 
+export interface WebViewScreenshot {
+  title: string;
+  url: string;
+  dataUrl: string;
+  format: 'jpg' | 'png';
+  viewport: {
+    width: number;
+    height: number;
+  };
+  capturedAt: number;
+}
+
 export interface WebViewOpenOptions {
   userAgent?: 'mobile' | 'desktop';
 }
@@ -41,6 +53,7 @@ export interface WebViewHostActions {
   clickElement: (index: number) => Promise<WebViewTapResult>;
   clickSelector: (selector: string) => Promise<WebViewTapResult>;
   wait: (ms: number) => Promise<WebViewObservation>;
+  screenshot: () => Promise<WebViewScreenshot>;
 }
 
 let hostActions: WebViewHostActions | null = null;
@@ -98,4 +111,8 @@ export async function clickWebViewSelector(selector: string): Promise<WebViewTap
 
 export async function waitWebView(ms: number): Promise<WebViewObservation> {
   return getHostActions().wait(ms);
+}
+
+export async function screenshotWebView(): Promise<WebViewScreenshot> {
+  return getHostActions().screenshot();
 }

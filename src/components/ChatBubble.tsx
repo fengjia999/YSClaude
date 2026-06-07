@@ -193,6 +193,10 @@ export const ChatBubble = React.memo(function ChatBubble({
     }),
     [userFontSize, userTextColor]
   );
+  const userMarkdownStyles = useMemo(
+    () => createUserMarkdownStyles(colors, userFontSize, userTextColor),
+    [colors, userFontSize, userTextColor]
+  );
   markdownStyles = useMemo(
     () => createMarkdownStyles(colors, assistantFontSize, assistantTextColor, assistantTextStrokeColor, assistantTextStrokeWidth),
     [assistantFontSize, assistantTextColor, assistantTextStrokeColor, assistantTextStrokeWidth, colors]
@@ -391,7 +395,13 @@ export const ChatBubble = React.memo(function ChatBubble({
                   style={StyleSheet.absoluteFill}
                 />
               )}
-              <StickerContent content={message.content} variant="user" userTextStyle={userTextStyle} stickers={messageStickers} />
+              <StickerContent
+                content={message.content}
+                variant="user"
+                userTextStyle={userTextStyle}
+                markdownStyle={userMarkdownStyles}
+                stickers={messageStickers}
+              />
             </Pressable>
           )}
           {message.content.length === 0 && !message.imageUri && (
@@ -1017,6 +1027,51 @@ const createThinkingMarkdownStyles = (colors: ThemeColors) => StyleSheet.create(
   tr: { flexDirection: 'row', borderBottomWidth: 1, borderColor: colors.border },
   th: { minWidth: 112, flexShrink: 0, paddingVertical: 7, paddingHorizontal: 9, backgroundColor: colors.surface },
   td: { minWidth: 112, flexShrink: 0, paddingVertical: 7, paddingHorizontal: 9 },
+});
+
+const createUserMarkdownStyles = (
+  colors: ThemeColors,
+  fontSize = 16,
+  textColor = colors.text
+) => StyleSheet.create({
+  body: {
+    fontSize,
+    color: textColor,
+    lineHeight: Math.round(fontSize * 1.38),
+    fontFamily: fonts.serifBold,
+  },
+  paragraph: {
+    marginTop: 0,
+    marginBottom: 0,
+  },
+  strong: {
+    fontFamily: fonts.serifBold,
+    color: textColor,
+  },
+  em: {
+    color: textColor,
+  },
+  code_inline: {
+    backgroundColor: withAlpha(textColor, 0.1),
+    color: textColor,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+    fontSize: Math.max(12, fontSize - 1),
+    fontFamily: 'monospace',
+  },
+  bullet_list: {
+    marginVertical: 0,
+  },
+  ordered_list: {
+    marginVertical: 0,
+  },
+  list_item: {
+    marginVertical: 1,
+  },
+  link: {
+    color: colors.primary,
+  },
 });
 
 const createMarkdownStyles = (

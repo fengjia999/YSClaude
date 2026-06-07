@@ -15,6 +15,7 @@ import { WebView } from 'react-native-webview';
 import type { WebViewMessageEvent } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { randomUUID } from 'expo-crypto';
+import { captureRef } from 'react-native-view-shot';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 
 import { sqliteStorage } from '../db/kv-storage';
@@ -22,6 +23,7 @@ import {
   registerWebViewHost,
   WebViewObservation,
   WebViewOpenOptions,
+  WebViewScreenshot,
   WebViewTapResult,
 } from '../services/webviewController';
 
@@ -465,6 +467,7 @@ export function WebViewPanel() {
 
   const insets = useSafeAreaInsets();
   const webViewRef = useRef<WebView>(null);
+  const webViewCaptureRef = useRef<View>(null);
   const pendingRequests = useRef<Record<string, PendingRequest>>({});
   const pendingOpen = useRef<PendingRequest | null>(null);
   const urlRef = useRef('');
@@ -511,6 +514,7 @@ export function WebViewPanel() {
   const panelSizeRef = useRef(panelSize);
   const collapsedIconPositionRef = useRef(collapsedIconPosition);
   const insetTopRef = useRef(insets.top);
+  const webViewCaptureSizeRef = useRef({ width: 0, height: 0 });
   const dragStart = useRef(panelPosition);
   const resizeStart = useRef(panelSize);
   const collapsedDragStart = useRef(collapsedIconPosition);
@@ -854,6 +858,42 @@ export function WebViewPanel() {
     [observe]
   );
 
+  const screenshot = useCallback(async (): Promise<WebViewScreenshot> => {
+    if (!visible || !urlRef.current) {
+      throw new Error('尚未打开网页');
+    }
+    if (!webViewCaptureRef.current) {
+      throw new Error('网页截图区域尚未准备好');
+    }
+
+    setStatus('截取网页画面');
+    if (collapsed) {
+      setCollapsed(false);
+      await new Promise((resolve) => setTimeout(resolve, 220));
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+
+    const dataUrl = await captureRef(webViewCaptureRef.current, {
+      format: 'jpg',
+      quality: 0.72,
+      result: 'data-uri',
+    });
+    const size = webViewCaptureSizeRef.current;
+    setStatus('网页截图已返回给 AI');
+    return {
+      title: titleRef.current || title,
+      url: urlRef.current,
+      dataUrl,
+      format: 'jpg',
+      viewport: {
+        width: Math.round(size.width || panelSizeRef.current.width),
+        height: Math.round(size.height || panelSizeRef.current.height),
+      },
+      capturedAt: Date.now(),
+    };
+  }, [collapsed, title, visible]);
+
   const open = useCallback(async (
     nextUrl: string,
     options?: WebViewOpenOptions
@@ -900,8 +940,8 @@ export function WebViewPanel() {
   }, [observe, visible]);
 
   useEffect(() => {
-    return registerWebViewHost({ show, isOpen, observeIfOpen, open, observe, tap, clickElement, clickSelector, wait });
-  }, [clickElement, clickSelector, isOpen, observe, observeIfOpen, open, show, tap, wait]);
+    return registerWebViewHost({ show, isOpen, observeIfOpen, open, observe, tap, clickElement, clickSelector, wait, screenshot });
+  }, [clickElement, clickSelector, isOpen, observe, observeIfOpen, open, show, tap, wait, screenshot]);
 
   useEffect(() => {
     urlRef.current = url;
@@ -1277,30 +1317,42 @@ export function WebViewPanel() {
         </View>
       )}
       {url ? (
-      <WebView
-        key={webViewReloadKey}
-        ref={webViewRef}
-        source={{ uri: url }}
-        style={styles.webview}
-        javaScriptEnabled
-        domStorageEnabled
-        userAgent={webViewUserAgent}
-        scrollEnabled
-        nestedScrollEnabled
-        scalesPageToFit
-        setBuiltInZoomControls
-        setDisplayZoomControls={false}
-        directionalLockEnabled={false}
-        bounces
-        overScrollMode="always"
-        showsHorizontalScrollIndicator
-        showsVerticalScrollIndicator
-        onLoadEnd={handleLoadEnd}
-        onMessage={handleMessage}
-        onNavigationStateChange={handleNavigationStateChange}
-        injectedJavaScript={`${webViewUserAgent ? DESKTOP_LAYOUT_SCROLL_SCRIPT : ''}\n${LOGIN_OVERLAY_CLEANUP_SCRIPT}`}
-        setSupportMultipleWindows={false}
-      />
+        <View
+          ref={webViewCaptureRef}
+          collapsable={false}
+          style={styles.webviewCapture}
+          onLayout={(event) => {
+            webViewCaptureSizeRef.current = {
+              width: event.nativeEvent.layout.width,
+              height: event.nativeEvent.layout.height,
+            };
+          }}
+        >
+          <WebView
+            key={webViewReloadKey}
+            ref={webViewRef}
+            source={{ uri: url }}
+            style={styles.webview}
+            javaScriptEnabled
+            domStorageEnabled
+            userAgent={webViewUserAgent}
+            scrollEnabled
+            nestedScrollEnabled
+            scalesPageToFit
+            setBuiltInZoomControls
+            setDisplayZoomControls={false}
+            directionalLockEnabled={false}
+            bounces
+            overScrollMode="always"
+            showsHorizontalScrollIndicator
+            showsVerticalScrollIndicator
+            onLoadEnd={handleLoadEnd}
+            onMessage={handleMessage}
+            onNavigationStateChange={handleNavigationStateChange}
+            injectedJavaScript={`${webViewUserAgent ? DESKTOP_LAYOUT_SCROLL_SCRIPT : ''}\n${LOGIN_OVERLAY_CLEANUP_SCRIPT}`}
+            setSupportMultipleWindows={false}
+          />
+        </View>
       ) : (
         <ScrollView
           style={styles.homeView}
@@ -1500,6 +1552,10 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   webMenuTextDisabled: {
     color: colors.textTertiary,
+  },
+  webviewCapture: {
+    flex: 1,
+    backgroundColor: colors.background,
   },
   clearDataOptions: {
     width: '100%',

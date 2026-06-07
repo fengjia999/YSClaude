@@ -49,6 +49,14 @@ export function StickerContent({ content, variant, userTextStyle, markdownStyle,
         if (chunk.text.length === 0) return null;
 
         if (isUser) {
+          if (markdownStyle) {
+            return (
+              <Markdown key={`text-${index}`} style={markdownStyle} rules={markdownRules}>
+                {chunk.text}
+              </Markdown>
+            );
+          }
+
           return (
             <Text key={`text-${index}`} style={[styles.userText, userTextStyle]}>
               {chunk.text}

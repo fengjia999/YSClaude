@@ -42,6 +42,15 @@ export interface ToolExecutionContext {
   webCruiseEnabled?: boolean;
 }
 
+export type ToolExecutionResult =
+  | string
+  | {
+      type: 'image';
+      text: string;
+      dataUrl: string;
+      displayContent?: string;
+    };
+
 export interface ToolModule {
   id: string;
   labels: Record<string, string>;
@@ -50,5 +59,5 @@ export interface ToolModule {
     toolName: string,
     args: Record<string, any>,
     context: ToolExecutionContext
-  ) => Promise<string | undefined>;
+  ) => Promise<ToolExecutionResult | undefined>;
 }

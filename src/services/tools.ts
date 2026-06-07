@@ -9,10 +9,11 @@ import {
   ToolDefinition,
   ToolDefinitionConfig,
   ToolExecutionContext,
+  ToolExecutionResult,
   ToolModule,
 } from './toolModules/types';
 
-export type { ToolDefinition, ToolDefinitionConfig, ToolExecutionContext, ToolModule };
+export type { ToolDefinition, ToolDefinitionConfig, ToolExecutionContext, ToolExecutionResult, ToolModule };
 export { uploadDiary };
 
 const TOOL_MODULES: ToolModule[] = [
@@ -48,7 +49,7 @@ export async function executeTool(
   toolName: string,
   args: Record<string, any>,
   context: ToolExecutionContext
-): Promise<string> {
+): Promise<ToolExecutionResult> {
   try {
     for (const toolModule of TOOL_MODULES) {
       const result = await toolModule.execute(toolName, args, context);
