@@ -3,7 +3,7 @@ import type { RefObject } from 'react';
 import { View, Text, StyleSheet, Pressable, Image, Alert, TextInput, Modal, Dimensions, ScrollView } from 'react-native';
 import Markdown from '@ronradtke/react-native-markdown-display';
 import { BlurView } from 'expo-blur';
-import { Message } from '../types';
+import { Message, type GeneratedPicture } from '../types';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 import { fonts } from '../theme/fonts';
 import { useChatStore } from '../stores/chat';
@@ -220,6 +220,9 @@ export const ChatBubble = React.memo(function ChatBubble({
   const editMessage = useChatStore((state) => state.editMessage);
   const removeMessage = useChatStore((state) => state.removeMessage);
   const removeToolInvocation = useChatStore((state) => state.removeToolInvocation);
+  const regenerateGeneratedPicture = useChatStore((state) => state.regenerateGeneratedPicture);
+  const deleteGeneratedPictureOnly = useChatStore((state) => state.deleteGeneratedPictureOnly);
+  const deleteGeneratedPictureAndPrompt = useChatStore((state) => state.deleteGeneratedPictureAndPrompt);
   const addHiddenRange = useChatStore((state) => state.addHiddenRange);
   const restoreHiddenRange = useChatStore((state) => state.restoreHiddenRange);
   const setMessageHidden = useChatStore((state) => state.setMessageHidden);
@@ -533,6 +536,38 @@ export const ChatBubble = React.memo(function ChatBubble({
     });
   }
 
+  function handleGeneratedPictureLongPress(picture: GeneratedPicture) {
+    Alert.alert('图片操作', picture.prompt || 'AI 生成图片', [
+      {
+        text: '重新生成图片',
+        onPress: () => {
+          regenerateGeneratedPicture(message.id, picture.tokenIndex).catch((error) => {
+            Alert.alert('重生成失败', error?.message || '无法重新生成图片');
+          });
+        },
+      },
+      {
+        text: '只删除图片',
+        style: 'destructive',
+        onPress: () => {
+          deleteGeneratedPictureOnly(message.id, picture.tokenIndex).catch((error) => {
+            Alert.alert('删除失败', error?.message || '无法删除图片');
+          });
+        },
+      },
+      {
+        text: '删除图片和 [Pic] 文本',
+        style: 'destructive',
+        onPress: () => {
+          deleteGeneratedPictureAndPrompt(message.id, picture.tokenIndex).catch((error) => {
+            Alert.alert('删除失败', error?.message || '无法删除图片和提示词');
+          });
+        },
+      },
+      { text: '取消', style: 'cancel' },
+    ]);
+  }
+
   function handleAssistantMenuAction(index: number) {
     setAssistantMenuVisible(false);
     handleAction(index);
@@ -638,6 +673,8 @@ export const ChatBubble = React.memo(function ChatBubble({
           markdownStyle={markdownStyles}
           markdownRules={markdownRules}
           stickers={messageStickers}
+          generatedPics={message.generatedPics}
+          onPictureLongPress={handleGeneratedPictureLongPress}
         />
       </Pressable>
       <Modal

@@ -17,6 +17,7 @@ import {
   FocusTimerMode,
   FocusSessionStatus,
   ToolCall,
+  GeneratedPicture,
 } from '../types';
 import {
   ANDROID_ACCESSIBILITY_CAPTURE_NOTICE_PREFIX,
@@ -41,6 +42,7 @@ interface MessageRow {
   tool_calls: string | null;
   tool_call_id: string | null;
   tool_invocations: string | null;
+  generated_pics: string | null;
   image_uri: string | null;
   created_at: number;
 }
@@ -309,8 +311,8 @@ export async function clearPendingResponseBoundaryMessageId(
 export async function insertMessage(conversationId: string, msg: Message): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    `INSERT OR REPLACE INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_invocations, image_uri, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_invocations, generated_pics, image_uri, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       msg.id,
       conversationId,
@@ -319,6 +321,7 @@ export async function insertMessage(conversationId: string, msg: Message): Promi
       msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
       msg.toolCallId || null,
       msg.toolInvocations && msg.toolInvocations.length > 0 ? JSON.stringify(msg.toolInvocations) : null,
+      msg.generatedPics && msg.generatedPics.length > 0 ? JSON.stringify(msg.generatedPics) : null,
       msg.imageUri || null,
       msg.createdAt,
     ]
@@ -354,6 +357,17 @@ export async function updateMessageToolInvocations(
   const db = await getDatabase();
   await db.runAsync('UPDATE messages SET tool_invocations = ? WHERE id = ?', [
     invocations && invocations.length > 0 ? JSON.stringify(invocations) : null,
+    id,
+  ]);
+}
+
+export async function updateMessageGeneratedPics(
+  id: string,
+  generatedPics: GeneratedPicture[] | undefined
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE messages SET generated_pics = ? WHERE id = ?', [
+    generatedPics && generatedPics.length > 0 ? JSON.stringify(generatedPics) : null,
     id,
   ]);
 }
@@ -447,6 +461,7 @@ function mapMessageRow(row: MessageRow): Message {
     toolCalls: parseJsonArray<ToolCall>(row.tool_calls),
     toolCallId: row.tool_call_id || undefined,
     toolInvocations: parseJsonArray<ToolInvocation>(row.tool_invocations),
+    generatedPics: parseJsonArray<GeneratedPicture>(row.generated_pics),
     imageUri: row.image_uri || undefined,
     createdAt: row.created_at,
   };

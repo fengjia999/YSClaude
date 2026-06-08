@@ -1,12 +1,13 @@
 import React, { useMemo } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { StyleProp, TextStyle } from 'react-native';
 import Markdown from '@ronradtke/react-native-markdown-display';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 
 import { fonts } from '../theme/fonts';
 import { useSettingsStore } from '../stores/settings';
-import { buildStickerDefinitions, splitStickerContent, type StickerDefinition } from '../utils/stickers';
+import type { GeneratedPicture } from '../types';
+import { buildStickerDefinitions, getStickerByName, type StickerDefinition } from '../utils/stickers';
 
 
 let colors = lightColors;
@@ -17,9 +18,107 @@ interface Props {
   markdownStyle?: any;
   markdownRules?: any;
   stickers?: StickerDefinition[];
+  generatedPics?: GeneratedPicture[];
+  onPictureLongPress?: (picture: GeneratedPicture) => void;
 }
 
-export function StickerContent({ content, variant, userTextStyle, markdownStyle, markdownRules, stickers }: Props) {
+type ContentChunk =
+  | { type: 'text'; text: string }
+  | { type: 'sticker'; sticker: StickerDefinition }
+  | { type: 'picture'; picture: GeneratedPicture; prompt: string };
+
+const RICH_TOKEN_PATTERN = /\[(Sticker|Pic):([^\]\r\n]+)\]/g;
+
+function splitRichContent(
+  content: string,
+  stickers: StickerDefinition[],
+  generatedPics: GeneratedPicture[] | undefined
+): ContentChunk[] {
+  const chunks: ContentChunk[] = [];
+  const pictureByIndex = new Map((generatedPics || []).map((picture) => [picture.tokenIndex, picture]));
+  const pattern = new RegExp(RICH_TOKEN_PATTERN);
+  let lastIndex = 0;
+  let pictureIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      chunks.push({ type: 'text', text: content.slice(lastIndex, match.index) });
+    }
+
+    const rawToken = match[0];
+    const kind = match[1];
+    const value = match[2];
+
+    if (kind === 'Sticker') {
+      const sticker = getStickerByName(value, stickers);
+      chunks.push(sticker ? { type: 'sticker', sticker } : { type: 'text', text: rawToken });
+    } else {
+      const picture = pictureByIndex.get(pictureIndex);
+      chunks.push(picture ? { type: 'picture', picture, prompt: value.trim() } : { type: 'text', text: rawToken });
+      pictureIndex += 1;
+    }
+
+    lastIndex = match.index + rawToken.length;
+  }
+
+  if (lastIndex < content.length) {
+    chunks.push({ type: 'text', text: content.slice(lastIndex) });
+  }
+
+  return chunks.length > 0 ? chunks : [{ type: 'text', text: content }];
+}
+
+function GeneratedPictureCard({
+  picture,
+  prompt,
+  onLongPress,
+}: {
+  picture: GeneratedPicture;
+  prompt: string;
+  onLongPress?: () => void;
+}) {
+  const isDone = picture.status === 'done' && !!picture.imageUri;
+  const label =
+    picture.status === 'pending'
+      ? '生成中'
+      : picture.status === 'deleted'
+        ? '图片已删除'
+        : picture.status === 'failed'
+          ? '生成失败'
+          : '';
+
+  return (
+    <Pressable
+      style={styles.pictureShell}
+      onLongPress={onLongPress}
+      accessibilityLabel={`AI 生成图片：${picture.prompt || prompt}`}
+    >
+      {isDone ? (
+        <Image source={{ uri: picture.imageUri! }} style={styles.generatedPicture} resizeMode="cover" />
+      ) : (
+        <View style={styles.pictureFallback}>
+          {picture.status === 'pending' && <ActivityIndicator size="small" color={colors.primary} />}
+          <Text style={styles.pictureFallbackText} numberOfLines={5}>
+            {picture.prompt || prompt}
+          </Text>
+          {!!label && <Text style={styles.pictureStatusText}>{label}</Text>}
+        </View>
+      )}
+    </Pressable>
+  );
+}
+
+export function StickerContent({
+  content,
+  variant,
+  userTextStyle,
+  markdownStyle,
+  markdownRules,
+  stickers,
+  generatedPics,
+  onPictureLongPress,
+}: Props) {
   colors = useThemeColors();
   styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -29,7 +128,7 @@ export function StickerContent({ content, variant, userTextStyle, markdownStyle,
     () => buildStickerDefinitions(isUser ? stickerConfig?.userStickers : stickerConfig?.assistantStickers),
     [isUser, stickerConfig?.assistantStickers, stickerConfig?.userStickers]
   );
-  const chunks = splitStickerContent(content, stickers || fallbackStickers);
+  const chunks = splitRichContent(content, stickers || fallbackStickers, generatedPics);
 
   return (
     <View style={[styles.container, isUser ? styles.userContainer : styles.assistantContainer]}>
@@ -42,6 +141,17 @@ export function StickerContent({ content, variant, userTextStyle, markdownStyle,
               style={isUser ? styles.userSticker : styles.assistantSticker}
               resizeMode="contain"
               accessibilityLabel={`表情包：${chunk.sticker.name}`}
+            />
+          );
+        }
+
+        if (chunk.type === 'picture') {
+          return (
+            <GeneratedPictureCard
+              key={`picture-${index}-${chunk.picture.tokenIndex}`}
+              picture={chunk.picture}
+              prompt={chunk.prompt}
+              onLongPress={() => onPictureLongPress?.(chunk.picture)}
             />
           );
         }
@@ -99,6 +209,42 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   assistantSticker: {
     width: 104,
     height: 104,
+  },
+  pictureShell: {
+    width: 240,
+    maxWidth: '100%',
+    aspectRatio: 1,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  generatedPicture: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: colors.surface,
+  },
+  pictureFallback: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    padding: 18,
+    backgroundColor: '#FFFFFF',
+  },
+  pictureFallbackText: {
+    fontSize: 15,
+    lineHeight: 21,
+    color: '#111827',
+    textAlign: 'center',
+    fontFamily: fonts.serifBold,
+  },
+  pictureStatusText: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: '#6B7280',
+    textAlign: 'center',
   },
 });
 

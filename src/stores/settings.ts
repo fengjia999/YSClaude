@@ -163,6 +163,14 @@ export interface PromptCacheConfig {
   enabled: boolean;
 }
 
+export interface ImageGenerationConfig {
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  size: string;
+}
+
 export type StickerOwner = 'user' | 'assistant';
 
 export interface CustomSticker {
@@ -351,6 +359,8 @@ interface SettingsState {
   floatingBallConfig: FloatingBallConfig;
   periodConfig: PeriodConfig;
   promptCacheConfig: PromptCacheConfig;
+  imageGenerationConfig: ImageGenerationConfig;
+  imageGenerationPrompt: string;
   stickerConfig: StickerConfig;
   appearanceConfig: AppearanceConfig;
 
@@ -373,6 +383,8 @@ interface SettingsState {
   setFloatingBallConfig: (config: Partial<FloatingBallConfig>) => void;
   setPeriodConfig: (config: Partial<PeriodConfig>) => void;
   setPromptCacheConfig: (config: Partial<PromptCacheConfig>) => void;
+  setImageGenerationConfig: (config: Partial<ImageGenerationConfig>) => void;
+  setImageGenerationPrompt: (prompt: string) => void;
   setStickerSuggestionsEnabled: (enabled: boolean) => void;
   addSticker: (owner: StickerOwner, sticker: CustomSticker) => void;
   updateSticker: (owner: StickerOwner, id: string, patch: Partial<Pick<CustomSticker, 'name' | 'uri'>>) => void;
@@ -480,6 +492,14 @@ export const useSettingsStore = create<SettingsState>()(
       promptCacheConfig: {
         enabled: false,
       },
+      imageGenerationConfig: {
+        enabled: false,
+        baseUrl: '',
+        apiKey: '',
+        model: 'gpt-image-2',
+        size: '1024x1024',
+      },
+      imageGenerationPrompt: '高质量图片，画面清晰，主体明确，无水印，无乱码文字。',
       stickerConfig: createDefaultStickerConfig(),
       appearanceConfig: DEFAULT_APPEARANCE_CONFIG,
 
@@ -539,6 +559,14 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ periodConfig: { ...state.periodConfig, ...config } })),
       setPromptCacheConfig: (config) =>
         set((state) => ({ promptCacheConfig: { ...(state.promptCacheConfig || { enabled: false }), ...config } })),
+      setImageGenerationConfig: (config) =>
+        set((state) => ({
+          imageGenerationConfig: {
+            ...state.imageGenerationConfig,
+            ...config,
+          },
+        })),
+      setImageGenerationPrompt: (prompt) => set({ imageGenerationPrompt: prompt }),
       setStickerSuggestionsEnabled: (enabled) =>
         set((state) => {
           const current = normalizeStickerConfig(state.stickerConfig);
@@ -757,6 +785,8 @@ export const useSettingsStore = create<SettingsState>()(
         floatingBallConfig: state.floatingBallConfig,
         periodConfig: state.periodConfig,
         promptCacheConfig: state.promptCacheConfig,
+        imageGenerationConfig: state.imageGenerationConfig,
+        imageGenerationPrompt: state.imageGenerationPrompt,
         stickerConfig: state.stickerConfig,
         appearanceConfig: state.appearanceConfig,
       }),

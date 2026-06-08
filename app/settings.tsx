@@ -2016,12 +2016,26 @@ function FloatingBallTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
 
 function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const router = useRouter();
-  const { _hydrated, apiConfigs, activeConfigIndex, saveAPIConfig, removeAPIConfig, setActiveConfig } = useSettingsStore();
+  const {
+    _hydrated,
+    apiConfigs,
+    activeConfigIndex,
+    imageGenerationConfig,
+    saveAPIConfig,
+    removeAPIConfig,
+    setActiveConfig,
+    setImageGenerationConfig,
+  } = useSettingsStore();
 
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
+  const [imageEnabled, setImageEnabled] = useState(imageGenerationConfig?.enabled ?? false);
+  const [imageBaseUrl, setImageBaseUrl] = useState(imageGenerationConfig?.baseUrl || '');
+  const [imageApiKey, setImageApiKey] = useState(imageGenerationConfig?.apiKey || '');
+  const [imageModel, setImageModel] = useState(imageGenerationConfig?.model || 'gpt-image-2');
+  const [imageSize, setImageSize] = useState(imageGenerationConfig?.size || '1024x1024');
   const [models, setModels] = useState<string[]>([]);
   const [showModels, setShowModels] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -2034,6 +2048,15 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       loadConfig(activeConfigIndex);
     }
   }, [_hydrated]);
+
+  useEffect(() => {
+    if (!_hydrated) return;
+    setImageEnabled(imageGenerationConfig?.enabled ?? false);
+    setImageBaseUrl(imageGenerationConfig?.baseUrl || '');
+    setImageApiKey(imageGenerationConfig?.apiKey || '');
+    setImageModel(imageGenerationConfig?.model || 'gpt-image-2');
+    setImageSize(imageGenerationConfig?.size || '1024x1024');
+  }, [_hydrated, imageGenerationConfig]);
 
   function loadConfig(index: number) {
     const config = apiConfigs[index];
@@ -2121,6 +2144,28 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     const newIndex = useSettingsStore.getState().apiConfigs.findIndex((c) => c.name === trimmedName);
     if (newIndex >= 0) setActiveConfig(newIndex);
     showToast(`配置「${trimmedName}」已保存`);
+  }
+
+  function handleUseCurrentChatAPIForImage() {
+    const config = apiConfigs[activeConfigIndex];
+    if (!config) {
+      Alert.alert('提示', '请先保存一个聊天 API 配置');
+      return;
+    }
+    setImageBaseUrl(config.baseUrl);
+    setImageApiKey(config.apiKey);
+    showToast('已填入当前聊天 API 的 Base URL 和 Key');
+  }
+
+  function handleSaveImageAPI() {
+    setImageGenerationConfig({
+      enabled: imageEnabled,
+      baseUrl: imageBaseUrl.trim(),
+      apiKey: imageApiKey.trim(),
+      model: imageModel.trim() || 'gpt-image-2',
+      size: imageSize.trim() || '1024x1024',
+    });
+    showToast(imageEnabled ? '生图 API 已保存并启用' : '生图 API 已保存');
   }
 
   function handleSelectConfig(index: number) {
@@ -2293,6 +2338,74 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         </Pressable>
       </View>
 
+      <Text style={styles.sectionTitle}>AI 生图 API</Text>
+      <Text style={styles.hint}>识别 AI 回复里的 [Pic:图片描述] 后调用 OpenAI 兼容的 /images/generations。Base URL 和 Key 留空时会沿用当前聊天 API 配置。</Text>
+      <View style={styles.switchRow}>
+        <View style={styles.switchText}>
+          <Text style={styles.label}>启用 AI 生图</Text>
+          <Text style={styles.hint}>关闭后 [Pic:...] 只按普通文本保留，不会生成图片。</Text>
+        </View>
+        <Switch
+          value={imageEnabled}
+          onValueChange={setImageEnabled}
+          trackColor={{ false: colors.border, true: colors.primary }}
+          thumbColor="#FFFFFF"
+        />
+      </View>
+      <View style={styles.field}>
+        <Text style={styles.label}>Base URL</Text>
+        <TextInput
+          style={styles.input}
+          value={imageBaseUrl}
+          onChangeText={setImageBaseUrl}
+          placeholder="留空沿用当前聊天 API"
+          placeholderTextColor={colors.textTertiary}
+          autoCapitalize="none"
+        />
+      </View>
+      <View style={styles.field}>
+        <Text style={styles.label}>API Key</Text>
+        <TextInput
+          style={styles.input}
+          value={imageApiKey}
+          onChangeText={setImageApiKey}
+          placeholder="留空沿用当前聊天 API"
+          placeholderTextColor={colors.textTertiary}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+      </View>
+      <View style={styles.field}>
+        <Text style={styles.label}>生图模型</Text>
+        <TextInput
+          style={styles.input}
+          value={imageModel}
+          onChangeText={setImageModel}
+          placeholder="gpt-image-2"
+          placeholderTextColor={colors.textTertiary}
+          autoCapitalize="none"
+        />
+      </View>
+      <View style={styles.field}>
+        <Text style={styles.label}>图片尺寸</Text>
+        <TextInput
+          style={styles.input}
+          value={imageSize}
+          onChangeText={setImageSize}
+          placeholder="1024x1024"
+          placeholderTextColor={colors.textTertiary}
+          autoCapitalize="none"
+        />
+      </View>
+      <View style={styles.actions}>
+        <Pressable style={styles.testButton} onPress={handleUseCurrentChatAPIForImage}>
+          <Text style={styles.testButtonText}>沿用当前 API</Text>
+        </Pressable>
+        <Pressable style={styles.saveButton} onPress={handleSaveImageAPI}>
+          <Text style={styles.saveButtonText}>保存生图 API</Text>
+        </Pressable>
+      </View>
+
       <Text style={styles.sectionTitle}>数据备份</Text>
       <View style={styles.backupPanel}>
         <Text style={styles.hint}>
@@ -2364,11 +2477,13 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     stripThinking,
     periodConfig,
     promptCacheConfig,
+    imageGenerationPrompt,
     setSystemPrompt,
     setMaxOutputTokens,
     setStripThinking,
     setPeriodConfig,
     setPromptCacheConfig,
+    setImageGenerationPrompt,
   } = useSettingsStore();
   // 隐藏楼层现在按对话独立存储，数据源改为 chat store
   const {
@@ -2386,8 +2501,13 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const [toStr, setToStr] = useState('');
   const [tokensStr, setTokensStr] = useState(maxOutputTokens ? String(maxOutputTokens) : '');
   const [promptText, setPromptText] = useState(systemPrompt);
+  const [imagePromptText, setImagePromptText] = useState(imageGenerationPrompt || '');
   const [importingMyphone, setImportingMyphone] = useState(false);
   const [hiddenDiagnosticMessages, setHiddenDiagnosticMessages] = useState<ChatDiagnosticsMessage[]>([]);
+
+  useEffect(() => {
+    setImagePromptText(imageGenerationPrompt || '');
+  }, [imageGenerationPrompt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2575,6 +2695,18 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         onBlur={() => setSystemPrompt(promptText.trim())}
         multiline
         placeholder="You are a helpful assistant."
+        placeholderTextColor={colors.textTertiary}
+      />
+
+      <Text style={styles.sectionTitle}>AI 生图提示词</Text>
+      <Text style={styles.hint}>AI 回复中的 [Pic:图片描述] 会与这里的基础提示词组合后发送给生图 API；这里不会作为真实图片发回给聊天 AI。</Text>
+      <TextInput
+        style={[styles.input, { minHeight: 90, textAlignVertical: 'top' }]}
+        value={imagePromptText}
+        onChangeText={setImagePromptText}
+        onBlur={() => setImageGenerationPrompt(imagePromptText.trim())}
+        multiline
+        placeholder="例如：高质量图片，画面清晰，主体明确，无水印。"
         placeholderTextColor={colors.textTertiary}
       />
 

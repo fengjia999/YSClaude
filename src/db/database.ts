@@ -68,6 +68,7 @@ async function initTables(database: SQLite.SQLiteDatabase) {
       tool_calls TEXT,
       tool_call_id TEXT,
       tool_invocations TEXT,
+      generated_pics TEXT,
       created_at INTEGER NOT NULL,
       FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
     );
@@ -420,6 +421,15 @@ async function runMigrations(database: SQLite.SQLiteDatabase) {
   }
   if (version < 13) {
     await database.execAsync('PRAGMA user_version = 13;');
+  }
+
+  if (!(await hasColumn(database, 'messages', 'generated_pics'))) {
+    await database.execAsync(
+      `ALTER TABLE messages ADD COLUMN generated_pics TEXT;`
+    );
+  }
+  if (version < 14) {
+    await database.execAsync('PRAGMA user_version = 14;');
   }
 }
 

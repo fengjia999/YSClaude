@@ -1,8 +1,9 @@
 ﻿import { create } from 'zustand';
-import { Message, Conversation, HiddenRange, ToolInvocation } from '../types';
+import { Message, Conversation, HiddenRange, ToolInvocation, GeneratedPicture } from '../types';
 import { randomUUID } from 'expo-crypto';
 import { File } from 'expo-file-system';
 import { ChatMessage, streamChat, streamChatCompletion } from '../services/api';
+import { deleteGeneratedImageFile, generateOpenAIImage } from '../services/imageGeneration';
 import { notifyReplyReady } from '../services/notifications';
 import { useSettingsStore } from './settings';
 import { getToolDefinitions, executeTool, getToolLabel, ToolExecutionResult } from '../services/tools';
@@ -13,6 +14,12 @@ import { playTTSAndWait, stopTTS } from '../services/tts';
 import { formatCurrentTime, formatFullTime, formatTimeMarker, TIME_GAP_THRESHOLD_MS } from '../utils/time';
 import { mergeRanges, subtractRange } from '../utils/ranges';
 import { buildStickerSystemInstruction } from '../utils/stickers';
+import {
+  buildPictureSystemInstruction,
+  composePicturePrompt,
+  extractPictureTokens,
+  removePictureTokenAtIndex,
+} from '../utils/pictures';
 import { useMusicStore } from './music';
 import {
   WEB_CRUISE_NOTICE_TEXT,
@@ -36,6 +43,7 @@ import {
   insertMessage,
   updateMessageContent,
   updateMessageToolInvocations,
+  updateMessageGeneratedPics,
   deleteConversation,
   deleteMessage,
   getMessagesByConversation,
@@ -62,6 +70,203 @@ const FLOATING_STREAM_SOFT_BOUNDARIES = '，,、';
 const FLOATING_STREAM_MIN_SOFT_SEGMENT_CHARS = 18;
 const FLOATING_STREAM_MAX_SEGMENT_CHARS = 72;
 const FLOATING_VISUAL_SEGMENT_INTERVAL_MS = 2000;
+
+function createPendingGeneratedPictures(content: string, basePrompt: string | undefined): GeneratedPicture[] {
+  const now = Date.now();
+  return extractPictureTokens(content).map((token) => ({
+    tokenIndex: token.tokenIndex,
+    prompt: token.prompt,
+    finalPrompt: composePicturePrompt(basePrompt, token.prompt),
+    status: 'pending' as const,
+    createdAt: now,
+    updatedAt: now,
+  }));
+}
+
+function shiftGeneratedPicturesAfterTokenDeletion(
+  generatedPics: GeneratedPicture[] | undefined,
+  deletedTokenIndex: number
+): GeneratedPicture[] | undefined {
+  if (!generatedPics || generatedPics.length === 0) return undefined;
+  const next = generatedPics
+    .filter((picture) => picture.tokenIndex !== deletedTokenIndex)
+    .map((picture) =>
+      picture.tokenIndex > deletedTokenIndex
+        ? { ...picture, tokenIndex: picture.tokenIndex - 1, updatedAt: Date.now() }
+        : picture
+    )
+    .sort((a, b) => a.tokenIndex - b.tokenIndex);
+  return next.length > 0 ? next : undefined;
+}
+
+function getPictureRecord(
+  generatedPics: GeneratedPicture[] | undefined,
+  tokenIndex: number
+): GeneratedPicture | undefined {
+  return generatedPics?.find((picture) => picture.tokenIndex === tokenIndex);
+}
+
+function resolveImageGenerationConfig() {
+  const settings = useSettingsStore.getState();
+  const imageConfig = settings.imageGenerationConfig;
+  if (!imageConfig?.enabled) return null;
+
+  const chatConfig = settings.apiConfigs[settings.activeConfigIndex];
+  const baseUrl = imageConfig.baseUrl.trim() || chatConfig?.baseUrl?.trim() || '';
+  const apiKey = imageConfig.apiKey.trim() || chatConfig?.apiKey?.trim() || '';
+  const model = imageConfig.model.trim() || 'gpt-image-2';
+  const size = imageConfig.size.trim() || '1024x1024';
+
+  if (!baseUrl || !apiKey || !model) return null;
+  return { baseUrl, apiKey, model, size };
+}
+
+async function generatePictureForMessage(
+  get: () => ChatState,
+  set: (partial: Partial<ChatState> | ((s: ChatState) => Partial<ChatState>)) => void,
+  messageId: string,
+  tokenIndex: number,
+  prompt: string,
+  finalPrompt: string
+): Promise<void> {
+  const config = resolveImageGenerationConfig();
+  const message = get().messages.find((item) => item.id === messageId) ?? null;
+  if (!message) return;
+
+  const nextPics = [...(message.generatedPics || [])];
+  const existingIndex = nextPics.findIndex((picture) => picture.tokenIndex === tokenIndex);
+  const now = Date.now();
+
+  if (!config) {
+    const failedPic = {
+      tokenIndex,
+      prompt,
+      finalPrompt,
+      status: 'failed' as const,
+      errorMessage: '生图功能未配置',
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (existingIndex >= 0) nextPics[existingIndex] = failedPic;
+    else nextPics.push(failedPic);
+    nextPics.sort((a, b) => a.tokenIndex - b.tokenIndex);
+    set((state) => ({
+      messages: state.messages.map((item) =>
+        item.id === messageId ? { ...item, generatedPics: nextPics } : item
+      ),
+    }));
+    await updateMessageGeneratedPics(messageId, nextPics);
+    return;
+  }
+
+  const pendingPic = {
+    tokenIndex,
+    prompt,
+    finalPrompt,
+    status: 'pending' as const,
+    createdAt: now,
+    updatedAt: now,
+  };
+  if (existingIndex >= 0) nextPics[existingIndex] = pendingPic;
+  else nextPics.push(pendingPic);
+  nextPics.sort((a, b) => a.tokenIndex - b.tokenIndex);
+  set((state) => ({
+    messages: state.messages.map((item) =>
+      item.id === messageId ? { ...item, generatedPics: nextPics } : item
+    ),
+  }));
+  await updateMessageGeneratedPics(messageId, nextPics);
+
+  try {
+    const result = await generateOpenAIImage({
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      model: config.model,
+      prompt: finalPrompt,
+      size: config.size,
+    });
+
+    const latestMessage = get().messages.find((item) => item.id === messageId) ?? null;
+    if (!latestMessage) return;
+    const latestPics = [...(latestMessage.generatedPics || [])];
+    const picIndex = latestPics.findIndex((picture) => picture.tokenIndex === tokenIndex);
+    if (picIndex < 0) return;
+    if (latestPics[picIndex].status !== 'pending') return;
+    latestPics[picIndex] = {
+      ...latestPics[picIndex],
+      status: 'done',
+      imageUri: result.imageUri,
+      errorMessage: undefined,
+      updatedAt: Date.now(),
+      finalPrompt,
+    };
+    set((state) => ({
+      messages: state.messages.map((item) =>
+        item.id === messageId ? { ...item, generatedPics: latestPics } : item
+      ),
+    }));
+    await updateMessageGeneratedPics(messageId, latestPics);
+  } catch (error: any) {
+    const latestMessage = get().messages.find((item) => item.id === messageId) ?? null;
+    if (!latestMessage) return;
+    const latestPics = [...(latestMessage.generatedPics || [])];
+    const picIndex = latestPics.findIndex((picture) => picture.tokenIndex === tokenIndex);
+    if (picIndex < 0) return;
+    if (latestPics[picIndex].status !== 'pending') return;
+    latestPics[picIndex] = {
+      ...latestPics[picIndex],
+      status: 'failed',
+      errorMessage: error?.message || '生图失败',
+      updatedAt: Date.now(),
+      finalPrompt,
+      imageUri: undefined,
+    };
+    set((state) => ({
+      messages: state.messages.map((item) =>
+        item.id === messageId ? { ...item, generatedPics: latestPics } : item
+      ),
+    }));
+    await updateMessageGeneratedPics(messageId, latestPics);
+  }
+}
+
+async function processPicturesForAssistantMessage(
+  get: () => ChatState,
+  set: (partial: Partial<ChatState> | ((s: ChatState) => Partial<ChatState>)) => void,
+  messageId: string,
+  content: string
+): Promise<void> {
+  const settings = useSettingsStore.getState();
+  if (!settings.imageGenerationConfig?.enabled) return;
+
+  const tokens = extractPictureTokens(content);
+  if (tokens.length === 0) return;
+
+  const finalPromptBase = settings.imageGenerationPrompt || '';
+  const pendingPics = createPendingGeneratedPictures(content, finalPromptBase);
+
+  set((state) => ({
+    messages: state.messages.map((item) =>
+      item.id === messageId ? { ...item, generatedPics: pendingPics } : item
+    ),
+  }));
+  await updateMessageGeneratedPics(messageId, pendingPics);
+
+  for (const token of tokens) {
+    const finalPrompt = composePicturePrompt(settings.imageGenerationPrompt, token.prompt);
+    await generatePictureForMessage(get, set, messageId, token.tokenIndex, token.prompt, finalPrompt);
+  }
+}
+
+async function deleteMessageGeneratedPictureFiles(message: Message | undefined): Promise<void> {
+  if (!message?.generatedPics || message.generatedPics.length === 0) return;
+  await Promise.all(
+    message.generatedPics
+      .map((picture) => picture.imageUri)
+      .filter((imageUri): imageUri is string => !!imageUri)
+      .map((imageUri) => deleteGeneratedImageFile(imageUri))
+  );
+}
 
 interface ChatState {
   conversationId: string | null;
@@ -92,6 +297,9 @@ interface ChatState {
   editMessage: (id: string, content: string) => Promise<void>;
   removeMessage: (id: string) => Promise<void>;
   removeToolInvocation: (messageId: string, invocationIndex: number) => Promise<void>;
+  regenerateGeneratedPicture: (messageId: string, tokenIndex: number) => Promise<void>;
+  deleteGeneratedPictureOnly: (messageId: string, tokenIndex: number) => Promise<void>;
+  deleteGeneratedPictureAndPrompt: (messageId: string, tokenIndex: number) => Promise<void>;
   regenerate: () => Promise<void>;
   addHiddenRange: (range: HiddenRange) => Promise<void>;
   restoreHiddenRange: (range: HiddenRange) => Promise<void>;
@@ -988,6 +1196,10 @@ async function streamAssistantResponse(
   if (stickerInstruction) {
     stableSystemSections.push(stickerInstruction);
   }
+  const pictureInstruction = buildPictureSystemInstruction(!!settings.imageGenerationConfig?.enabled);
+  if (pictureInstruction) {
+    stableSystemSections.push(pictureInstruction);
+  }
   const fullSystemPrompt = stableSystemSections.join('\n\n---\n\n');
   const promptCacheEnabled = !!settings.promptCacheConfig?.enabled;
   const sessionId = promptCacheEnabled ? conversationId : undefined;
@@ -1053,6 +1265,7 @@ async function streamAssistantResponse(
     const messagesToDelete = currentMessages.filter((message) => transientIds.has(message.id));
 
     for (const message of messagesToDelete) {
+      await deleteMessageGeneratedPictureFiles(message);
       await deleteMessage(message.id);
     }
 
@@ -1116,6 +1329,9 @@ async function streamAssistantResponse(
     } else if (lastMsg && lastMsg.role === 'assistant') {
       await updateMessageContent(lastMsg.id, lastMsg.content);
       await updateMessageToolInvocations(lastMsg.id, lastMsg.toolInvocations);
+      processPicturesForAssistantMessage(get, set, lastMsg.id, lastMsg.content).catch((error) => {
+        console.warn('[Chat] 处理 AI 生图失败:', error);
+      });
     }
 
     await updateConversation(conversationId, { updatedAt: Date.now() });
@@ -1380,6 +1596,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const currentMessages = get().messages;
     const messagesToRemove = currentMessages.filter((message) => !beforeMessageIds.has(message.id));
     for (const message of messagesToRemove) {
+      await deleteMessageGeneratedPictureFiles(message);
       await deleteMessage(message.id);
     }
 
@@ -1550,6 +1767,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ? hiddenRanges
         : shiftHiddenRangesAfterDeletedFloor(hiddenRanges, deletedFloor);
 
+    const targetMessage = messages.find((m) => m.id === id);
+    await deleteMessageGeneratedPictureFiles(targetMessage);
     await deleteMessage(id);
     if (conversationId && deletedFloor !== null) {
       await updateHiddenRanges(conversationId, nextHiddenRanges);
@@ -1587,6 +1806,58 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await updateMessageToolInvocations(messageId, updated.length > 0 ? updated : undefined);
   },
 
+  regenerateGeneratedPicture: async (messageId: string, tokenIndex: number) => {
+    const message = get().messages.find((m) => m.id === messageId);
+    if (!message) return;
+    const token = extractPictureTokens(message.content).find((item) => item.tokenIndex === tokenIndex);
+    if (!token) return;
+    const existing = getPictureRecord(message.generatedPics, tokenIndex);
+    await deleteGeneratedImageFile(existing?.imageUri);
+    const finalPrompt = composePicturePrompt(useSettingsStore.getState().imageGenerationPrompt, token.prompt);
+    await generatePictureForMessage(get, set, messageId, tokenIndex, token.prompt, finalPrompt);
+  },
+
+  deleteGeneratedPictureOnly: async (messageId: string, tokenIndex: number) => {
+    const message = get().messages.find((m) => m.id === messageId);
+    if (!message?.generatedPics) return;
+    const existing = getPictureRecord(message.generatedPics, tokenIndex);
+    if (!existing) return;
+    await deleteGeneratedImageFile(existing.imageUri);
+    const nextPics = message.generatedPics.map((picture) =>
+      picture.tokenIndex === tokenIndex
+        ? {
+            ...picture,
+            status: 'deleted' as const,
+            imageUri: undefined,
+            errorMessage: undefined,
+            updatedAt: Date.now(),
+          }
+        : picture
+    );
+    set((state) => ({
+      messages: state.messages.map((item) =>
+        item.id === messageId ? { ...item, generatedPics: nextPics } : item
+      ),
+    }));
+    await updateMessageGeneratedPics(messageId, nextPics);
+  },
+
+  deleteGeneratedPictureAndPrompt: async (messageId: string, tokenIndex: number) => {
+    const message = get().messages.find((m) => m.id === messageId);
+    if (!message) return;
+    const existing = getPictureRecord(message.generatedPics, tokenIndex);
+    await deleteGeneratedImageFile(existing?.imageUri);
+    const content = removePictureTokenAtIndex(message.content, tokenIndex);
+    const nextPics = shiftGeneratedPicturesAfterTokenDeletion(message.generatedPics, tokenIndex);
+    set((state) => ({
+      messages: state.messages.map((item) =>
+        item.id === messageId ? { ...item, content, generatedPics: nextPics } : item
+      ),
+    }));
+    await updateMessageContent(messageId, content);
+    await updateMessageGeneratedPics(messageId, nextPics);
+  },
+
   regenerate: async () => {
     const { messages, conversationId, isStreaming } = get();
     if (isStreaming || !conversationId) return;
@@ -1598,6 +1869,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // 删除末尾的 assistant 消息（如果有），然后基于剩余历史重新生成
     const lastAssistant = messages[messages.length - 1];
     if (lastAssistant && lastAssistant.role === 'assistant') {
+      await deleteMessageGeneratedPictureFiles(lastAssistant);
       await deleteMessage(lastAssistant.id);
       set((state) => ({
         messages: state.messages.filter((m) => m.id !== lastAssistant.id),

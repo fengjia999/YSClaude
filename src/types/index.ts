@@ -7,8 +7,24 @@ export interface Message {
   // AI 回复过程中实际发生的工具调用记录，用于在气泡上方展示「调用了什么工具」。
   // 每次调用一行；随消息一起持久化。
   toolInvocations?: ToolInvocation[];
+  // AI 回复中 [Pic:...] token 对应的本地生成图状态。
+  // 真实图片仅用于客户端展示，不会自动作为 image_url 发回给 AI。
+  generatedPics?: GeneratedPicture[];
   imageUri?: string;
   createdAt: number;
+}
+
+export type GeneratedPictureStatus = 'pending' | 'done' | 'failed' | 'deleted';
+
+export interface GeneratedPicture {
+  tokenIndex: number;
+  prompt: string;
+  finalPrompt: string;
+  status: GeneratedPictureStatus;
+  imageUri?: string;
+  errorMessage?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 // 单次工具调用的展示记录（已发生的事实，区别于请求模型用的 ToolCall）
