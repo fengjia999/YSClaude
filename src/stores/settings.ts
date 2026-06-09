@@ -136,6 +136,7 @@ export interface McpToolSnapshot {
   title?: string;
   description?: string;
   inputSchema?: Record<string, any>;
+  enabled?: boolean;
 }
 
 export interface McpServerConfig {
@@ -152,6 +153,11 @@ export interface McpToolConfig {
   enabled: boolean;
   servers: McpServerConfig[];
   maxToolCalls: number;
+}
+
+export interface ToolSettingsUiConfig {
+  builtInToolsExpanded: boolean;
+  customMcpExpanded: boolean;
 }
 
 export interface ReadingConfig {
@@ -380,6 +386,7 @@ interface SettingsState {
   nativeToolConfig: NativeToolConfig;
   shizukuFileConfig: ShizukuFileConfig;
   mcpToolConfig: McpToolConfig;
+  toolSettingsUiConfig: ToolSettingsUiConfig;
   readingConfig: ReadingConfig;
   floatingBallConfig: FloatingBallConfig;
   periodConfig: PeriodConfig;
@@ -405,6 +412,7 @@ interface SettingsState {
   setNativeToolConfig: (config: Partial<NativeToolConfig>) => void;
   setShizukuFileConfig: (config: Partial<ShizukuFileConfig>) => void;
   setMcpToolConfig: (config: Partial<McpToolConfig>) => void;
+  setToolSettingsUiConfig: (config: Partial<ToolSettingsUiConfig>) => void;
   setReadingConfig: (config: Partial<ReadingConfig>) => void;
   setFloatingBallConfig: (config: Partial<FloatingBallConfig>) => void;
   setPeriodConfig: (config: Partial<PeriodConfig>) => void;
@@ -492,6 +500,10 @@ export const useSettingsStore = create<SettingsState>()(
         enabled: false,
         servers: [],
         maxToolCalls: 6,
+      },
+      toolSettingsUiConfig: {
+        builtInToolsExpanded: true,
+        customMcpExpanded: true,
       },
       readingConfig: {
         baseUrl: '',
@@ -587,6 +599,13 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({
           mcpToolConfig: {
             ...(state.mcpToolConfig || { enabled: false, servers: [], maxToolCalls: 6 }),
+            ...config,
+          },
+        })),
+      setToolSettingsUiConfig: (config) =>
+        set((state) => ({
+          toolSettingsUiConfig: {
+            ...(state.toolSettingsUiConfig || { builtInToolsExpanded: true, customMcpExpanded: true }),
             ...config,
           },
         })),
@@ -821,6 +840,7 @@ export const useSettingsStore = create<SettingsState>()(
         nativeToolConfig: state.nativeToolConfig,
         shizukuFileConfig: state.shizukuFileConfig,
         mcpToolConfig: state.mcpToolConfig,
+        toolSettingsUiConfig: state.toolSettingsUiConfig,
         readingConfig: state.readingConfig,
         floatingBallConfig: state.floatingBallConfig,
         periodConfig: state.periodConfig,

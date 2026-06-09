@@ -40,6 +40,7 @@ function getMcpToolDefinitions(config?: McpToolConfig): ToolDefinition[] {
   for (const server of config.servers || []) {
     if (!server.enabled) continue;
     for (const tool of server.tools || []) {
+      if (tool.enabled === false) continue;
       const name = makeMcpToolName(server.id, tool.name);
       definitions.push({
         type: 'function',
@@ -63,6 +64,7 @@ function resolveMcpToolName(
   for (const server of config.servers || []) {
     if (!server.enabled) continue;
     for (const tool of server.tools || []) {
+      if (tool.enabled === false) continue;
       if (makeMcpToolName(server.id, tool.name) === toolName) {
         return { server, tool };
       }

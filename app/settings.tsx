@@ -49,7 +49,7 @@ import { mergeRanges } from '../src/utils/ranges';
 
 
 let colors = lightColors;
-const TABS = ['API 配置', '对话设置', 'TTS 配置', 'Tool 设置', '日记', '悬浮球', '表情包', '欢迎语', '美化'] as const;
+const TABS = ['API 配置', '对话设置', 'TTS 配置', '工具设置', '日记', '悬浮球', '表情包', '欢迎语', '美化'] as const;
 type ToastFn = (message: string) => void;
 type SettingsTabProps = { showToast: ToastFn; keyboardBottomInset: number };
 const CUSTOM_TOP_BAR_ICON_MAX_BYTES = 2 * 1024 * 1024;
@@ -3111,6 +3111,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     nativeToolConfig,
     shizukuFileConfig,
     mcpToolConfig,
+    toolSettingsUiConfig,
     setMemoryVaultConfig,
     setWebSearchConfig,
     setWebPageReaderConfig,
@@ -3119,6 +3120,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     setNativeToolConfig,
     setShizukuFileConfig,
     setMcpToolConfig,
+    setToolSettingsUiConfig,
   } = useSettingsStore();
 
   // 记忆库本地 state
@@ -3157,15 +3159,17 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const [shizukuStatus, setShizukuStatus] = useState<ShizukuStatus | null>(null);
   const [shizukuChecking, setShizukuChecking] = useState(false);
 
-  const [mcpEnabled, setMcpEnabled] = useState(!!mcpToolConfig?.enabled);
   const [mcpMaxCalls, setMcpMaxCalls] = useState(String(mcpToolConfig?.maxToolCalls || 6));
   const [mcpServers, setMcpServers] = useState(mcpToolConfig?.servers || []);
   const [mcpServerName, setMcpServerName] = useState('');
   const [mcpServerUrl, setMcpServerUrl] = useState('');
   const [mcpServerAuth, setMcpServerAuth] = useState('');
   const [mcpSyncingServerId, setMcpSyncingServerId] = useState<string | null>(null);
-  const [builtInToolsExpanded, setBuiltInToolsExpanded] = useState(true);
-  const [customMcpExpanded, setCustomMcpExpanded] = useState(true);
+  const builtInToolsExpanded = toolSettingsUiConfig?.builtInToolsExpanded ?? true;
+  const customMcpExpanded = toolSettingsUiConfig?.customMcpExpanded ?? true;
+  const [selectedBuiltInToolKey, setSelectedBuiltInToolKey] = useState<string | null>(null);
+  const [selectedMcpServerId, setSelectedMcpServerId] = useState<string | null>(null);
+  const [selectedMcpToolRef, setSelectedMcpToolRef] = useState<{ serverId: string; toolName: string } | null>(null);
 
   // 设备原生工具本地 state
   const [deviceInfoEnabled, setDeviceInfoEnabled] = useState(!!nativeToolConfig?.deviceInfoEnabled);
@@ -3213,7 +3217,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   function handleSaveWebSearch() {
     const maxResults = parseInt(wsMaxResults, 10);
     if (wsEnabled && !wsApiKey.trim()) {
-      Alert.alert('提示', '启用联网搜索时请填写 Tavily API Key');
+      Alert.alert('提示', '启用联网搜索时请填写 Tavily 密钥');
       return;
     }
     setWebSearchConfig({
@@ -3248,7 +3252,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
 
   function handleSaveHotboard() {
     if (hbEnabled && !hbApiKey.trim()) {
-      Alert.alert('提示', '启用 AI 网页巡游热榜时请填写 UAPI API Key');
+      Alert.alert('提示', '启用 AI 网页巡游热榜时请填写 UAPI 密钥');
       return;
     }
     if (hbEnabled && hbPlatformTypes.length === 0) {
@@ -3352,16 +3356,16 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     const name = mcpServerName.trim();
     const url = mcpServerUrl.trim();
     if (!url) {
-      Alert.alert('提示', '请填写 MCP server URL');
+      Alert.alert('提示', '请填写 MCP 服务地址');
       return;
     }
     if (!/^https?:\/\//i.test(url)) {
-      Alert.alert('提示', 'MCP server URL 需要以 http:// 或 https:// 开头');
+      Alert.alert('提示', 'MCP 服务地址需要以 http:// 或 https:// 开头');
       return;
     }
     const id = sanitizeMcpServerId(name || url);
     if (mcpServers.some((server) => server.id === id)) {
-      Alert.alert('提示', '已有同 ID 的 MCP server');
+      Alert.alert('提示', '已有同 ID 的 MCP 服务');
       return;
     }
     setMcpServers((current) => [
@@ -3379,7 +3383,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     setMcpServerName('');
     setMcpServerUrl('');
     setMcpServerAuth('');
-    showToast('MCP server 已添加');
+    showToast('MCP 服务已添加');
   }
 
   function handleRemoveMcpServer(serverId: string) {
@@ -3394,6 +3398,21 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     );
   }
 
+  function handleUpdateMcpServerToolEnabled(serverId: string, toolName: string, enabled: boolean) {
+    setMcpServers((current) =>
+      current.map((server) => {
+        if (server.id !== serverId) return server;
+        return {
+          ...server,
+          tools: (server.tools || []).map((tool) =>
+            tool.name === toolName ? { ...tool, enabled } : tool
+          ),
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  }
+
   async function handleSyncMcpServer(serverId: string) {
     const server = mcpServers.find((item) => item.id === serverId);
     if (!server) return;
@@ -3403,7 +3422,13 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         url: server.url,
         authorization: server.authorization,
       });
-      handleUpdateMcpServer(serverId, { tools });
+      const enabledByName = new Map((server.tools || []).map((tool) => [tool.name, tool.enabled !== false]));
+      handleUpdateMcpServer(serverId, {
+        tools: tools.map((tool) => ({
+          ...tool,
+          enabled: enabledByName.get(tool.name) ?? true,
+        })),
+      });
       showToast(`已同步 ${tools.length} 个 MCP 工具`);
     } catch (error: any) {
       Alert.alert('同步失败', error?.message || '无法读取 MCP 工具');
@@ -3414,16 +3439,15 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
 
   function handleSaveMcpTools() {
     const maxToolCalls = parseInt(mcpMaxCalls, 10);
-    if (mcpEnabled && mcpServers.length === 0) {
-      Alert.alert('提示', '启用 MCP Tools 时请先添加至少一个远程 server');
-      return;
-    }
+    const hasEnabledMcpTool = mcpServers.some(
+      (server) => server.enabled && (server.tools || []).some((tool) => tool.enabled !== false)
+    );
     setMcpToolConfig({
-      enabled: mcpEnabled,
+      enabled: hasEnabledMcpTool,
       maxToolCalls: isNaN(maxToolCalls) || maxToolCalls <= 0 ? 6 : maxToolCalls,
       servers: mcpServers,
     });
-    showToast(mcpEnabled ? 'MCP Tools 已保存' : 'MCP Tools 已关闭');
+    showToast(hasEnabledMcpTool ? 'MCP 工具已保存' : 'MCP 工具已保存，当前没有开启的 MCP 工具');
   }
 
   function handleSaveNativeTools() {
@@ -3433,7 +3457,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       appUsageStatsEnabled,
       calendarEnabled,
     });
-    showToast('设备原生 Tool 开关已保存');
+    showToast('设备原生工具开关已保存');
   }
 
   const nativeToolRows = [
@@ -3463,452 +3487,278 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     },
   ];
 
-  return (
-    <ScrollView
-      style={styles.content}
-      contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }}
-      keyboardShouldPersistTaps="handled"
-    >
-      <Pressable
-        style={styles.toolGroupHeader}
-        onPress={() => setBuiltInToolsExpanded((value) => !value)}
-      >
-        <View style={styles.switchText}>
-          <Text style={styles.toolGroupTitle}>内置 Tool</Text>
-          <Text style={styles.hint}>应用自带的记忆库、联网、网页、Shizuku 和设备原生工具</Text>
-        </View>
-        <Text style={styles.platformToggleIcon}>{builtInToolsExpanded ? '⌃' : '⌄'}</Text>
-      </Pressable>
+  const builtInToolCards = [
+    { key: 'memoryVault', name: '记忆库', intro: '搜索长期记忆，并按日期查询日记内容。', enabled: mvEnabled, onValueChange: setMvEnabled, meta: '2 个工具' },
+    { key: 'webSearch', name: '联网搜索', intro: '通过 Tavily 搜索互联网，补充实时信息。', enabled: wsEnabled, onValueChange: setWsEnabled, meta: '1 个工具' },
+    { key: 'webPageReader', name: '网页读取', intro: '读取链接中的网页正文，可配置渲染服务兜底。', enabled: wprEnabled, onValueChange: setWprEnabled, meta: '1 个工具' },
+    { key: 'hotboard', name: '热榜查询', intro: '从已选择的平台列表中查询热门话题。', enabled: hbEnabled, onValueChange: setHbEnabled, meta: hbPlatformTypes.length + ' 个平台' },
+    { key: 'webInteraction', name: '网页交互', intro: '允许 AI 打开、观察并操作应用内网页面板。', enabled: wiEnabled, onValueChange: setWiEnabled, meta: '最多 ' + (wiMaxCalls || '8') + ' 次' },
+    { key: 'shizukuFile', name: 'Shizuku 文件', intro: '读写你明确授权的 Shizuku 路径内文件。', enabled: shizukuEnabled, onValueChange: setShizukuEnabled, meta: shizukuRoots.length + ' 个路径' },
+    { key: 'deviceInfo', name: '设备信息', intro: '读取设备品牌、型号、系统版本和运行状态。', enabled: deviceInfoEnabled, onValueChange: setDeviceInfoEnabled, meta: '设备原生' },
+    { key: 'batteryStatus', name: '电池状态', intro: '读取电量、充电状态和省电模式。', enabled: batteryStatusEnabled, onValueChange: setBatteryStatusEnabled, meta: '设备原生' },
+    { key: 'appUsageStats', name: '应用使用统计', intro: '在系统授权后读取 Android 应用使用时间统计。', enabled: appUsageStatsEnabled, onValueChange: setAppUsageStatsEnabled, meta: '设备原生' },
+    { key: 'calendar', name: '系统日历', intro: '读取、创建、修改和删除系统日历日程。', enabled: calendarEnabled, onValueChange: setCalendarEnabled, meta: '设备原生' },
+  ];
 
-      {builtInToolsExpanded && (
-        <>
-      {/* ===== 记忆库 Memory Vault ===== */}
-      <Text style={styles.sectionTitle}>记忆库 Memory Vault</Text>
-      <Text style={styles.hint}>AI 可自主调用记忆库进行语义搜索和日记查询</Text>
+  const selectedBuiltInTool = builtInToolCards.find((tool) => tool.key === selectedBuiltInToolKey) || null;
+  const selectedMcpServer = mcpServers.find((server) => server.id === selectedMcpServerId) || null;
+  const selectedMcpToolServer = selectedMcpToolRef
+    ? mcpServers.find((server) => server.id === selectedMcpToolRef.serverId) || null
+    : null;
+  const selectedMcpTool = selectedMcpToolServer && selectedMcpToolRef
+    ? (selectedMcpToolServer.tools || []).find((tool) => tool.name === selectedMcpToolRef.toolName) || null
+    : null;
+  function getEnabledMcpToolCount(server: (typeof mcpServers)[number]) {
+    return (server.tools || []).filter((tool) => tool.enabled !== false).length;
+  }
 
-      <View style={styles.switchRow}>
-        <Text style={styles.label}>启用记忆库</Text>
-        <Switch
-          value={mvEnabled}
-          onValueChange={setMvEnabled}
-          trackColor={{ true: colors.primary }}
-        />
-      </View>
+  function formatMcpToolInputSchema(tool: NonNullable<typeof selectedMcpTool>) {
+    try {
+      return JSON.stringify(tool.inputSchema || { type: 'object', properties: {}, required: [] }, null, 2);
+    } catch {
+      return '无法格式化参数定义';
+    }
+  }
 
-      <View style={styles.field}>
-        <Text style={styles.label}>记忆库地址</Text>
-        <TextInput style={styles.input} value={mvBaseUrl} onChangeText={setMvBaseUrl}
-          placeholder="https://your-memory-vault.com" placeholderTextColor={colors.textTertiary}
-          autoCapitalize="none" />
-      </View>
+  function handleSaveBuiltInTool(toolKey: string) {
+    switch (toolKey) {
+      case 'memoryVault':
+        handleSaveMemory();
+        break;
+      case 'webSearch':
+        handleSaveWebSearch();
+        break;
+      case 'webPageReader':
+        handleSaveWebPageReader();
+        break;
+      case 'hotboard':
+        handleSaveHotboard();
+        break;
+      case 'webInteraction':
+        handleSaveWebInteraction();
+        break;
+      case 'shizukuFile':
+        handleSaveShizukuFile();
+        break;
+      default:
+        handleSaveNativeTools();
+        break;
+    }
+  }
 
-      <View style={styles.field}>
-        <Text style={styles.label}>管理员 Token（上传日记用）</Text>
-        <TextInput style={styles.input} value={mvAdminToken} onChangeText={setMvAdminToken}
-          placeholder="ADMIN_TOKEN" placeholderTextColor={colors.textTertiary}
-          secureTextEntry autoCapitalize="none" />
-      </View>
+  function handleDisableBuiltInTool(toolKey: string) {
+    Alert.alert('关闭工具', '确定关闭这个工具吗？已保存的配置会保留。', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '关闭',
+        style: 'destructive',
+        onPress: () => {
+          switch (toolKey) {
+            case 'memoryVault':
+              setMvEnabled(false);
+              setMemoryVaultConfig({ enabled: false });
+              break;
+            case 'webSearch':
+              setWsEnabled(false);
+              setWebSearchConfig({ enabled: false });
+              break;
+            case 'webPageReader':
+              setWprEnabled(false);
+              setWebPageReaderConfig({ enabled: false });
+              break;
+            case 'hotboard':
+              setHbEnabled(false);
+              setHotboardConfig({ enabled: false });
+              break;
+            case 'webInteraction':
+              setWiEnabled(false);
+              setWebInteractionConfig({ enabled: false });
+              break;
+            case 'shizukuFile':
+              setShizukuEnabled(false);
+              setShizukuFileConfig({ enabled: false });
+              break;
+            case 'deviceInfo':
+              setDeviceInfoEnabled(false);
+              setNativeToolConfig({ deviceInfoEnabled: false });
+              break;
+            case 'batteryStatus':
+              setBatteryStatusEnabled(false);
+              setNativeToolConfig({ batteryStatusEnabled: false });
+              break;
+            case 'appUsageStats':
+              setAppUsageStatsEnabled(false);
+              setNativeToolConfig({ appUsageStatsEnabled: false });
+              break;
+            case 'calendar':
+              setCalendarEnabled(false);
+              setNativeToolConfig({ calendarEnabled: false });
+              break;
+          }
+          setSelectedBuiltInToolKey(null);
+          showToast('工具已关闭');
+        },
+      },
+    ]);
+  }
 
-      <View style={styles.field}>
-        <Text style={styles.label}>返回条数 (top_k)</Text>
-        <TextInput style={styles.input} value={mvTopK} onChangeText={setMvTopK}
-          keyboardType="number-pad" placeholder="5" placeholderTextColor={colors.textTertiary} />
-      </View>
+  function handleRemoveMcpServerFromModal(serverId: string) {
+    Alert.alert('删除 MCP 服务', '确定删除这个 MCP 服务及已缓存的工具列表吗？', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          handleRemoveMcpServer(serverId);
+          setSelectedMcpServerId(null);
+          showToast('MCP 服务已删除，请保存 MCP 工具');
+        },
+      },
+    ]);
+  }
 
-      <View style={styles.field}>
-        <Text style={styles.label}>Token 预算</Text>
-        <TextInput style={styles.input} value={mvTokenBudget} onChangeText={setMvTokenBudget}
-          keyboardType="number-pad" placeholder="2000" placeholderTextColor={colors.textTertiary} />
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>最大查询次数（每轮）</Text>
-        <TextInput style={styles.input} value={mvMaxCalls} onChangeText={setMvMaxCalls}
-          keyboardType="number-pad" placeholder="3" placeholderTextColor={colors.textTertiary} />
-      </View>
-
-      <View style={styles.actions}>
-        <Pressable style={styles.testButton} onPress={handleTestMemory} disabled={mvTesting}>
-          {mvTesting ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.testButtonText}>测试连接</Text>}
-        </Pressable>
-        <Pressable style={styles.saveButton} onPress={handleSaveMemory}>
-          <Text style={styles.saveButtonText}>保存配置</Text>
-        </Pressable>
-      </View>
-
-      {/* ===== 联网搜索 Web Search ===== */}
-      <Text style={styles.sectionTitle}>联网搜索 Web Search</Text>
-      <Text style={styles.hint}>AI 可自主调用 Tavily 搜索互联网获取实时信息</Text>
-
-      <View style={styles.switchRow}>
-        <Text style={styles.label}>启用联网搜索</Text>
-        <Switch
-          value={wsEnabled}
-          onValueChange={setWsEnabled}
-          trackColor={{ true: colors.primary }}
-        />
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>Tavily API Key</Text>
-        <TextInput style={styles.input} value={wsApiKey} onChangeText={setWsApiKey}
-          placeholder="tvly-..." placeholderTextColor={colors.textTertiary}
-          secureTextEntry autoCapitalize="none" />
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>搜索结果数量</Text>
-        <TextInput style={styles.input} value={wsMaxResults} onChangeText={setWsMaxResults}
-          keyboardType="number-pad" placeholder="5" placeholderTextColor={colors.textTertiary} />
-      </View>
-
-      <View style={styles.actions}>
-        <Pressable style={styles.saveButton} onPress={handleSaveWebSearch}>
-          <Text style={styles.saveButtonText}>保存配置</Text>
-        </Pressable>
-      </View>
-
-      {/* ===== 网页读取 Web Page Reader ===== */}
-      <Text style={styles.sectionTitle}>网页读取 Web Page Reader</Text>
-      <Text style={styles.hint}>开启后，AI 收到链接时可调用 read_web_page 抓取页面正文；如页面依赖 JS 渲染，可配置 Playwright 后端服务作为兜底</Text>
-
-      <View style={styles.switchRow}>
-        <Text style={styles.label}>启用网页读取</Text>
-        <Switch
-          value={wprEnabled}
-          onValueChange={setWprEnabled}
-          trackColor={{ true: colors.primary }}
-        />
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>渲染读取服务地址（可选）</Text>
-        <TextInput style={styles.input} value={wprRenderServiceUrl} onChangeText={setWprRenderServiceUrl}
-          placeholder="http://localhost:8787/read" placeholderTextColor={colors.textTertiary}
-          autoCapitalize="none" />
-      </View>
-
-      <View style={styles.actions}>
-        <Pressable style={styles.saveButton} onPress={handleSaveWebPageReader}>
-          <Text style={styles.saveButtonText}>保存配置</Text>
-        </Pressable>
-      </View>
-
-      {/* ===== AI 网页巡游 Hotboard ===== */}
-      <Text style={styles.sectionTitle}>AI 网页巡游 Hotboard</Text>
-      <Text style={styles.hint}>调用 UAPI 查询热榜：type 为必填参数，API Key 使用 Authorization: Bearer 你的密钥。平台 type 只会从下面列表中选择。</Text>
-
-      <View style={styles.switchRow}>
-        <Text style={styles.label}>启用 AI 网页巡游热榜</Text>
-        <Switch
-          value={hbEnabled}
-          onValueChange={setHbEnabled}
-          trackColor={{ true: colors.primary }}
-        />
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>UAPI API Key</Text>
-        <TextInput style={styles.input} value={hbApiKey} onChangeText={setHbApiKey}
-          placeholder="Bearer token" placeholderTextColor={colors.textTertiary}
-          secureTextEntry autoCapitalize="none" />
-      </View>
-
-      <View style={styles.field}>
-        <Pressable
-          style={styles.platformToggle}
-          onPress={() => setHbPlatformsExpanded((value) => !value)}
-        >
-          <View>
-            <Text style={styles.label}>可查询平台</Text>
-            <Text style={styles.hint}>{hbPlatformTypes.length} / {HOTBOARD_PLATFORMS.length} 已勾选</Text>
-          </View>
-          <Text style={styles.platformToggleIcon}>{hbPlatformsExpanded ? '⌃' : '⌄'}</Text>
-        </Pressable>
-        {hbPlatformsExpanded && (
+  function renderBuiltInToolEditor(toolKey: string) {
+    switch (toolKey) {
+      case 'memoryVault':
+        return (
           <>
-            <View style={styles.platformActions}>
-              <Pressable style={styles.platformActionButton} onPress={selectDefaultHotboardPlatforms}>
-                <Text style={styles.platformActionText}>默认</Text>
-              </Pressable>
-              <Pressable style={styles.platformActionButton} onPress={selectAllHotboardPlatforms}>
-                <Text style={styles.platformActionText}>全选</Text>
-              </Pressable>
-              <Pressable style={styles.platformActionButton} onPress={clearHotboardPlatforms}>
-                <Text style={styles.platformActionText}>清空</Text>
-              </Pressable>
-            </View>
-            <View style={styles.platformGrid}>
-              {HOTBOARD_PLATFORMS.map((platform) => {
-                const selected = hbPlatformTypes.includes(platform.type);
-                return (
-                  <Pressable
-                    key={platform.type}
-                    style={[styles.platformChip, selected && styles.platformChipSelected]}
-                    onPress={() => toggleHotboardPlatform(platform.type)}
-                  >
-                    <Text style={[styles.platformChipLabel, selected && styles.platformChipLabelSelected]}>{platform.label}</Text>
-                    <Text style={[styles.platformChipType, selected && styles.platformChipTypeSelected]}>{platform.type}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+            <Text style={styles.toolModalDescription}>AI 可以搜索记忆库并查询日记内容。</Text>
+            <View style={styles.switchRow}><Text style={styles.label}>启用记忆库</Text><Switch value={mvEnabled} onValueChange={setMvEnabled} trackColor={{ true: colors.primary }} /></View>
+            <View style={styles.field}><Text style={styles.label}>记忆库地址</Text><TextInput style={styles.input} value={mvBaseUrl} onChangeText={setMvBaseUrl} placeholder="https://your-memory-vault.com" placeholderTextColor={colors.textTertiary} autoCapitalize="none" /></View>
+            <View style={styles.field}><Text style={styles.label}>管理员令牌</Text><TextInput style={styles.input} value={mvAdminToken} onChangeText={setMvAdminToken} placeholder="ADMIN_TOKEN" placeholderTextColor={colors.textTertiary} secureTextEntry autoCapitalize="none" /></View>
+            <View style={styles.toolNumberRow}><View style={styles.toolNumberField}><Text style={styles.label}>返回条数</Text><TextInput style={styles.input} value={mvTopK} onChangeText={setMvTopK} keyboardType="number-pad" placeholder="5" placeholderTextColor={colors.textTertiary} /></View><View style={styles.toolNumberField}><Text style={styles.label}>令牌预算</Text><TextInput style={styles.input} value={mvTokenBudget} onChangeText={setMvTokenBudget} keyboardType="number-pad" placeholder="2000" placeholderTextColor={colors.textTertiary} /></View></View>
+            <View style={styles.field}><Text style={styles.label}>每轮最大调用次数</Text><TextInput style={styles.input} value={mvMaxCalls} onChangeText={setMvMaxCalls} keyboardType="number-pad" placeholder="3" placeholderTextColor={colors.textTertiary} /></View>
+            <Pressable style={styles.testButton} onPress={handleTestMemory} disabled={mvTesting}>{mvTesting ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.testButtonText}>测试连接</Text>}</Pressable>
           </>
-        )}
-        <Text style={styles.hint}>AI 只能从已勾选的平台 type 中调用 hotboard，用户指定未勾选平台时会自动跳过。</Text>
-      </View>
+        );
+      case 'webSearch':
+        return (<><Text style={styles.toolModalDescription}>AI 可以通过 Tavily 搜索互联网获取实时信息。</Text><View style={styles.switchRow}><Text style={styles.label}>启用联网搜索</Text><Switch value={wsEnabled} onValueChange={setWsEnabled} trackColor={{ true: colors.primary }} /></View><View style={styles.field}><Text style={styles.label}>Tavily 密钥</Text><TextInput style={styles.input} value={wsApiKey} onChangeText={setWsApiKey} placeholder="tvly-..." placeholderTextColor={colors.textTertiary} secureTextEntry autoCapitalize="none" /></View><View style={styles.field}><Text style={styles.label}>搜索结果数量</Text><TextInput style={styles.input} value={wsMaxResults} onChangeText={setWsMaxResults} keyboardType="number-pad" placeholder="5" placeholderTextColor={colors.textTertiary} /></View></>);
+      case 'webPageReader':
+        return (<><Text style={styles.toolModalDescription}>AI 可以读取链接中的网页正文。</Text><View style={styles.switchRow}><Text style={styles.label}>启用网页读取</Text><Switch value={wprEnabled} onValueChange={setWprEnabled} trackColor={{ true: colors.primary }} /></View><View style={styles.field}><Text style={styles.label}>渲染读取服务地址</Text><TextInput style={styles.input} value={wprRenderServiceUrl} onChangeText={setWprRenderServiceUrl} placeholder="http://localhost:8787/read" placeholderTextColor={colors.textTertiary} autoCapitalize="none" /></View></>);
+      case 'hotboard':
+        return (<><Text style={styles.toolModalDescription}>AI 可以从已选择的平台类型中查询热榜。</Text><View style={styles.switchRow}><Text style={styles.label}>启用热榜查询</Text><Switch value={hbEnabled} onValueChange={setHbEnabled} trackColor={{ true: colors.primary }} /></View><View style={styles.field}><Text style={styles.label}>UAPI 密钥</Text><TextInput style={styles.input} value={hbApiKey} onChangeText={setHbApiKey} placeholder="Bearer 令牌" placeholderTextColor={colors.textTertiary} secureTextEntry autoCapitalize="none" /></View><View style={styles.platformActions}><Pressable style={styles.platformActionButton} onPress={selectDefaultHotboardPlatforms}><Text style={styles.platformActionText}>默认</Text></Pressable><Pressable style={styles.platformActionButton} onPress={selectAllHotboardPlatforms}><Text style={styles.platformActionText}>全选</Text></Pressable><Pressable style={styles.platformActionButton} onPress={clearHotboardPlatforms}><Text style={styles.platformActionText}>清空</Text></Pressable></View><View style={styles.platformGrid}>{HOTBOARD_PLATFORMS.map((platform) => { const selected = hbPlatformTypes.includes(platform.type); return (<Pressable key={platform.type} style={[styles.platformChip, selected && styles.platformChipSelected]} onPress={() => toggleHotboardPlatform(platform.type)}><Text style={[styles.platformChipLabel, selected && styles.platformChipLabelSelected]}>{platform.label}</Text><Text style={[styles.platformChipType, selected && styles.platformChipTypeSelected]}>{platform.type}</Text></Pressable>); })}</View></>);
+      case 'webInteraction':
+        return (<><Text style={styles.toolModalDescription}>AI 可以在网页面板中打开、观察、点击和等待。</Text><View style={styles.switchRow}><Text style={styles.label}>启用网页交互</Text><Switch value={wiEnabled} onValueChange={setWiEnabled} trackColor={{ true: colors.primary }} /></View><View style={styles.field}><Text style={styles.label}>每轮最大操作次数</Text><TextInput style={styles.input} value={wiMaxCalls} onChangeText={setWiMaxCalls} keyboardType="number-pad" placeholder="8" placeholderTextColor={colors.textTertiary} /></View></>);
+      case 'shizukuFile':
+        return (<><Text style={styles.toolModalDescription}>读写你手动授权的 Shizuku 路径内文件。</Text><View style={styles.switchRow}><Text style={styles.label}>启用 Shizuku 文件</Text><Switch value={shizukuEnabled} onValueChange={setShizukuEnabled} trackColor={{ true: colors.primary }} /></View><View style={styles.field}><Text style={styles.label}>Shizuku 状态</Text><Text style={styles.hint}>{(() => { if (!shizukuStatus) return '尚未检测'; const status = shizukuStatus as ShizukuStatus; return '运行：' + (status.running ? '是' : '否') + ' | 授权：' + (status.permissionGranted ? '是' : '否') + ((status.uid ?? -1) >= 0 ? ' | uid ' + status.uid : ''); })()}</Text><View style={styles.platformActions}><Pressable style={styles.platformActionButton} onPress={handleCheckShizukuStatus} disabled={shizukuChecking}><Text style={styles.platformActionText}>{shizukuChecking ? '检测中' : '检测状态'}</Text></Pressable><Pressable style={styles.platformActionButton} onPress={handleRequestShizukuPermission} disabled={shizukuChecking}><Text style={styles.platformActionText}>请求授权</Text></Pressable></View></View><View style={styles.field}><Text style={styles.label}>允许访问的路径</Text><TextInput style={styles.input} value={shizukuPathInput} onChangeText={setShizukuPathInput} placeholder="/storage/emulated/0/Android/data/com.tencent.mobileqq" placeholderTextColor={colors.textTertiary} autoCapitalize="none" /><Pressable style={styles.addPathButton} onPress={handleAddShizukuRoot}><Text style={styles.addPathButtonText}>添加路径</Text></Pressable>{shizukuRoots.length === 0 ? <Text style={styles.emptyText}>尚未添加 Shizuku 路径</Text> : shizukuRoots.map((root) => (<View key={root.id} style={styles.fileRootRow}><View style={styles.nativeToolText}><Text style={styles.label}>{root.name}</Text><Text style={styles.hint}>{root.path}</Text></View><Pressable style={styles.removeSmallButton} onPress={() => handleRemoveShizukuRoot(root.id)}><Text style={styles.removeSmallButtonText}>移除</Text></Pressable></View>))}</View></>);
+      default: {
+        const nativeRow = builtInToolCards.find((tool) => tool.key === toolKey);
+        if (!nativeRow) return null;
+        return (<><Text style={styles.toolModalDescription}>{nativeRow.intro}</Text><View style={styles.switchRow}><View style={styles.switchText}><Text style={styles.label}>启用 {nativeRow.name}</Text><Text style={styles.hint}>这是设备原生工具，可能需要 Android 系统权限。</Text></View><Switch value={nativeRow.enabled} onValueChange={nativeRow.onValueChange} trackColor={{ true: colors.primary }} /></View></>);
+      }
+    }
+  }
 
-      <View style={styles.actions}>
-        <Pressable style={styles.saveButton} onPress={handleSaveHotboard}>
-          <Text style={styles.saveButtonText}>保存配置</Text>
-        </Pressable>
-      </View>
-
-      {/* ===== 网页交互 Web Interaction ===== */}
-      <Text style={styles.sectionTitle}>网页交互 Web Interaction</Text>
-      <Text style={styles.hint}>开启后，AI 可在用户端显示网页面板，并进行打开、观察、点击和等待等简单操作</Text>
-
-      <View style={styles.switchRow}>
-        <Text style={styles.label}>启用网页交互</Text>
-        <Switch
-          value={wiEnabled}
-          onValueChange={setWiEnabled}
-          trackColor={{ true: colors.primary }}
-        />
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>最大操作次数（每轮）</Text>
-        <TextInput style={styles.input} value={wiMaxCalls} onChangeText={setWiMaxCalls}
-          keyboardType="number-pad" placeholder="8" placeholderTextColor={colors.textTertiary} />
-      </View>
-
-      <View style={styles.actions}>
-        <Pressable style={styles.saveButton} onPress={handleSaveWebInteraction}>
-          <Text style={styles.saveButtonText}>保存配置</Text>
-        </Pressable>
-      </View>
-
-      {/* ===== Shizuku 文件访问 ===== */}
-      <Text style={styles.sectionTitle}>Shizuku 文件访问（读写）</Text>
-      <Text style={styles.hint}>个人高级模式：通过 Shizuku 以 shell 身份读写你手动添加的绝对路径。AI 仍只能访问这些路径根内的相对路径。</Text>
-
-      <View style={styles.switchRow}>
-        <View style={styles.switchText}>
-          <Text style={styles.label}>启用 Shizuku 文件访问</Text>
-          <Text style={styles.hint}>适合访问 Android/data 下普通权限无法访问的目录；写入和修改只会在你添加的路径根内执行</Text>
-        </View>
-        <Switch
-          value={shizukuEnabled}
-          onValueChange={setShizukuEnabled}
-          trackColor={{ true: colors.primary }}
-        />
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>Shizuku 状态</Text>
-        <Text style={styles.hint}>
-          {shizukuStatus
-            ? `运行：${shizukuStatus.running ? '是' : '否'} · 授权：${shizukuStatus.permissionGranted ? '是' : '否'}${shizukuStatus.uid != null && shizukuStatus.uid >= 0 ? ` · uid ${shizukuStatus.uid}` : ''}`
-            : '尚未检测'}
-        </Text>
-        <View style={styles.platformActions}>
-          <Pressable style={styles.platformActionButton} onPress={handleCheckShizukuStatus} disabled={shizukuChecking}>
-            <Text style={styles.platformActionText}>{shizukuChecking ? '检测中' : '检测状态'}</Text>
-          </Pressable>
-          <Pressable style={styles.platformActionButton} onPress={handleRequestShizukuPermission} disabled={shizukuChecking}>
-            <Text style={styles.platformActionText}>请求授权</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>允许访问的路径</Text>
-        <TextInput
-          style={styles.input}
-          value={shizukuPathInput}
-          onChangeText={setShizukuPathInput}
-          placeholder="/storage/emulated/0/Android/data/com.tencent.mobileqq"
-          placeholderTextColor={colors.textTertiary}
-          autoCapitalize="none"
-        />
-        <Pressable style={styles.addPathButton} onPress={handleAddShizukuRoot}>
-          <Text style={styles.addPathButtonText}>添加路径</Text>
-        </Pressable>
-        {shizukuRoots.length === 0 ? (
-          <Text style={styles.emptyText}>尚未添加 Shizuku 路径</Text>
-        ) : (
-          shizukuRoots.map((root) => (
-            <View key={root.id} style={styles.fileRootRow}>
-              <View style={styles.nativeToolText}>
-                <Text style={styles.label}>{root.name}</Text>
-                <Text style={styles.hint}>{root.path}</Text>
-              </View>
-              <Pressable style={styles.removeSmallButton} onPress={() => handleRemoveShizukuRoot(root.id)}>
-                <Text style={styles.removeSmallButtonText}>移除</Text>
-              </Pressable>
-            </View>
-          ))
-        )}
-      </View>
-
-      <View style={styles.actions}>
-        <Pressable style={styles.saveButton} onPress={handleSaveShizukuFile}>
-          <Text style={styles.saveButtonText}>保存 Shizuku 配置</Text>
-        </Pressable>
-      </View>
-
-      {/* ===== 设备原生 Tools ===== */}
-      <Text style={styles.sectionTitle}>设备原生 Tools</Text>
-      <Text style={styles.hint}>这些工具会直接访问用户设备能力；日历会触发系统权限请求，其他受限能力会先返回实现限制说明</Text>
-
-      {nativeToolRows.map((row) => (
-        <View key={row.label} style={styles.nativeToolRow}>
-          <View style={styles.nativeToolText}>
-            <Text style={styles.label}>{row.label}</Text>
-            <Text style={styles.hint}>{row.hint}</Text>
+  function renderMcpServerEditor() {
+    if (!selectedMcpServer) return null;
+    const enabledToolCount = getEnabledMcpToolCount(selectedMcpServer);
+    return (
+      <>
+        <Text style={styles.toolModalDescription}>远程 HTTP MCP 服务。同步会读取并缓存工具列表。</Text>
+        <View style={styles.switchRow}>
+          <View style={styles.switchText}>
+            <Text style={styles.label}>启用此服务</Text>
+            <Text style={styles.hint}>
+              {enabledToolCount} / {selectedMcpServer.tools.length} 个工具已开启 | {selectedMcpServer.enabled ? '服务已开启' : '服务已关闭'}
+            </Text>
           </View>
           <Switch
-            value={row.value}
-            onValueChange={row.onValueChange}
+            value={selectedMcpServer.enabled}
+            onValueChange={(value) => handleUpdateMcpServer(selectedMcpServer.id, { enabled: value })}
             trackColor={{ true: colors.primary }}
           />
         </View>
-      ))}
-
-      <View style={styles.actions}>
-        <Pressable style={styles.saveButton} onPress={handleSaveNativeTools}>
-          <Text style={styles.saveButtonText}>保存设备 Tool 开关</Text>
-        </Pressable>
-      </View>
-        </>
-      )}
-
-      <Pressable
-        style={styles.toolGroupHeader}
-        onPress={() => setCustomMcpExpanded((value) => !value)}
-      >
-        <View style={styles.switchText}>
-          <Text style={styles.toolGroupTitle}>自定义 MCP</Text>
-          <Text style={styles.hint}>远程 HTTP MCP server 同步来的自定义工具</Text>
+        <View style={styles.field}>
+          <Text style={styles.label}>服务名称</Text>
+          <TextInput
+            style={styles.input}
+            value={selectedMcpServer.name}
+            onChangeText={(value) => handleUpdateMcpServer(selectedMcpServer.id, { name: value })}
+            placeholder="我的 MCP 服务"
+            placeholderTextColor={colors.textTertiary}
+          />
         </View>
-        <Text style={styles.platformToggleIcon}>{customMcpExpanded ? '⌃' : '⌄'}</Text>
-      </Pressable>
-
-      {customMcpExpanded && (
-        <>
-      <Text style={styles.sectionTitle}>MCP Remote Tools</Text>
-      <Text style={styles.hint}>仅支持远程 HTTP MCP server。点击同步后会读取 tools/list 并缓存工具声明。</Text>
-
-      <View style={styles.switchRow}>
-        <Text style={styles.label}>启用 MCP Tools</Text>
-        <Switch
-          value={mcpEnabled}
-          onValueChange={setMcpEnabled}
-          trackColor={{ true: colors.primary }}
-        />
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>每轮最大调用次数</Text>
-        <TextInput
-          style={styles.input}
-          value={mcpMaxCalls}
-          onChangeText={setMcpMaxCalls}
-          keyboardType="number-pad"
-          placeholder="6"
-          placeholderTextColor={colors.textTertiary}
-        />
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>Server 名称</Text>
-        <TextInput
-          style={styles.input}
-          value={mcpServerName}
-          onChangeText={setMcpServerName}
-          placeholder="我的记忆库"
-          placeholderTextColor={colors.textTertiary}
-        />
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>Server URL</Text>
-        <TextInput
-          style={styles.input}
-          value={mcpServerUrl}
-          onChangeText={setMcpServerUrl}
-          placeholder="https://example.com/mcp"
-          placeholderTextColor={colors.textTertiary}
-          autoCapitalize="none"
-        />
-      </View>
-
-      <View style={styles.field}>
-        <Text style={styles.label}>Authorization（可选）</Text>
-        <TextInput
-          style={styles.input}
-          value={mcpServerAuth}
-          onChangeText={setMcpServerAuth}
-          placeholder="Bearer xxx"
-          placeholderTextColor={colors.textTertiary}
-          secureTextEntry
-          autoCapitalize="none"
-        />
-      </View>
-
-      <View style={styles.platformActions}>
-        <Pressable style={styles.platformActionButton} onPress={handleAddMcpServer}>
-          <Text style={styles.platformActionText}>添加 Server</Text>
+        <View style={styles.field}>
+          <Text style={styles.label}>服务地址</Text>
+          <TextInput
+            style={styles.input}
+            value={selectedMcpServer.url}
+            onChangeText={(value) => handleUpdateMcpServer(selectedMcpServer.id, { url: value })}
+            placeholder="https://example.com/mcp"
+            placeholderTextColor={colors.textTertiary}
+            autoCapitalize="none"
+          />
+        </View>
+        <View style={styles.field}>
+          <Text style={styles.label}>授权信息</Text>
+          <TextInput
+            style={styles.input}
+            value={selectedMcpServer.authorization}
+            onChangeText={(value) => handleUpdateMcpServer(selectedMcpServer.id, { authorization: value })}
+            placeholder="Bearer 令牌"
+            placeholderTextColor={colors.textTertiary}
+            secureTextEntry
+            autoCapitalize="none"
+          />
+        </View>
+        <View style={styles.toolListPreview}>
+          {selectedMcpServer.tools.length === 0 ? (
+            <Text style={styles.emptyText}>尚未同步工具</Text>
+          ) : (
+            selectedMcpServer.tools.map((tool) => (
+              <View key={tool.name} style={styles.toolListPreviewItem}>
+                <Pressable
+                  style={styles.toolListPreviewText}
+                  onPress={() => setSelectedMcpToolRef({ serverId: selectedMcpServer.id, toolName: tool.name })}
+                >
+                  <Text style={styles.toolListPreviewName}>{tool.title || tool.name}</Text>
+                  {!!tool.description && (
+                    <Text style={styles.toolListPreviewDescription} numberOfLines={2}>
+                      {tool.description}
+                    </Text>
+                  )}
+                  <Text style={styles.toolListPreviewStatus}>查看详情</Text>
+                </Pressable>
+                <Switch
+                  value={tool.enabled !== false}
+                  onValueChange={(value) =>
+                    handleUpdateMcpServerToolEnabled(selectedMcpServer.id, tool.name, value)
+                  }
+                  trackColor={{ false: colors.border, true: colors.primary }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+            ))
+          )}
+        </View>
+        <Pressable
+          style={styles.testButton}
+          onPress={() => handleSyncMcpServer(selectedMcpServer.id)}
+          disabled={mcpSyncingServerId === selectedMcpServer.id}
+        >
+          <Text style={styles.testButtonText}>
+            {mcpSyncingServerId === selectedMcpServer.id ? '同步中' : '同步工具列表'}
+          </Text>
         </Pressable>
-      </View>
+      </>
+    );
+  }
 
-      {mcpServers.length === 0 ? (
-        <Text style={styles.emptyText}>尚未添加 MCP server</Text>
-      ) : (
-        mcpServers.map((server) => (
-          <View key={server.id} style={styles.fileRootRow}>
-            <View style={styles.nativeToolText}>
-              <Text style={styles.label}>{server.name}</Text>
-              <Text style={styles.hint}>{server.url}</Text>
-              <Text style={styles.hint}>{server.tools.length} 个工具 · {server.enabled ? '已启用' : '已关闭'}</Text>
-            </View>
-            <View style={styles.mcpServerActions}>
-              <Pressable
-                style={styles.platformActionButton}
-                onPress={() => handleSyncMcpServer(server.id)}
-                disabled={mcpSyncingServerId === server.id}
-              >
-                <Text style={styles.platformActionText}>
-                  {mcpSyncingServerId === server.id ? '同步中' : '同步'}
-                </Text>
-              </Pressable>
-              <Pressable
-                style={styles.platformActionButton}
-                onPress={() => handleUpdateMcpServer(server.id, { enabled: !server.enabled })}
-              >
-                <Text style={styles.platformActionText}>{server.enabled ? '关闭' : '启用'}</Text>
-              </Pressable>
-              <Pressable
-                style={styles.platformActionButton}
-                onPress={() => handleRemoveMcpServer(server.id)}
-              >
-                <Text style={styles.platformActionText}>删除</Text>
-              </Pressable>
-            </View>
-          </View>
-        ))
-      )}
-
-      <View style={styles.actions}>
-        <Pressable style={styles.saveButton} onPress={handleSaveMcpTools}>
-          <Text style={styles.saveButtonText}>保存 MCP Tools</Text>
-        </Pressable>
-      </View>
-        </>
-      )}
-    </ScrollView>
+  return (
+    <>
+      <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }} keyboardShouldPersistTaps="handled">
+        <Pressable style={styles.toolGroupHeader} onPress={() => setToolSettingsUiConfig({ builtInToolsExpanded: !builtInToolsExpanded })}><View style={styles.switchText}><Text style={styles.toolGroupTitle}>内置工具</Text><Text style={styles.hint}>点击卡片查看和编辑详情；开关会先更新本页状态，保存后才写入配置。</Text></View><Text style={styles.platformToggleIcon}>{builtInToolsExpanded ? '↑' : '↓'}</Text></Pressable>
+        {builtInToolsExpanded && <View style={styles.toolCardGrid}>{builtInToolCards.map((tool) => (<Pressable key={tool.key} style={[styles.toolCard, tool.enabled && styles.toolCardEnabled]} onPress={() => setSelectedBuiltInToolKey(tool.key)}><View style={styles.toolCardTop}><View style={styles.toolCardText}><Text style={styles.toolCardName} numberOfLines={1}>{tool.name}</Text><Text style={styles.toolCardMeta}>{tool.meta}</Text></View><Switch value={tool.enabled} onValueChange={tool.onValueChange} trackColor={{ false: colors.border, true: colors.primary }} thumbColor="#FFFFFF" /></View><Text style={styles.toolCardIntro} numberOfLines={3}>{tool.intro}</Text><Text style={[styles.toolCardStatus, tool.enabled && styles.toolCardStatusEnabled]}>{tool.enabled ? '已开启' : '已关闭'}</Text></Pressable>))}</View>}
+        <Pressable style={styles.toolGroupHeader} onPress={() => setToolSettingsUiConfig({ customMcpExpanded: !customMcpExpanded })}><View style={styles.switchText}><Text style={styles.toolGroupTitle}>自定义 MCP</Text><Text style={styles.hint}>每个远程 MCP 服务都单独用卡片展示，点开后可以同步、编辑或删除。</Text></View><Text style={styles.platformToggleIcon}>{customMcpExpanded ? '↑' : '↓'}</Text></Pressable>
+        {customMcpExpanded && <><View style={styles.field}><Text style={styles.label}>每轮最大调用次数</Text><TextInput style={styles.input} value={mcpMaxCalls} onChangeText={setMcpMaxCalls} keyboardType="number-pad" placeholder="6" placeholderTextColor={colors.textTertiary} /></View><View style={styles.toolAddPanel}><Text style={styles.sectionTitle}>添加 MCP 服务</Text><TextInput style={styles.input} value={mcpServerName} onChangeText={setMcpServerName} placeholder="服务名称" placeholderTextColor={colors.textTertiary} /><TextInput style={styles.input} value={mcpServerUrl} onChangeText={setMcpServerUrl} placeholder="https://example.com/mcp" placeholderTextColor={colors.textTertiary} autoCapitalize="none" /><TextInput style={styles.input} value={mcpServerAuth} onChangeText={setMcpServerAuth} placeholder="授权信息，可选" placeholderTextColor={colors.textTertiary} secureTextEntry autoCapitalize="none" /><Pressable style={styles.addPathButton} onPress={handleAddMcpServer}><Text style={styles.addPathButtonText}>添加服务</Text></Pressable></View>{mcpServers.length === 0 ? <Text style={styles.emptyText}>尚未添加 MCP 服务</Text> : <View style={styles.toolCardGrid}>{mcpServers.map((server) => (<Pressable key={server.id} style={[styles.toolCard, server.enabled && styles.toolCardEnabled]} onPress={() => setSelectedMcpServerId(server.id)}><View style={styles.toolCardTop}><View style={styles.toolCardText}><Text style={styles.toolCardName} numberOfLines={1}>{server.name}</Text><Text style={styles.toolCardMeta}>{getEnabledMcpToolCount(server)} / {server.tools.length} 个工具已开启</Text></View><Switch value={server.enabled} onValueChange={(value) => handleUpdateMcpServer(server.id, { enabled: value })} trackColor={{ false: colors.border, true: colors.primary }} thumbColor="#FFFFFF" /></View><Text style={styles.toolCardIntro} numberOfLines={2}>{server.url}</Text><Text style={[styles.toolCardStatus, server.enabled && styles.toolCardStatusEnabled]}>{server.enabled ? '已开启' : '已关闭'}</Text></Pressable>))}</View>}<View style={styles.actions}><Pressable style={styles.saveButton} onPress={handleSaveMcpTools}><Text style={styles.saveButtonText}>保存 MCP 工具</Text></Pressable></View></>}
+      </ScrollView>
+      <Modal visible={!!selectedBuiltInTool} transparent animationType="fade" onRequestClose={() => setSelectedBuiltInToolKey(null)}><View style={styles.overlay}><View style={[styles.modal, styles.toolModal]}><View style={styles.toolModalHeader}><View style={styles.switchText}><Text style={styles.modalTitle}>{selectedBuiltInTool?.name || '工具'}</Text>{!!selectedBuiltInTool && <Text style={styles.hint}>{selectedBuiltInTool.meta}</Text>}</View><Pressable style={styles.modalCancel} onPress={() => setSelectedBuiltInToolKey(null)}><Text style={styles.modalCancelText}>关闭</Text></Pressable></View><ScrollView style={styles.toolModalBody} keyboardShouldPersistTaps="handled">{!!selectedBuiltInTool && renderBuiltInToolEditor(selectedBuiltInTool.key)}</ScrollView>{!!selectedBuiltInTool && <View style={styles.toolModalActions}><Pressable style={styles.removeSmallButton} onPress={() => handleDisableBuiltInTool(selectedBuiltInTool.key)}><Text style={styles.removeSmallButtonText}>删除/关闭</Text></Pressable><Pressable style={styles.modalConfirm} onPress={() => { handleSaveBuiltInTool(selectedBuiltInTool.key); setSelectedBuiltInToolKey(null); }}><Text style={styles.modalConfirmText}>保存</Text></Pressable></View>}</View></View></Modal>
+      <Modal visible={!!selectedMcpServer} transparent animationType="fade" onRequestClose={() => setSelectedMcpServerId(null)}><View style={styles.overlay}><View style={[styles.modal, styles.toolModal]}><View style={styles.toolModalHeader}><View style={styles.switchText}><Text style={styles.modalTitle}>{selectedMcpServer?.name || 'MCP 服务'}</Text>{!!selectedMcpServer && <Text style={styles.hint}>{selectedMcpServer.url}</Text>}</View><Pressable style={styles.modalCancel} onPress={() => setSelectedMcpServerId(null)}><Text style={styles.modalCancelText}>关闭</Text></Pressable></View><ScrollView style={styles.toolModalBody} keyboardShouldPersistTaps="handled">{renderMcpServerEditor()}</ScrollView>{!!selectedMcpServer && <View style={styles.toolModalActions}><Pressable style={styles.removeSmallButton} onPress={() => handleRemoveMcpServerFromModal(selectedMcpServer.id)}><Text style={styles.removeSmallButtonText}>删除</Text></Pressable><Pressable style={styles.modalConfirm} onPress={() => { handleSaveMcpTools(); setSelectedMcpServerId(null); }}><Text style={styles.modalConfirmText}>保存</Text></Pressable></View>}</View></View></Modal>
+      <Modal visible={!!selectedMcpTool} transparent animationType="fade" onRequestClose={() => setSelectedMcpToolRef(null)}><View style={styles.overlay}><View style={[styles.modal, styles.toolModal]}><View style={styles.toolModalHeader}><View style={styles.switchText}><Text style={styles.modalTitle}>{selectedMcpTool?.title || selectedMcpTool?.name || 'MCP 工具'}</Text>{!!selectedMcpToolServer && <Text style={styles.hint}>{selectedMcpToolServer.name}</Text>}</View><Pressable style={styles.modalCancel} onPress={() => setSelectedMcpToolRef(null)}><Text style={styles.modalCancelText}>关闭</Text></Pressable></View>{!!selectedMcpTool && <ScrollView style={styles.toolModalBody} keyboardShouldPersistTaps="handled"><Text style={styles.label}>工具名称</Text><Text style={styles.toolDetailText}>{selectedMcpTool.name}</Text><Text style={styles.label}>启用状态</Text><Text style={styles.toolDetailText}>{selectedMcpTool.enabled !== false ? '已开启' : '已关闭'}</Text><Text style={styles.label}>简介</Text><Text style={styles.toolDetailText}>{selectedMcpTool.description || '暂无简介'}</Text><Text style={styles.label}>参数定义</Text><Text selectable style={styles.toolSchemaText}>{formatMcpToolInputSchema(selectedMcpTool)}</Text></ScrollView>}</View></View></Modal>
+    </>
   );
+
+
 }
 
 /* ==================== 日记 Tab ==================== */
@@ -4381,6 +4231,157 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: colors.text,
+  },
+  toolCardGrid: {
+    gap: 10,
+    marginBottom: 16,
+  },
+  toolCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  toolCardEnabled: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
+  },
+  toolCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 8,
+  },
+  toolCardText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  toolCardName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  toolCardMeta: {
+    marginTop: 3,
+    fontSize: 12,
+    color: colors.textTertiary,
+  },
+  toolCardIntro: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textSecondary,
+  },
+  toolCardStatus: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textTertiary,
+  },
+  toolCardStatusEnabled: {
+    color: colors.primary,
+  },
+  toolAddPanel: {
+    gap: 10,
+    backgroundColor: colors.surface,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 14,
+  },
+  toolModal: {
+    width: '90%',
+    maxHeight: '82%',
+  },
+  toolModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 8,
+  },
+  toolModalDescription: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textSecondary,
+    marginBottom: 12,
+  },
+  toolModalBody: {
+    maxHeight: 480,
+  },
+  toolModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+  },
+  toolNumberRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 14,
+  },
+  toolNumberField: {
+    flex: 1,
+    minWidth: 0,
+  },
+  toolListPreview: {
+    gap: 8,
+    marginBottom: 12,
+  },
+  toolListPreviewItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.inputBackground,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  toolListPreviewText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  toolListPreviewName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  toolListPreviewDescription: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.textTertiary,
+  },
+  toolListPreviewStatus: {
+    marginTop: 6,
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  toolDetailText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textSecondary,
+    marginBottom: 10,
+  },
+  toolSchemaText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.text,
+    backgroundColor: colors.inputBackground,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 12,
   },
   switchText: {
     flex: 1,

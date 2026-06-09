@@ -235,6 +235,7 @@ function normalizeMcpTool(raw: any): McpToolSnapshot | null {
     title: typeof raw.title === 'string' ? raw.title : undefined,
     description: typeof raw.description === 'string' ? raw.description : undefined,
     inputSchema,
+    enabled: raw.enabled !== false,
   };
 }
 
