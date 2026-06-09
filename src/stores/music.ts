@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import {
   createAudioPlayer,
+  setIsAudioActiveAsync,
   requestNotificationPermissionsAsync,
   setAudioModeAsync,
   type AudioPlayer,
@@ -113,7 +114,7 @@ let statusSubscription: { remove: () => void } | null = null;
 let audioModeConfigured = false;
 let finishingTrackId: string | null = null;
 
-const PLAYBACK_STATUS_UPDATE_INTERVAL_MS = 250;
+const PLAYBACK_STATUS_UPDATE_INTERVAL_MS = 1000;
 
 function getTrackLyricIndex(track: MusicTrack | undefined, timeMs: number): number {
   if (!track || track.lyrics.length === 0) return -1;
@@ -153,6 +154,7 @@ function getPreviousIndex(state: MusicState): number {
 }
 
 async function ensureAudioMode(): Promise<void> {
+  await setIsAudioActiveAsync(true);
   if (audioModeConfigured) return;
   await setAudioModeAsync({
     playsInSilentMode: true,
@@ -163,6 +165,28 @@ async function ensureAudioMode(): Promise<void> {
     requestNotificationPermissionsAsync().catch(() => undefined);
   }
   audioModeConfigured = true;
+}
+
+async function deactivateAudioSession(): Promise<void> {
+  try {
+    await setIsAudioActiveAsync(false);
+  } catch (error) {
+    console.warn('停用音乐音频会话失败:', error);
+  }
+}
+
+function setTrackLockScreenControls(track: MusicTrack | undefined): void {
+  if (!player || !track) return;
+  player.setActiveForLockScreen(
+    true,
+    {
+      title: track.title,
+      artist: track.artist,
+      albumTitle: track.album,
+      artworkUrl: track.artworkUrl,
+    },
+    { showSeekBackward: false, showSeekForward: false }
+  );
 }
 
 function releasePlayer(): void {
@@ -198,7 +222,8 @@ async function loadTrack(index: number, shouldPlay: boolean): Promise<void> {
   });
 
   statusSubscription = player.addListener('playbackStatusUpdate', (status: AudioStatus) => {
-    const currentTrack = useMusicStore.getState().tracks[useMusicStore.getState().currentIndex];
+    const musicState = useMusicStore.getState();
+    const currentTrack = musicState.tracks[musicState.currentIndex];
     const currentTimeMs = Math.max(0, Math.round(status.currentTime * 1000));
     const durationMs = Math.max(
       currentTrack?.durationMs ?? 0,
@@ -206,14 +231,23 @@ async function loadTrack(index: number, shouldPlay: boolean): Promise<void> {
     );
     const currentLyricIndex = getTrackLyricIndex(currentTrack, currentTimeMs);
 
-    useMusicStore.setState({
-      isPlaying: status.playing,
-      isBuffering: status.isBuffering,
-      currentTimeMs,
-      durationMs,
-      currentLyricIndex,
-      error: status.error,
-    });
+    if (
+      musicState.isPlaying !== status.playing ||
+      musicState.isBuffering !== status.isBuffering ||
+      musicState.currentTimeMs !== currentTimeMs ||
+      musicState.durationMs !== durationMs ||
+      musicState.currentLyricIndex !== currentLyricIndex ||
+      musicState.error !== status.error
+    ) {
+      useMusicStore.setState({
+        isPlaying: status.playing,
+        isBuffering: status.isBuffering,
+        currentTimeMs,
+        durationMs,
+        currentLyricIndex,
+        error: status.error,
+      });
+    }
 
     if (status.didJustFinish && currentTrack && finishingTrackId !== currentTrack.id) {
       finishingTrackId = currentTrack.id;
@@ -233,16 +267,7 @@ async function loadTrack(index: number, shouldPlay: boolean): Promise<void> {
     error: null,
   });
 
-  player.setActiveForLockScreen(
-    true,
-    {
-      title: track.title,
-      artist: track.artist,
-      albumTitle: track.album,
-      artworkUrl: track.artworkUrl,
-    },
-    { showSeekBackward: false, showSeekForward: false }
-  );
+  setTrackLockScreenControls(track);
 
   if (shouldPlay) {
     player.play();
@@ -282,6 +307,7 @@ export const useMusicStore = create<MusicState>()(
 
   closePlayer: async () => {
     releasePlayer();
+    await deactivateAudioSession();
     set({
       isOpen: false,
       isMinimized: false,
@@ -315,12 +341,14 @@ export const useMusicStore = create<MusicState>()(
       return;
     }
     await ensureAudioMode();
+    setTrackLockScreenControls(track);
     player.play();
     set({ isPlaying: true, isOpen: true, error: null });
   },
 
   pause: async () => {
     player?.pause();
+    player?.clearLockScreenControls();
     set({ isPlaying: false });
   },
 
