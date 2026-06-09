@@ -27,6 +27,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.content.pm.ServiceInfo
 import android.text.TextUtils
+import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -445,6 +446,16 @@ class FloatingBallModule(
     return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(reactContext)
   }
 
+  private fun overlayFlags(focusable: Boolean = false): Int {
+    var flags = WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+      WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+      WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+    if (!focusable) {
+      flags = flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+    }
+    return flags
+  }
+
   private fun showInternal() {
     if (rootView != null) return
 
@@ -519,7 +530,7 @@ class FloatingBallModule(
       collapsedWidth(),
       collapsedHeight(),
       overlayType(),
-      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+      overlayFlags(),
       android.graphics.PixelFormat.TRANSLUCENT
     ).apply {
       gravity = Gravity.TOP or Gravity.START
@@ -738,7 +749,7 @@ class FloatingBallModule(
       inputWidth,
       WindowManager.LayoutParams.WRAP_CONTENT,
       overlayType(),
-      WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+      overlayFlags(focusable = true),
       android.graphics.PixelFormat.TRANSLUCENT
     ).apply {
       gravity = Gravity.TOP or Gravity.START
@@ -933,7 +944,7 @@ class FloatingBallModule(
         bubbleWidth,
         WindowManager.LayoutParams.WRAP_CONTENT,
         overlayType(),
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+        overlayFlags() or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
         android.graphics.PixelFormat.TRANSLUCENT
       ).apply {
         gravity = Gravity.TOP or Gravity.START
@@ -1027,7 +1038,7 @@ class FloatingBallModule(
         width,
         lyric.preferredHeight(),
         overlayType(),
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        overlayFlags(),
         android.graphics.PixelFormat.TRANSLUCENT
       ).apply {
         gravity = Gravity.TOP or Gravity.START
@@ -1310,9 +1321,21 @@ class FloatingBallModule(
     }
   }
 
-  private fun screenWidth(): Int = reactContext.resources.displayMetrics.widthPixels
+  private fun screenSize(): Pair<Int, Int> {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      val bounds = windowManager.currentWindowMetrics.bounds
+      return bounds.width() to bounds.height()
+    }
 
-  private fun screenHeight(): Int = reactContext.resources.displayMetrics.heightPixels
+    val metrics = DisplayMetrics()
+    @Suppress("DEPRECATION")
+    windowManager.defaultDisplay.getRealMetrics(metrics)
+    return metrics.widthPixels to metrics.heightPixels
+  }
+
+  private fun screenWidth(): Int = screenSize().first
+
+  private fun screenHeight(): Int = screenSize().second
 
   private fun dp(value: Int): Int = (value * reactContext.resources.displayMetrics.density).toInt()
 
@@ -1846,9 +1869,19 @@ private class DesktopLyricTextView(context: Context) : TextView(context) {
 class FloatingBallForegroundService : Service() {
   override fun onBind(intent: Intent?) = null
 
+  override fun onCreate() {
+    super.onCreate()
+    running = true
+  }
+
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     startForegroundNotification()
     return START_STICKY
+  }
+
+  override fun onDestroy() {
+    running = false
+    super.onDestroy()
   }
 
   private fun startForegroundNotification() {
@@ -1889,13 +1922,22 @@ class FloatingBallForegroundService : Service() {
   companion object {
     private const val CHANNEL_ID = "ysclaude-floating-overlay-priority"
     private const val NOTIFICATION_ID = 7205
+    private const val START_RETRY_INTERVAL_MS = 30_000L
+    @Volatile private var running = false
+    @Volatile private var lastStartFailureAtMs = 0L
 
     fun start(context: Context) {
+      val now = System.currentTimeMillis()
+      if (running || now - lastStartFailureAtMs < START_RETRY_INTERVAL_MS) return
       val intent = Intent(context, FloatingBallForegroundService::class.java)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        context.startForegroundService(intent)
-      } else {
-        context.startService(intent)
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          context.startForegroundService(intent)
+        } else {
+          context.startService(intent)
+        }
+      } catch (_: Exception) {
+        lastStartFailureAtMs = now
       }
     }
 

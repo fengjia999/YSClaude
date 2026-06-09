@@ -113,6 +113,8 @@ let statusSubscription: { remove: () => void } | null = null;
 let audioModeConfigured = false;
 let finishingTrackId: string | null = null;
 
+const PLAYBACK_STATUS_UPDATE_INTERVAL_MS = 250;
+
 function getTrackLyricIndex(track: MusicTrack | undefined, timeMs: number): number {
   if (!track || track.lyrics.length === 0) return -1;
   let index = -1;
@@ -155,7 +157,7 @@ async function ensureAudioMode(): Promise<void> {
   await setAudioModeAsync({
     playsInSilentMode: true,
     shouldPlayInBackground: true,
-    interruptionMode: 'doNotMix',
+    interruptionMode: Platform.OS === 'android' ? 'mixWithOthers' : 'doNotMix',
   });
   if (Platform.OS === 'android') {
     requestNotificationPermissionsAsync().catch(() => undefined);
@@ -191,7 +193,7 @@ async function loadTrack(index: number, shouldPlay: boolean): Promise<void> {
   await ensureAudioMode();
   releasePlayer();
   player = createAudioPlayer(sourceUrl, {
-    updateInterval: 100,
+    updateInterval: PLAYBACK_STATUS_UPDATE_INTERVAL_MS,
     preferredForwardBufferDuration: 20,
   });
 

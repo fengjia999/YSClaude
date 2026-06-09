@@ -13,15 +13,38 @@ let radioUnsubscribe: (() => void) | null = null;
 let actionSubscription: { remove: () => void } | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
 let lastSignature = '';
-let pendingSignature = '';
+let inFlightSignature = '';
+let queuedSignature = '';
+let queuedState: DesktopLyricNativeState | null = null;
+let queuedTimer: ReturnType<typeof setTimeout> | null = null;
+let lastDispatchAt = 0;
 let panelMode: 'lyrics' | 'radio' = 'lyrics';
+
+const DESKTOP_LYRIC_MIN_UPDATE_INTERVAL_MS = 320;
+
+type DesktopLyricNativeState = {
+  text: string;
+  lyricProgress: number;
+  title: string;
+  artist: string;
+  artworkUrl: string;
+  backgroundUri: string;
+  songProgress: number;
+  isPlaying: boolean;
+  panelMode: 'lyrics' | 'radio';
+  radioStatus: string;
+  radioScript: string;
+  radioTrack: string;
+  radioActionLabel: string;
+  radioActionEnabled: boolean;
+};
 
 export function startDesktopLyricSync(): () => void {
   if (storeUnsubscribe) return stopDesktopLyricSync;
 
   actionSubscription = addDesktopLyricActionListener(handleDesktopLyricAction);
   appStateSubscription = AppState.addEventListener('change', (state) => {
-    if (state === 'active') {
+    if (state === 'active' || state === 'background' || state === 'inactive') {
       refreshDesktopLyric();
     }
   });
@@ -42,13 +65,16 @@ export function stopDesktopLyricSync(): void {
   actionSubscription = null;
   appStateSubscription = null;
   lastSignature = '';
-  pendingSignature = '';
+  inFlightSignature = '';
+  clearQueuedDesktopLyricUpdate();
   hideDesktopLyric().catch(() => undefined);
 }
 
 export function refreshDesktopLyric(): void {
   lastSignature = '';
-  pendingSignature = '';
+  inFlightSignature = '';
+  lastDispatchAt = 0;
+  clearQueuedDesktopLyricUpdate();
   syncDesktopLyric();
 }
 
@@ -57,33 +83,57 @@ function syncDesktopLyric(): void {
   const state = useMusicStore.getState();
   const radio = useRadioStore.getState();
   if (!state.desktopLyricsEnabled || (!state.isOpen && !radio.active)) {
-    if (lastSignature) {
+    if (lastSignature || inFlightSignature || queuedSignature) {
       lastSignature = '';
-      pendingSignature = '';
+      inFlightSignature = '';
+      clearQueuedDesktopLyricUpdate();
       hideDesktopLyric().catch(() => undefined);
     }
     return;
   }
 
   const nextState = getDesktopLyricState();
-  const signature = [
-    nextState.text,
-    Math.round(nextState.lyricProgress * 1000),
-    nextState.title,
-    nextState.artist,
-    nextState.artworkUrl,
-    nextState.backgroundUri,
-    Math.round(nextState.songProgress * 1000),
-    nextState.isPlaying ? '1' : '0',
-    nextState.panelMode,
-    nextState.radioStatus,
-    nextState.radioScript,
-    nextState.radioTrack,
-    nextState.radioActionLabel,
-    nextState.radioActionEnabled ? '1' : '0',
-  ].join('|');
-  if (signature === lastSignature || signature === pendingSignature) return;
-  pendingSignature = signature;
+  const signature = getDesktopLyricSignature(nextState);
+  if (
+    signature === lastSignature ||
+    signature === inFlightSignature ||
+    signature === queuedSignature
+  ) {
+    return;
+  }
+  queueDesktopLyricUpdate(nextState, signature);
+}
+
+function queueDesktopLyricUpdate(nextState: DesktopLyricNativeState, signature: string): void {
+  queuedState = nextState;
+  queuedSignature = signature;
+
+  const elapsedMs = Date.now() - lastDispatchAt;
+  const delayMs = Math.max(0, DESKTOP_LYRIC_MIN_UPDATE_INTERVAL_MS - elapsedMs);
+  if (delayMs <= 0 && !queuedTimer) {
+    dispatchQueuedDesktopLyricUpdate();
+    return;
+  }
+
+  if (!queuedTimer) {
+    queuedTimer = setTimeout(dispatchQueuedDesktopLyricUpdate, delayMs);
+  }
+}
+
+function dispatchQueuedDesktopLyricUpdate(): void {
+  if (queuedTimer) {
+    clearTimeout(queuedTimer);
+    queuedTimer = null;
+  }
+
+  const nextState = queuedState;
+  const signature = queuedSignature;
+  if (!nextState || !signature) return;
+
+  queuedState = null;
+  queuedSignature = '';
+  inFlightSignature = signature;
+  lastDispatchAt = Date.now();
 
   showDesktopLyric(
     nextState.text,
@@ -101,16 +151,44 @@ function syncDesktopLyric(): void {
     nextState.radioActionLabel,
     nextState.radioActionEnabled
   ).then(() => {
-    if (pendingSignature === signature) {
+    if (inFlightSignature === signature) {
       lastSignature = signature;
-      pendingSignature = '';
+      inFlightSignature = '';
     }
   }).catch((error) => {
-    if (pendingSignature === signature) {
-      pendingSignature = '';
+    if (inFlightSignature === signature) {
+      inFlightSignature = '';
     }
     console.warn('[DesktopLyric] showDesktopLyric failed', error);
   });
+}
+
+function clearQueuedDesktopLyricUpdate(): void {
+  if (queuedTimer) {
+    clearTimeout(queuedTimer);
+    queuedTimer = null;
+  }
+  queuedState = null;
+  queuedSignature = '';
+}
+
+function getDesktopLyricSignature(nextState: DesktopLyricNativeState): string {
+  return [
+    nextState.text,
+    Math.round(nextState.lyricProgress * 100),
+    nextState.title,
+    nextState.artist,
+    nextState.artworkUrl,
+    nextState.backgroundUri,
+    Math.round(nextState.songProgress * 100),
+    nextState.isPlaying ? '1' : '0',
+    nextState.panelMode,
+    nextState.radioStatus,
+    nextState.radioScript,
+    nextState.radioTrack,
+    nextState.radioActionLabel,
+    nextState.radioActionEnabled ? '1' : '0',
+  ].join('|');
 }
 
 function handleDesktopLyricAction(action: DesktopLyricAction): void {
@@ -143,22 +221,7 @@ function handleDesktopLyricAction(action: DesktopLyricAction): void {
   }
 }
 
-function getDesktopLyricState(): {
-  text: string;
-  lyricProgress: number;
-  title: string;
-  artist: string;
-  artworkUrl: string;
-  backgroundUri: string;
-  songProgress: number;
-  isPlaying: boolean;
-  panelMode: 'lyrics' | 'radio';
-  radioStatus: string;
-  radioScript: string;
-  radioTrack: string;
-  radioActionLabel: string;
-  radioActionEnabled: boolean;
-} {
+function getDesktopLyricState(): DesktopLyricNativeState {
   const state = useMusicStore.getState();
   const radio = useRadioStore.getState();
   const track = state.tracks[state.currentIndex];

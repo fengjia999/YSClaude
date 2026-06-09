@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallba
 import {
   View,
   FlatList,
+  AppState,
   Text,
   TextInput,
   Pressable,
@@ -14,6 +15,7 @@ import {
   type NativeSyntheticEvent,
   type LayoutChangeEvent,
   type ListRenderItem,
+  type AppStateStatus,
 } from 'react-native';
 import Animated, {
   Easing,
@@ -216,11 +218,14 @@ export default function ChatScreen() {
   const shouldStickToBottomRef = useRef(true);
   const messageIdsRef = useRef<string[]>([]);
   const conversationIdRef = useRef<string | null>(null);
+  const pendingScrollMessageIdRef = useRef<string | null>(null);
   const initialPositioningConversationRef = useRef<string | null>(null);
   const isInitialPositioningRef = useRef(false);
   const handledOpenToBottomRequestRef = useRef(0);
   const hasListLaidOutRef = useRef(false);
   const floorVisibleAtTouchStartRef = useRef(false);
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  const restoreBottomOnActiveRef = useRef(false);
 
   const keyboard = useAnimatedKeyboard();
   const periodDateKeys = useMemo(() => buildPeriodDateSet(periodRecords), [periodRecords]);
@@ -381,6 +386,10 @@ export default function ChatScreen() {
     setEnteringMessageIds((current) => (current.size === 0 ? current : new Set()));
   }, []);
 
+  useEffect(() => {
+    pendingScrollMessageIdRef.current = pendingScrollMessageId;
+  }, [pendingScrollMessageId]);
+
   const handleEnableWebCruise = useCallback(async () => {
     if (!hotboardConfig?.enabled) {
       showToast('请先在 Tool 设置中开启 AI 网页巡游热榜');
@@ -469,6 +478,46 @@ export default function ChatScreen() {
       finishInitialPositioning();
     }
   }, [finishInitialPositioning, isInitialPositioning]);
+
+  const prepareBottomRestore = useCallback(() => {
+    if (
+      restoreBottomOnActiveRef.current ||
+      isInitialPositioningRef.current ||
+      pendingScrollMessageIdRef.current ||
+      messageIdsRef.current.length === 0 ||
+      !shouldStickToBottomRef.current
+    ) {
+      return;
+    }
+
+    restoreBottomOnActiveRef.current = true;
+    isInitialPositioningRef.current = true;
+    setIsInitialPositioning(true);
+  }, []);
+
+  useEffect(() => {
+    const handleAppStateChange = (nextState: AppStateStatus) => {
+      const previousState = appStateRef.current;
+      appStateRef.current = nextState;
+
+      if (nextState === 'background' || nextState === 'inactive') {
+        prepareBottomRestore();
+        return;
+      }
+
+      if (
+        nextState === 'active' &&
+        restoreBottomOnActiveRef.current &&
+        (previousState === 'background' || previousState === 'inactive')
+      ) {
+        restoreBottomOnActiveRef.current = false;
+        finishInitialPositioning();
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
+  }, [finishInitialPositioning, prepareBottomRestore]);
 
   const handleScreenTouchStart = useCallback(() => {
     const shouldKeepBottom = shouldStickToBottomRef.current;
@@ -569,6 +618,14 @@ export default function ChatScreen() {
   useFocusEffect(
     useCallback(() => {
       clearEnteringMessageAnimations();
+      if (restoreBottomOnActiveRef.current) {
+        restoreBottomOnActiveRef.current = false;
+        finishInitialPositioning();
+        return () => {
+          prepareBottomRestore();
+        };
+      }
+
       if (
         !isInitialPositioningRef.current &&
         !pendingScrollMessageId &&
@@ -577,7 +634,15 @@ export default function ChatScreen() {
       ) {
         scheduleScrollToEnd(32, true);
       }
-    }, [clearEnteringMessageAnimations, conversationId, pendingScrollMessageId, scheduleScrollToEnd])
+      return () => {
+        prepareBottomRestore();
+      };
+    }, [
+      clearEnteringMessageAnimations,
+      finishInitialPositioning,
+      prepareBottomRestore,
+      scheduleScrollToEnd,
+    ])
   );
 
   const handleInputLayout = useCallback((event: LayoutChangeEvent) => {
