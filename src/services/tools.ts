@@ -1,4 +1,5 @@
 import { hotboardTool } from './toolModules/hotboard';
+import { mcpRemoteTool } from './toolModules/mcpRemote';
 import { memoryVaultTool, uploadDiary } from './toolModules/memoryVault';
 import { nativeDeviceTool } from './toolModules/nativeDevice';
 import { shizukuFileTool } from './toolModules/shizukuFile';
@@ -21,6 +22,7 @@ const TOOL_MODULES: ToolModule[] = [
   webSearchTool,
   webPageReaderTool,
   hotboardTool,
+  mcpRemoteTool,
   webViewTool,
   nativeDeviceTool,
   shizukuFileTool,
@@ -32,7 +34,16 @@ export const TOOL_LABELS: Record<string, string> = TOOL_MODULES.reduce(
 );
 
 export function getToolLabel(toolName: string): string {
-  return TOOL_LABELS[toolName] || toolName;
+  if (TOOL_LABELS[toolName]) return TOOL_LABELS[toolName];
+  if (toolName.startsWith('mcp__')) {
+    const parts = toolName.split('__').filter(Boolean);
+    if (parts.length >= 3) {
+      const serverId = parts[1];
+      const rawToolName = parts.slice(2).join('__');
+      return `MCP ${serverId}: ${rawToolName}`;
+    }
+  }
+  return toolName;
 }
 
 /**

@@ -1,5 +1,6 @@
 import {
   HotboardConfig,
+  McpToolConfig,
   MemoryVaultConfig,
   NativeToolConfig,
   ShizukuFileConfig,
@@ -29,6 +30,7 @@ export interface ToolDefinitionConfig {
   hotboard?: boolean;
   nativeTools?: NativeToolConfig;
   shizukuFile?: ShizukuFileConfig;
+  mcpTools?: McpToolConfig;
 }
 
 export interface ToolExecutionContext {
@@ -39,6 +41,7 @@ export interface ToolExecutionContext {
   hotboardConfig: HotboardConfig;
   nativeToolConfig: NativeToolConfig;
   shizukuFileConfig: ShizukuFileConfig;
+  mcpToolConfig: McpToolConfig;
   webCruiseEnabled?: boolean;
 }
 

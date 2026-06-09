@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useRef } from 'react';
 import type { RefObject } from 'react';
-import { View, Text, StyleSheet, Pressable, Image, Alert, TextInput, Modal, Dimensions, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Image, Alert, TextInput, Modal, Dimensions, ScrollView, ActivityIndicator } from 'react-native';
 import Markdown from '@ronradtke/react-native-markdown-display';
 import { BlurView } from 'expo-blur';
 import { Message, type GeneratedPicture } from '../types';
@@ -9,6 +9,7 @@ import { fonts } from '../theme/fonts';
 import { useChatStore } from '../stores/chat';
 import { useSettingsStore } from '../stores/settings';
 import { playTTS, stopTTS } from '../services/tts';
+import { saveGeneratedImageToLibrary } from '../services/imageGeneration';
 import { getToolLabel } from '../services/tools';
 import { StickerContent } from './StickerContent';
 import { buildStickerDefinitions, hasStickerToken, isStickerOnlyContent } from '../utils/stickers';
@@ -234,6 +235,8 @@ export const ChatBubble = React.memo(function ChatBubble({
   // 用户气泡长按浮出的操作菜单是否显示
   const [menuVisible, setMenuVisible] = useState(false);
   const [assistantMenuVisible, setAssistantMenuVisible] = useState(false);
+  const [pictureActionTarget, setPictureActionTarget] = useState<GeneratedPicture | null>(null);
+  const [pictureActionBusy, setPictureActionBusy] = useState(false);
   // 长按时测量得到的气泡屏幕坐标，用于把菜单锚定到气泡上方
   const [menuAnchor, setMenuAnchor] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
@@ -537,35 +540,32 @@ export const ChatBubble = React.memo(function ChatBubble({
   }
 
   function handleGeneratedPictureLongPress(picture: GeneratedPicture) {
-    Alert.alert('图片操作', picture.prompt || 'AI 生成图片', [
-      {
-        text: '重新生成图片',
-        onPress: () => {
-          regenerateGeneratedPicture(message.id, picture.tokenIndex).catch((error) => {
-            Alert.alert('重生成失败', error?.message || '无法重新生成图片');
-          });
-        },
-      },
-      {
-        text: '只删除图片',
-        style: 'destructive',
-        onPress: () => {
-          deleteGeneratedPictureOnly(message.id, picture.tokenIndex).catch((error) => {
-            Alert.alert('删除失败', error?.message || '无法删除图片');
-          });
-        },
-      },
-      {
-        text: '删除图片和 [Pic] 文本',
-        style: 'destructive',
-        onPress: () => {
-          deleteGeneratedPictureAndPrompt(message.id, picture.tokenIndex).catch((error) => {
-            Alert.alert('删除失败', error?.message || '无法删除图片和提示词');
-          });
-        },
-      },
-      { text: '取消', style: 'cancel' },
-    ]);
+    setPictureActionTarget(picture);
+  }
+
+  async function runPictureAction(action: 'regenerate' | 'delete-image' | 'delete-token' | 'download') {
+    const target = pictureActionTarget;
+    if (!target || pictureActionBusy) return;
+    setPictureActionBusy(true);
+    try {
+      if (action === 'regenerate') {
+        await regenerateGeneratedPicture(message.id, target.tokenIndex);
+      } else if (action === 'delete-image') {
+        await deleteGeneratedPictureOnly(message.id, target.tokenIndex);
+      } else if (action === 'delete-token') {
+        await deleteGeneratedPictureAndPrompt(message.id, target.tokenIndex);
+      } else {
+        if (!target.imageUri) {
+          throw new Error('这张图片还没有可下载的文件');
+        }
+        await saveGeneratedImageToLibrary(target.imageUri);
+      }
+      setPictureActionTarget(null);
+    } catch (error: any) {
+      Alert.alert('操作失败', error?.message || '图片操作失败');
+    } finally {
+      setPictureActionBusy(false);
+    }
   }
 
   function handleAssistantMenuAction(index: number) {
@@ -725,6 +725,57 @@ export const ChatBubble = React.memo(function ChatBubble({
           </View>
         </Pressable>
       </Modal>
+      <Modal
+        transparent
+        visible={!!pictureActionTarget}
+        animationType="fade"
+        onRequestClose={() => setPictureActionTarget(null)}
+      >
+        <Pressable style={styles.menuDismissOverlay} onPress={() => setPictureActionTarget(null)}>
+          <View style={styles.pictureActionSheet} onStartShouldSetResponder={() => true}>
+            <Text style={styles.pictureActionTitle} numberOfLines={2}>
+              {pictureActionTarget?.prompt || 'AI 生成图片'}
+            </Text>
+            <Pressable
+              style={styles.pictureActionItem}
+              onPress={() => runPictureAction('regenerate')}
+              disabled={pictureActionBusy}
+            >
+              {pictureActionBusy ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.pictureActionText}>重新生成图片</Text>}
+            </Pressable>
+            <Pressable
+              style={styles.pictureActionItem}
+              onPress={() => runPictureAction('download')}
+              disabled={pictureActionBusy || pictureActionTarget?.status !== 'done'}
+            >
+              <Text style={[styles.pictureActionText, pictureActionTarget?.status !== 'done' && styles.pictureActionTextDisabled]}>
+                下载到相册
+              </Text>
+            </Pressable>
+            <Pressable
+              style={styles.pictureActionItem}
+              onPress={() => runPictureAction('delete-image')}
+              disabled={pictureActionBusy}
+            >
+              <Text style={[styles.pictureActionText, styles.pictureActionTextDanger]}>只删除图片</Text>
+            </Pressable>
+            <Pressable
+              style={styles.pictureActionItem}
+              onPress={() => runPictureAction('delete-token')}
+              disabled={pictureActionBusy}
+            >
+              <Text style={[styles.pictureActionText, styles.pictureActionTextDanger]}>删除图片和 [Pic] 文本</Text>
+            </Pressable>
+            <Pressable
+              style={styles.pictureActionCancel}
+              onPress={() => setPictureActionTarget(null)}
+              disabled={pictureActionBusy}
+            >
+              <Text style={styles.pictureActionCancelText}>取消</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
       {message.content.length > 0 && (
         <>
           {!assistantActionsHidden && (
@@ -873,6 +924,59 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     paddingHorizontal: 6,
+  },
+  pictureActionSheet: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 24,
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  pictureActionTitle: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textSecondary,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  pictureActionItem: {
+    minHeight: 46,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 10,
+  },
+  pictureActionText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: colors.text,
+  },
+  pictureActionTextDisabled: {
+    color: colors.textTertiary,
+  },
+  pictureActionTextDanger: {
+    color: colors.danger,
+  },
+  pictureActionCancel: {
+    minHeight: 46,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 10,
+    backgroundColor: colors.inputBackground,
+    marginTop: 6,
+  },
+  pictureActionCancelText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.text,
   },
   bubbleMenuItemDisabled: {
     opacity: 0.45,

@@ -28,6 +28,8 @@ import {
   requestShizukuPermission,
   type ShizukuStatus,
 } from '../src/services/shizukuFiles';
+import { listMcpTools } from '../src/services/mcpHttpClient';
+import { sanitizeMcpServerId } from '../src/services/toolModules/mcpRemote';
 import {
   DEFAULT_HOTBOARD_PLATFORM_TYPES,
   HOTBOARD_PLATFORMS,
@@ -74,6 +76,10 @@ const CHAT_INPUT_ICON_ITEMS: Array<{ key: ChatInputIconKey; label: string }> = [
   { key: 'stop', label: '停止生成' },
 ];
 const COLOR_SWATCHES = ['#f1eee7', '#FFFFFF', '#FDE68A', '#BFDBFE', '#FBCFE8', '#DCFCE7', '#2B241D', '#141413'];
+const IMAGE_SIZE_OPTIONS = ['auto', '1024x1024', '1536x1024', '1024x1536'] as const;
+const IMAGE_QUALITY_OPTIONS = ['auto', 'low', 'medium', 'high'] as const;
+type ModelPickerTarget = 'chat' | 'image';
+type ImageOptionTarget = 'size' | 'quality';
 
 export default function SettingsScreen() {
   colors = useThemeColors();
@@ -2036,8 +2042,11 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const [imageApiKey, setImageApiKey] = useState(imageGenerationConfig?.apiKey || '');
   const [imageModel, setImageModel] = useState(imageGenerationConfig?.model || 'gpt-image-2');
   const [imageSize, setImageSize] = useState(imageGenerationConfig?.size || '1024x1024');
+  const [imageQuality, setImageQuality] = useState(imageGenerationConfig?.quality || 'auto');
   const [models, setModels] = useState<string[]>([]);
-  const [showModels, setShowModels] = useState(false);
+  const [showModelPicker, setShowModelPicker] = useState(false);
+  const [modelPickerTarget, setModelPickerTarget] = useState<ModelPickerTarget>('chat');
+  const [showImageOptionPicker, setShowImageOptionPicker] = useState<ImageOptionTarget | null>(null);
   const [testing, setTesting] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [creatingBackup, setCreatingBackup] = useState(false);
@@ -2056,6 +2065,7 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     setImageApiKey(imageGenerationConfig?.apiKey || '');
     setImageModel(imageGenerationConfig?.model || 'gpt-image-2');
     setImageSize(imageGenerationConfig?.size || '1024x1024');
+    setImageQuality(imageGenerationConfig?.quality || 'auto');
   }, [_hydrated, imageGenerationConfig]);
 
   function loadConfig(index: number) {
@@ -2072,16 +2082,32 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     setName(''); setBaseUrl(''); setApiKey(''); setModel(''); setModels([]);
   }
 
-  async function handleFetchModels() {
-    if (!baseUrl || !apiKey) {
+  function resolveModelFetchCredentials(target: ModelPickerTarget) {
+    if (target === 'chat') {
+      return {
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+      };
+    }
+
+    const activeConfig = apiConfigs[activeConfigIndex];
+    return {
+      baseUrl: imageBaseUrl.trim() || activeConfig?.baseUrl?.trim() || '',
+      apiKey: imageApiKey.trim() || activeConfig?.apiKey?.trim() || '',
+    };
+  }
+
+  async function handleFetchModels(target: ModelPickerTarget = 'chat') {
+    const credentials = resolveModelFetchCredentials(target);
+    if (!credentials.baseUrl || !credentials.apiKey) {
       Alert.alert('提示', '请先填写 Base URL 和 API Key');
       return;
     }
     setFetching(true);
     try {
-      const url = `${baseUrl.trim().replace(/\/$/, '')}/models`;
+      const url = `${credentials.baseUrl.replace(/\/$/, '')}/models`;
       const resp = await fetch(url, {
-        headers: { Authorization: `Bearer ${apiKey.trim()}` },
+        headers: { Authorization: `Bearer ${credentials.apiKey}` },
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
@@ -2090,7 +2116,8 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         Alert.alert('提示', '未获取到模型列表');
       } else {
         setModels(ids);
-        setShowModels(true);
+        setModelPickerTarget(target);
+        setShowModelPicker(true);
       }
     } catch (e: any) {
       Alert.alert('获取失败', e.message);
@@ -2163,9 +2190,28 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       baseUrl: imageBaseUrl.trim(),
       apiKey: imageApiKey.trim(),
       model: imageModel.trim() || 'gpt-image-2',
-      size: imageSize.trim() || '1024x1024',
+      size: imageSize || '1024x1024',
+      quality: imageQuality || 'auto',
     });
     showToast(imageEnabled ? '生图 API 已保存并启用' : '生图 API 已保存');
+  }
+
+  function handleSelectModel(item: string) {
+    if (modelPickerTarget === 'image') {
+      setImageModel(item);
+    } else {
+      setModel(item);
+    }
+    setShowModelPicker(false);
+  }
+
+  function handleSelectImageOption(item: string) {
+    if (showImageOptionPicker === 'quality') {
+      setImageQuality(item);
+    } else {
+      setImageSize(item);
+    }
+    setShowImageOptionPicker(null);
   }
 
   function handleSelectConfig(index: number) {
@@ -2323,7 +2369,7 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         <View style={styles.modelRow}>
           <TextInput style={[styles.input, { flex: 1 }]} value={model} onChangeText={setModel}
             placeholder="claude-sonnet-4-6" placeholderTextColor={colors.textTertiary} autoCapitalize="none" />
-          <Pressable style={styles.fetchButton} onPress={handleFetchModels} disabled={fetching}>
+          <Pressable style={styles.fetchButton} onPress={() => handleFetchModels('chat')} disabled={fetching}>
             {fetching ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={styles.fetchButtonText}>拉取</Text>}
           </Pressable>
         </View>
@@ -2377,25 +2423,33 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       </View>
       <View style={styles.field}>
         <Text style={styles.label}>生图模型</Text>
-        <TextInput
-          style={styles.input}
-          value={imageModel}
-          onChangeText={setImageModel}
-          placeholder="gpt-image-2"
-          placeholderTextColor={colors.textTertiary}
-          autoCapitalize="none"
-        />
+        <View style={styles.modelRow}>
+          <TextInput
+            style={[styles.input, { flex: 1 }]}
+            value={imageModel}
+            onChangeText={setImageModel}
+            placeholder="gpt-image-2"
+            placeholderTextColor={colors.textTertiary}
+            autoCapitalize="none"
+          />
+          <Pressable style={styles.fetchButton} onPress={() => handleFetchModels('image')} disabled={fetching}>
+            {fetching ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={styles.fetchButtonText}>拉取</Text>}
+          </Pressable>
+        </View>
       </View>
       <View style={styles.field}>
         <Text style={styles.label}>图片尺寸</Text>
-        <TextInput
-          style={styles.input}
-          value={imageSize}
-          onChangeText={setImageSize}
-          placeholder="1024x1024"
-          placeholderTextColor={colors.textTertiary}
-          autoCapitalize="none"
-        />
+        <Pressable style={styles.selectInput} onPress={() => setShowImageOptionPicker('size')}>
+          <Text style={styles.selectInputText}>{imageSize}</Text>
+          <Text style={styles.selectInputChevron}>⌄</Text>
+        </Pressable>
+      </View>
+      <View style={styles.field}>
+        <Text style={styles.label}>图片质量</Text>
+        <Pressable style={styles.selectInput} onPress={() => setShowImageOptionPicker('quality')}>
+          <Text style={styles.selectInputText}>{imageQuality}</Text>
+          <Text style={styles.selectInputChevron}>⌄</Text>
+        </Pressable>
       </View>
       <View style={styles.actions}>
         <Pressable style={styles.testButton} onPress={handleUseCurrentChatAPIForImage}>
@@ -2444,23 +2498,56 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       </View>
 
       {/* Model picker modal */}
-      <Modal visible={showModels} transparent animationType="fade">
-        <Pressable style={styles.overlay} onPress={() => setShowModels(false)}>
+      <Modal visible={showModelPicker} transparent animationType="fade">
+        <Pressable style={styles.overlay} onPress={() => setShowModelPicker(false)}>
           <View style={styles.modal} onStartShouldSetResponder={() => true}>
-            <Text style={styles.modalTitle}>选择模型</Text>
+            <Text style={styles.modalTitle}>
+              {modelPickerTarget === 'image' ? '选择生图模型' : '选择聊天模型'}
+            </Text>
             <FlatList
               data={models}
               keyExtractor={(item) => item}
               style={styles.modelList}
               renderItem={({ item }) => (
                 <Pressable
-                  style={[styles.modelItem, item === model && styles.modelItemActive]}
-                  onPress={() => { setModel(item); setShowModels(false); }}
+                  style={[
+                    styles.modelItem,
+                    item === (modelPickerTarget === 'image' ? imageModel : model) && styles.modelItemActive,
+                  ]}
+                  onPress={() => handleSelectModel(item)}
                 >
-                  <Text style={[styles.modelItemText, item === model && styles.modelItemTextActive]}>{item}</Text>
+                  <Text
+                    style={[
+                      styles.modelItemText,
+                      item === (modelPickerTarget === 'image' ? imageModel : model) && styles.modelItemTextActive,
+                    ]}
+                  >
+                    {item}
+                  </Text>
                 </Pressable>
               )}
             />
+          </View>
+        </Pressable>
+      </Modal>
+      <Modal visible={showImageOptionPicker !== null} transparent animationType="fade">
+        <Pressable style={styles.overlay} onPress={() => setShowImageOptionPicker(null)}>
+          <View style={styles.modal} onStartShouldSetResponder={() => true}>
+            <Text style={styles.modalTitle}>
+              {showImageOptionPicker === 'quality' ? '选择图片质量' : '选择图片尺寸'}
+            </Text>
+            {(showImageOptionPicker === 'quality' ? IMAGE_QUALITY_OPTIONS : IMAGE_SIZE_OPTIONS).map((item) => {
+              const active = item === (showImageOptionPicker === 'quality' ? imageQuality : imageSize);
+              return (
+                <Pressable
+                  key={item}
+                  style={[styles.modelItem, active && styles.modelItemActive]}
+                  onPress={() => handleSelectImageOption(item)}
+                >
+                  <Text style={[styles.modelItemText, active && styles.modelItemTextActive]}>{item}</Text>
+                </Pressable>
+              );
+            })}
           </View>
         </Pressable>
       </Modal>
@@ -3023,6 +3110,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     hotboardConfig,
     nativeToolConfig,
     shizukuFileConfig,
+    mcpToolConfig,
     setMemoryVaultConfig,
     setWebSearchConfig,
     setWebPageReaderConfig,
@@ -3030,6 +3118,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     setHotboardConfig,
     setNativeToolConfig,
     setShizukuFileConfig,
+    setMcpToolConfig,
   } = useSettingsStore();
 
   // 记忆库本地 state
@@ -3067,6 +3156,16 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const [shizukuPathInput, setShizukuPathInput] = useState('');
   const [shizukuStatus, setShizukuStatus] = useState<ShizukuStatus | null>(null);
   const [shizukuChecking, setShizukuChecking] = useState(false);
+
+  const [mcpEnabled, setMcpEnabled] = useState(!!mcpToolConfig?.enabled);
+  const [mcpMaxCalls, setMcpMaxCalls] = useState(String(mcpToolConfig?.maxToolCalls || 6));
+  const [mcpServers, setMcpServers] = useState(mcpToolConfig?.servers || []);
+  const [mcpServerName, setMcpServerName] = useState('');
+  const [mcpServerUrl, setMcpServerUrl] = useState('');
+  const [mcpServerAuth, setMcpServerAuth] = useState('');
+  const [mcpSyncingServerId, setMcpSyncingServerId] = useState<string | null>(null);
+  const [builtInToolsExpanded, setBuiltInToolsExpanded] = useState(true);
+  const [customMcpExpanded, setCustomMcpExpanded] = useState(true);
 
   // 设备原生工具本地 state
   const [deviceInfoEnabled, setDeviceInfoEnabled] = useState(!!nativeToolConfig?.deviceInfoEnabled);
@@ -3249,6 +3348,84 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     showToast(shizukuEnabled ? 'Shizuku 文件访问已保存' : 'Shizuku 文件访问已关闭');
   }
 
+  function handleAddMcpServer() {
+    const name = mcpServerName.trim();
+    const url = mcpServerUrl.trim();
+    if (!url) {
+      Alert.alert('提示', '请填写 MCP server URL');
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      Alert.alert('提示', 'MCP server URL 需要以 http:// 或 https:// 开头');
+      return;
+    }
+    const id = sanitizeMcpServerId(name || url);
+    if (mcpServers.some((server) => server.id === id)) {
+      Alert.alert('提示', '已有同 ID 的 MCP server');
+      return;
+    }
+    setMcpServers((current) => [
+      ...current,
+      {
+        id,
+        name: name || id,
+        url,
+        authorization: mcpServerAuth.trim(),
+        enabled: true,
+        tools: [],
+        updatedAt: Date.now(),
+      },
+    ]);
+    setMcpServerName('');
+    setMcpServerUrl('');
+    setMcpServerAuth('');
+    showToast('MCP server 已添加');
+  }
+
+  function handleRemoveMcpServer(serverId: string) {
+    setMcpServers((current) => current.filter((server) => server.id !== serverId));
+  }
+
+  function handleUpdateMcpServer(serverId: string, patch: Partial<(typeof mcpServers)[number]>) {
+    setMcpServers((current) =>
+      current.map((server) =>
+        server.id === serverId ? { ...server, ...patch, updatedAt: Date.now() } : server
+      )
+    );
+  }
+
+  async function handleSyncMcpServer(serverId: string) {
+    const server = mcpServers.find((item) => item.id === serverId);
+    if (!server) return;
+    setMcpSyncingServerId(serverId);
+    try {
+      const tools = await listMcpTools({
+        url: server.url,
+        authorization: server.authorization,
+      });
+      handleUpdateMcpServer(serverId, { tools });
+      showToast(`已同步 ${tools.length} 个 MCP 工具`);
+    } catch (error: any) {
+      Alert.alert('同步失败', error?.message || '无法读取 MCP 工具');
+    } finally {
+      setMcpSyncingServerId(null);
+    }
+  }
+
+  function handleSaveMcpTools() {
+    const maxToolCalls = parseInt(mcpMaxCalls, 10);
+    if (mcpEnabled && mcpServers.length === 0) {
+      Alert.alert('提示', '启用 MCP Tools 时请先添加至少一个远程 server');
+      return;
+    }
+    setMcpToolConfig({
+      enabled: mcpEnabled,
+      maxToolCalls: isNaN(maxToolCalls) || maxToolCalls <= 0 ? 6 : maxToolCalls,
+      servers: mcpServers,
+    });
+    showToast(mcpEnabled ? 'MCP Tools 已保存' : 'MCP Tools 已关闭');
+  }
+
   function handleSaveNativeTools() {
     setNativeToolConfig({
       deviceInfoEnabled,
@@ -3292,6 +3469,19 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }}
       keyboardShouldPersistTaps="handled"
     >
+      <Pressable
+        style={styles.toolGroupHeader}
+        onPress={() => setBuiltInToolsExpanded((value) => !value)}
+      >
+        <View style={styles.switchText}>
+          <Text style={styles.toolGroupTitle}>内置 Tool</Text>
+          <Text style={styles.hint}>应用自带的记忆库、联网、网页、Shizuku 和设备原生工具</Text>
+        </View>
+        <Text style={styles.platformToggleIcon}>{builtInToolsExpanded ? '⌃' : '⌄'}</Text>
+      </Pressable>
+
+      {builtInToolsExpanded && (
+        <>
       {/* ===== 记忆库 Memory Vault ===== */}
       <Text style={styles.sectionTitle}>记忆库 Memory Vault</Text>
       <Text style={styles.hint}>AI 可自主调用记忆库进行语义搜索和日记查询</Text>
@@ -3591,6 +3781,132 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
           <Text style={styles.saveButtonText}>保存设备 Tool 开关</Text>
         </Pressable>
       </View>
+        </>
+      )}
+
+      <Pressable
+        style={styles.toolGroupHeader}
+        onPress={() => setCustomMcpExpanded((value) => !value)}
+      >
+        <View style={styles.switchText}>
+          <Text style={styles.toolGroupTitle}>自定义 MCP</Text>
+          <Text style={styles.hint}>远程 HTTP MCP server 同步来的自定义工具</Text>
+        </View>
+        <Text style={styles.platformToggleIcon}>{customMcpExpanded ? '⌃' : '⌄'}</Text>
+      </Pressable>
+
+      {customMcpExpanded && (
+        <>
+      <Text style={styles.sectionTitle}>MCP Remote Tools</Text>
+      <Text style={styles.hint}>仅支持远程 HTTP MCP server。点击同步后会读取 tools/list 并缓存工具声明。</Text>
+
+      <View style={styles.switchRow}>
+        <Text style={styles.label}>启用 MCP Tools</Text>
+        <Switch
+          value={mcpEnabled}
+          onValueChange={setMcpEnabled}
+          trackColor={{ true: colors.primary }}
+        />
+      </View>
+
+      <View style={styles.field}>
+        <Text style={styles.label}>每轮最大调用次数</Text>
+        <TextInput
+          style={styles.input}
+          value={mcpMaxCalls}
+          onChangeText={setMcpMaxCalls}
+          keyboardType="number-pad"
+          placeholder="6"
+          placeholderTextColor={colors.textTertiary}
+        />
+      </View>
+
+      <View style={styles.field}>
+        <Text style={styles.label}>Server 名称</Text>
+        <TextInput
+          style={styles.input}
+          value={mcpServerName}
+          onChangeText={setMcpServerName}
+          placeholder="我的记忆库"
+          placeholderTextColor={colors.textTertiary}
+        />
+      </View>
+
+      <View style={styles.field}>
+        <Text style={styles.label}>Server URL</Text>
+        <TextInput
+          style={styles.input}
+          value={mcpServerUrl}
+          onChangeText={setMcpServerUrl}
+          placeholder="https://example.com/mcp"
+          placeholderTextColor={colors.textTertiary}
+          autoCapitalize="none"
+        />
+      </View>
+
+      <View style={styles.field}>
+        <Text style={styles.label}>Authorization（可选）</Text>
+        <TextInput
+          style={styles.input}
+          value={mcpServerAuth}
+          onChangeText={setMcpServerAuth}
+          placeholder="Bearer xxx"
+          placeholderTextColor={colors.textTertiary}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+      </View>
+
+      <View style={styles.platformActions}>
+        <Pressable style={styles.platformActionButton} onPress={handleAddMcpServer}>
+          <Text style={styles.platformActionText}>添加 Server</Text>
+        </Pressable>
+      </View>
+
+      {mcpServers.length === 0 ? (
+        <Text style={styles.emptyText}>尚未添加 MCP server</Text>
+      ) : (
+        mcpServers.map((server) => (
+          <View key={server.id} style={styles.fileRootRow}>
+            <View style={styles.nativeToolText}>
+              <Text style={styles.label}>{server.name}</Text>
+              <Text style={styles.hint}>{server.url}</Text>
+              <Text style={styles.hint}>{server.tools.length} 个工具 · {server.enabled ? '已启用' : '已关闭'}</Text>
+            </View>
+            <View style={styles.mcpServerActions}>
+              <Pressable
+                style={styles.platformActionButton}
+                onPress={() => handleSyncMcpServer(server.id)}
+                disabled={mcpSyncingServerId === server.id}
+              >
+                <Text style={styles.platformActionText}>
+                  {mcpSyncingServerId === server.id ? '同步中' : '同步'}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={styles.platformActionButton}
+                onPress={() => handleUpdateMcpServer(server.id, { enabled: !server.enabled })}
+              >
+                <Text style={styles.platformActionText}>{server.enabled ? '关闭' : '启用'}</Text>
+              </Pressable>
+              <Pressable
+                style={styles.platformActionButton}
+                onPress={() => handleRemoveMcpServer(server.id)}
+              >
+                <Text style={styles.platformActionText}>删除</Text>
+              </Pressable>
+            </View>
+          </View>
+        ))
+      )}
+
+      <View style={styles.actions}>
+        <Pressable style={styles.saveButton} onPress={handleSaveMcpTools}>
+          <Text style={styles.saveButtonText}>保存 MCP Tools</Text>
+        </Pressable>
+      </View>
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -4050,6 +4366,22 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 14,
   },
+  toolGroupHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  toolGroupTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.text,
+  },
   switchText: {
     flex: 1,
     minWidth: 0,
@@ -4115,6 +4447,19 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.inputBackground, borderWidth: 1, borderColor: colors.inputBorder,
     borderRadius: 12, padding: 14, fontSize: 14, color: colors.text,
   },
+  selectInput: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.inputBackground,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+  },
+  selectInputText: { fontSize: 14, color: colors.text },
+  selectInputChevron: { fontSize: 16, color: colors.textTertiary },
   multilineInput: {
     minHeight: 84,
     textAlignVertical: 'top',
@@ -4138,6 +4483,13 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     marginBottom: 10,
+  },
+  mcpServerActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 8,
+    maxWidth: 180,
   },
   platformActionButton: {
     paddingHorizontal: 12,

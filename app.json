@@ -25,6 +25,7 @@
         "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.READ_CALENDAR",
+        "android.permission.READ_MEDIA_IMAGES",
         "android.permission.WRITE_CALENDAR"
       ],
       "usesCleartextTraffic": true,
@@ -68,6 +69,16 @@
         {
           "calendarPermission": "允许 YSClaude 读取和管理你的日历日程，以便在你开启日历 Tool 后执行日程相关请求。",
           "remindersPermission": false
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "允许 YSClaude 访问相册，以便保存 AI 生成的图片。",
+          "savePhotosPermission": "允许 YSClaude 将 AI 生成的图片保存到相册。",
+          "granularPermissions": [
+            "photo"
+          ]
         }
       ],
       "expo-asset",

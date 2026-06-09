@@ -116,9 +116,10 @@ function resolveImageGenerationConfig() {
   const apiKey = imageConfig.apiKey.trim() || chatConfig?.apiKey?.trim() || '';
   const model = imageConfig.model.trim() || 'gpt-image-2';
   const size = imageConfig.size.trim() || '1024x1024';
+  const quality = imageConfig.quality?.trim() || 'auto';
 
   if (!baseUrl || !apiKey || !model) return null;
-  return { baseUrl, apiKey, model, size };
+  return { baseUrl, apiKey, model, size, quality };
 }
 
 async function generatePictureForMessage(
@@ -184,6 +185,7 @@ async function generatePictureForMessage(
       model: config.model,
       prompt: finalPrompt,
       size: config.size,
+      quality: config.quality,
     });
 
     const latestMessage = get().messages.find((item) => item.id === messageId) ?? null;
@@ -878,6 +880,7 @@ async function runToolLoop(
         androidAccessibilityControlEnabled,
     },
     shizukuFile: settings.shizukuFileConfig,
+    mcpTools: settings.mcpToolConfig,
   });
   if (tools.length === 0) {
     return false; // 无工具 → 走原有流式路径
@@ -889,6 +892,7 @@ async function runToolLoop(
     settings.memoryVaultConfig.maxToolCalls || 3,
     webInteractionEnabled ? settings.webInteractionConfig?.maxToolCalls || 8 : 0,
     settings.shizukuFileConfig?.enabled ? settings.shizukuFileConfig.maxToolCalls || 6 : 0,
+    settings.mcpToolConfig?.enabled ? settings.mcpToolConfig.maxToolCalls || 6 : 0,
     webCruiseEnabled ? 10 : 0,
     androidAccessibilityControlEnabled ? 10 : 0
   );
@@ -957,6 +961,7 @@ async function runToolLoop(
         hotboardConfig: settings.hotboardConfig,
         nativeToolConfig: settings.nativeToolConfig,
         shizukuFileConfig: settings.shizukuFileConfig,
+        mcpToolConfig: settings.mcpToolConfig,
         webCruiseEnabled,
       });
       const resultText = getToolResultText(result);

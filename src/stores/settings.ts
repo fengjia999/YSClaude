@@ -131,6 +131,29 @@ export interface ShizukuFileConfig {
   maxToolCalls: number;
 }
 
+export interface McpToolSnapshot {
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema?: Record<string, any>;
+}
+
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  url: string;
+  authorization: string;
+  enabled: boolean;
+  tools: McpToolSnapshot[];
+  updatedAt: number;
+}
+
+export interface McpToolConfig {
+  enabled: boolean;
+  servers: McpServerConfig[];
+  maxToolCalls: number;
+}
+
 export interface ReadingConfig {
   baseUrl: string;
   apiKey: string;
@@ -169,6 +192,7 @@ export interface ImageGenerationConfig {
   apiKey: string;
   model: string;
   size: string;
+  quality: string;
 }
 
 export type StickerOwner = 'user' | 'assistant';
@@ -355,6 +379,7 @@ interface SettingsState {
   hotboardConfig: HotboardConfig;
   nativeToolConfig: NativeToolConfig;
   shizukuFileConfig: ShizukuFileConfig;
+  mcpToolConfig: McpToolConfig;
   readingConfig: ReadingConfig;
   floatingBallConfig: FloatingBallConfig;
   periodConfig: PeriodConfig;
@@ -379,6 +404,7 @@ interface SettingsState {
   setHotboardConfig: (config: Partial<HotboardConfig>) => void;
   setNativeToolConfig: (config: Partial<NativeToolConfig>) => void;
   setShizukuFileConfig: (config: Partial<ShizukuFileConfig>) => void;
+  setMcpToolConfig: (config: Partial<McpToolConfig>) => void;
   setReadingConfig: (config: Partial<ReadingConfig>) => void;
   setFloatingBallConfig: (config: Partial<FloatingBallConfig>) => void;
   setPeriodConfig: (config: Partial<PeriodConfig>) => void;
@@ -462,6 +488,11 @@ export const useSettingsStore = create<SettingsState>()(
         roots: [],
         maxToolCalls: 6,
       },
+      mcpToolConfig: {
+        enabled: false,
+        servers: [],
+        maxToolCalls: 6,
+      },
       readingConfig: {
         baseUrl: '',
         apiKey: '',
@@ -498,6 +529,7 @@ export const useSettingsStore = create<SettingsState>()(
         apiKey: '',
         model: 'gpt-image-2',
         size: '1024x1024',
+        quality: 'auto',
       },
       imageGenerationPrompt: '高质量图片，画面清晰，主体明确，无水印，无乱码文字。',
       stickerConfig: createDefaultStickerConfig(),
@@ -548,6 +580,13 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({
           shizukuFileConfig: {
             ...(state.shizukuFileConfig || { enabled: false, roots: [], maxToolCalls: 6 }),
+            ...config,
+          },
+        })),
+      setMcpToolConfig: (config) =>
+        set((state) => ({
+          mcpToolConfig: {
+            ...(state.mcpToolConfig || { enabled: false, servers: [], maxToolCalls: 6 }),
             ...config,
           },
         })),
@@ -781,6 +820,7 @@ export const useSettingsStore = create<SettingsState>()(
         hotboardConfig: state.hotboardConfig,
         nativeToolConfig: state.nativeToolConfig,
         shizukuFileConfig: state.shizukuFileConfig,
+        mcpToolConfig: state.mcpToolConfig,
         readingConfig: state.readingConfig,
         floatingBallConfig: state.floatingBallConfig,
         periodConfig: state.periodConfig,

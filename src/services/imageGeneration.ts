@@ -1,5 +1,6 @@
 import { randomUUID } from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
 
 export interface ImageGenerationRequest {
   baseUrl: string;
@@ -7,6 +8,7 @@ export interface ImageGenerationRequest {
   model: string;
   prompt: string;
   size?: string;
+  quality?: string;
   signal?: AbortSignal;
 }
 
@@ -67,7 +69,7 @@ async function downloadImage(url: string, fileStem: string): Promise<string> {
 }
 
 export async function generateOpenAIImage(request: ImageGenerationRequest): Promise<ImageGenerationResult> {
-  const { baseUrl, apiKey, model, prompt, size, signal } = request;
+  const { baseUrl, apiKey, model, prompt, size, quality, signal } = request;
   const url = `${normalizeBaseUrl(baseUrl)}/images/generations`;
   const body: Record<string, any> = {
     model,
@@ -75,6 +77,9 @@ export async function generateOpenAIImage(request: ImageGenerationRequest): Prom
   };
   if (size) {
     body.size = size;
+  }
+  if (quality) {
+    body.quality = quality;
   }
 
   const response = await fetch(url, {
@@ -123,4 +128,14 @@ export async function deleteGeneratedImageFile(imageUri?: string): Promise<void>
   if (file.exists) {
     file.delete();
   }
+}
+
+export async function saveGeneratedImageToLibrary(imageUri: string): Promise<string> {
+  const permission = await MediaLibrary.requestPermissionsAsync(true, ['photo']);
+  if (!permission.granted) {
+    throw new Error('未获得相册写入权限');
+  }
+
+  const asset = await MediaLibrary.Asset.create(imageUri);
+  return asset.id;
 }
