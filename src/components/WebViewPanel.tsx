@@ -393,6 +393,8 @@ const CLEAR_CURRENT_SITE_DATA_SCRIPT = `
   })();
 `;
 
+const GOOGLE_TRANSLATE_PAGE_URL = 'https://translate.google.com/translate';
+
 function normalizeAddressInput(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -403,6 +405,26 @@ function normalizeAddressInput(value: string): string | null {
       return null;
     }
     return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function buildGoogleTranslateUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    let targetUrl = parsed.toString();
+
+    if (parsed.hostname === 'translate.google.com' && parsed.pathname === '/translate') {
+      targetUrl = parsed.searchParams.get('u') || targetUrl;
+    }
+
+    const target = new URL(targetUrl);
+    if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+      return null;
+    }
+
+    return `${GOOGLE_TRANSLATE_PAGE_URL}?sl=auto&tl=zh-CN&hl=zh-CN&u=${encodeURIComponent(target.toString())}`;
   } catch {
     return null;
   }
@@ -1051,6 +1073,17 @@ export function WebViewPanel() {
     webViewRef.current?.reload();
   };
 
+  const handleTranslateCurrentPage = () => {
+    const translatedUrl = buildGoogleTranslateUrl(urlRef.current);
+    if (!translatedUrl) {
+      setStatus('当前网页无法翻译');
+      setShowWebMenu(false);
+      return;
+    }
+    openUrl(translatedUrl, titleRef.current ? `${titleRef.current} - Google 翻译` : 'Google 翻译');
+    setStatus('正在使用 Google 翻译打开');
+  };
+
   const clearBrowserCache = () => {
     webViewRef.current?.clearCache(true);
     setShowClearDataMenu(false);
@@ -1250,6 +1283,13 @@ export function WebViewPanel() {
             <Text style={[styles.webMenuText, !url && styles.webMenuTextDisabled]}>
               {isCurrentBookmarked ? '取消收藏' : '收藏网页'}
             </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.webMenuItem, !url && styles.webMenuItemDisabled]}
+            onPress={handleTranslateCurrentPage}
+            disabled={!url}
+          >
+            <Text style={[styles.webMenuText, !url && styles.webMenuTextDisabled]}>翻译当前页</Text>
           </Pressable>
           <Pressable style={styles.webMenuItem} onPress={toggleUserAgent}>
             <Text style={styles.webMenuText}>{webViewUserAgent ? '切换移动端 UA' : '切换网页端 UA'}</Text>
