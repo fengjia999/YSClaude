@@ -191,3 +191,48 @@ export interface ToolDefinition {
     };
   };
 }
+
+export interface ApiTokenUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  cachedTokens?: number;
+  reasoningTokens?: number;
+  detailsJson?: string;
+}
+
+export type ApiUsageStatus = 'success' | 'error' | 'aborted';
+
+export interface ApiUsageEvent extends ApiTokenUsage {
+  id: string;
+  feature: string;
+  requestKind: string;
+  streaming: boolean;
+  status: ApiUsageStatus;
+  model: string;
+  baseUrl: string;
+  conversationId?: string;
+  messageId?: string;
+  startedAt: number;
+  endedAt: number;
+  durationMs: number;
+  errorMessage?: string;
+  metadataJson?: string;
+}
+
+export interface ApiUsageSummary {
+  totalCalls: number;
+  successCalls: number;
+  errorCalls: number;
+  abortedCalls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cachedTokens: number;
+  reasoningTokens: number;
+  totalDurationMs: number;
+}
+
+export interface ApiUsageGroupSummary extends ApiUsageSummary {
+  key: string;
+}

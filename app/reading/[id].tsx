@@ -451,6 +451,12 @@ export default function ReadingBookScreen() {
               content: message.content,
             })),
           ],
+          usageContext: {
+            feature: 'reading',
+            requestKind: 'reading-chat',
+            messageId: assistantMessage.id,
+            metadata: { bookId: book.id, bookTitle: book.title },
+          },
         },
         (token) => {
           assistantContent += token;
@@ -609,6 +615,11 @@ export default function ReadingBookScreen() {
             },
           ],
           maxTokens: maxOutputTokens || undefined,
+          usageContext: {
+            feature: 'reading',
+            requestKind: 'reading-summary',
+            metadata: { bookId: book?.id, bookTitle: book?.title, from, to },
+          },
         },
         (token) => {
           generatedSummary += token;

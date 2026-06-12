@@ -642,6 +642,17 @@ export const useGameStore = create<GameState>()(
                 { role: 'system', content: buildSystemPrompt(scenario, actor, get().gameScripts) },
                 ...buildApiMessages(apiHistory),
               ],
+              usageContext: {
+                feature: 'game',
+                requestKind: 'actor-response',
+                messageId: responseMessage.id,
+                metadata: {
+                  scenarioId,
+                  scenarioTitle: scenario.title,
+                  actorId,
+                  actorName: actor.name,
+                },
+              },
             },
             (token) => {
               set((state) => {

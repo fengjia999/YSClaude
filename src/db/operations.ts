@@ -18,6 +18,10 @@ import {
   FocusSessionStatus,
   ToolCall,
   GeneratedPicture,
+  ApiUsageEvent,
+  ApiUsageGroupSummary,
+  ApiUsageStatus,
+  ApiUsageSummary,
 } from '../types';
 import {
   ANDROID_ACCESSIBILITY_CAPTURE_NOTICE_PREFIX,
@@ -1946,4 +1950,181 @@ export async function incrementFocusTaskCompletedCount(taskId: string, updatedAt
       WHERE id = ?`,
     [updatedAt, taskId]
   );
+}
+
+/* ==================== API usage logs ==================== */
+
+interface ApiUsageEventRow {
+  id: string;
+  feature: string;
+  request_kind: string;
+  streaming: number;
+  status: string;
+  model: string;
+  base_url: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  cached_tokens: number | null;
+  reasoning_tokens: number | null;
+  details_json: string | null;
+  started_at: number;
+  ended_at: number;
+  duration_ms: number;
+  error_message: string | null;
+  metadata_json: string | null;
+}
+
+interface ApiUsageSummaryRow {
+  total_calls: number | null;
+  success_calls: number | null;
+  error_calls: number | null;
+  aborted_calls: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  cached_tokens: number | null;
+  reasoning_tokens: number | null;
+  total_duration_ms: number | null;
+}
+
+function normalizeApiUsageStatus(value: string): ApiUsageStatus {
+  if (value === 'error' || value === 'aborted') return value;
+  return 'success';
+}
+
+function mapApiUsageEventRow(row: ApiUsageEventRow): ApiUsageEvent {
+  return {
+    id: row.id,
+    feature: row.feature,
+    requestKind: row.request_kind,
+    streaming: row.streaming === 1,
+    status: normalizeApiUsageStatus(row.status),
+    model: row.model,
+    baseUrl: row.base_url,
+    conversationId: row.conversation_id || undefined,
+    messageId: row.message_id || undefined,
+    promptTokens: row.prompt_tokens ?? undefined,
+    completionTokens: row.completion_tokens ?? undefined,
+    totalTokens: row.total_tokens ?? undefined,
+    cachedTokens: row.cached_tokens ?? undefined,
+    reasoningTokens: row.reasoning_tokens ?? undefined,
+    detailsJson: row.details_json || undefined,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    durationMs: row.duration_ms,
+    errorMessage: row.error_message || undefined,
+    metadataJson: row.metadata_json || undefined,
+  };
+}
+
+function mapApiUsageSummaryRow(row: ApiUsageSummaryRow | null | undefined): ApiUsageSummary {
+  return {
+    totalCalls: row?.total_calls ?? 0,
+    successCalls: row?.success_calls ?? 0,
+    errorCalls: row?.error_calls ?? 0,
+    abortedCalls: row?.aborted_calls ?? 0,
+    promptTokens: row?.prompt_tokens ?? 0,
+    completionTokens: row?.completion_tokens ?? 0,
+    totalTokens: row?.total_tokens ?? 0,
+    cachedTokens: row?.cached_tokens ?? 0,
+    reasoningTokens: row?.reasoning_tokens ?? 0,
+    totalDurationMs: row?.total_duration_ms ?? 0,
+  };
+}
+
+const API_USAGE_SUMMARY_SELECT = `
+  COUNT(*) as total_calls,
+  SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_calls,
+  SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as error_calls,
+  SUM(CASE WHEN status = 'aborted' THEN 1 ELSE 0 END) as aborted_calls,
+  COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+  COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+  COALESCE(SUM(total_tokens), 0) as total_tokens,
+  COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+  COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
+  COALESCE(SUM(duration_ms), 0) as total_duration_ms
+`;
+
+export async function insertApiUsageEvent(event: ApiUsageEvent): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    `INSERT OR REPLACE INTO api_usage_events
+      (id, feature, request_kind, streaming, status, model, base_url, conversation_id, message_id,
+       prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, details_json,
+       started_at, ended_at, duration_ms, error_message, metadata_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      event.id,
+      event.feature || 'unknown',
+      event.requestKind || 'chat',
+      event.streaming ? 1 : 0,
+      event.status,
+      event.model,
+      event.baseUrl,
+      event.conversationId || null,
+      event.messageId || null,
+      event.promptTokens ?? null,
+      event.completionTokens ?? null,
+      event.totalTokens ?? null,
+      event.cachedTokens ?? null,
+      event.reasoningTokens ?? null,
+      event.detailsJson || null,
+      event.startedAt,
+      event.endedAt,
+      event.durationMs,
+      event.errorMessage || null,
+      event.metadataJson || null,
+    ]
+  );
+}
+
+export async function getApiUsageEvents(limit = 100): Promise<ApiUsageEvent[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<ApiUsageEventRow>(
+    `SELECT *
+       FROM api_usage_events
+      ORDER BY started_at DESC
+      LIMIT ?`,
+    [Math.max(1, limit)]
+  );
+  return rows.map(mapApiUsageEventRow);
+}
+
+export async function getApiUsageSummary(): Promise<ApiUsageSummary> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<ApiUsageSummaryRow>(
+    `SELECT ${API_USAGE_SUMMARY_SELECT} FROM api_usage_events`
+  );
+  return mapApiUsageSummaryRow(row);
+}
+
+export async function getApiUsageSummaryByFeature(): Promise<ApiUsageGroupSummary[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<ApiUsageSummaryRow & { key_name: string }>(
+    `SELECT feature as key_name, ${API_USAGE_SUMMARY_SELECT}
+       FROM api_usage_events
+      GROUP BY feature
+      ORDER BY total_tokens DESC, total_calls DESC`
+  );
+  return rows.map((row) => ({
+    key: row.key_name || 'unknown',
+    ...mapApiUsageSummaryRow(row),
+  }));
+}
+
+export async function getApiUsageSummaryByModel(): Promise<ApiUsageGroupSummary[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<ApiUsageSummaryRow & { key_name: string }>(
+    `SELECT model as key_name, ${API_USAGE_SUMMARY_SELECT}
+       FROM api_usage_events
+      GROUP BY model
+      ORDER BY total_tokens DESC, total_calls DESC`
+  );
+  return rows.map((row) => ({
+    key: row.key_name || 'unknown',
+    ...mapApiUsageSummaryRow(row),
+  }));
 }

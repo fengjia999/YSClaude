@@ -186,6 +186,33 @@ async function initTables(database: SQLite.SQLiteDatabase) {
 
     CREATE INDEX IF NOT EXISTS idx_focus_sessions_started ON focus_sessions(started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_focus_sessions_task ON focus_sessions(task_id);
+
+    CREATE TABLE IF NOT EXISTS api_usage_events (
+      id TEXT PRIMARY KEY,
+      feature TEXT NOT NULL DEFAULT 'unknown',
+      request_kind TEXT NOT NULL DEFAULT 'chat',
+      streaming INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'success',
+      model TEXT NOT NULL DEFAULT '',
+      base_url TEXT NOT NULL DEFAULT '',
+      conversation_id TEXT,
+      message_id TEXT,
+      prompt_tokens INTEGER,
+      completion_tokens INTEGER,
+      total_tokens INTEGER,
+      cached_tokens INTEGER,
+      reasoning_tokens INTEGER,
+      details_json TEXT,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      metadata_json TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_api_usage_started ON api_usage_events(started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_api_usage_feature ON api_usage_events(feature, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_api_usage_model ON api_usage_events(model, started_at DESC);
   `);
 
   await runMigrations(database);
@@ -430,6 +457,39 @@ async function runMigrations(database: SQLite.SQLiteDatabase) {
   }
   if (version < 14) {
     await database.execAsync('PRAGMA user_version = 14;');
+  }
+
+  if (version < 15) {
+    await database.execAsync(`
+      CREATE TABLE IF NOT EXISTS api_usage_events (
+        id TEXT PRIMARY KEY,
+        feature TEXT NOT NULL DEFAULT 'unknown',
+        request_kind TEXT NOT NULL DEFAULT 'chat',
+        streaming INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'success',
+        model TEXT NOT NULL DEFAULT '',
+        base_url TEXT NOT NULL DEFAULT '',
+        conversation_id TEXT,
+        message_id TEXT,
+        prompt_tokens INTEGER,
+        completion_tokens INTEGER,
+        total_tokens INTEGER,
+        cached_tokens INTEGER,
+        reasoning_tokens INTEGER,
+        details_json TEXT,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER NOT NULL,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        metadata_json TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_api_usage_started ON api_usage_events(started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_api_usage_feature ON api_usage_events(feature, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_api_usage_model ON api_usage_events(model, started_at DESC);
+
+      PRAGMA user_version = 15;
+    `);
   }
 }
 

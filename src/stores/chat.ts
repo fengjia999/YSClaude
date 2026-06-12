@@ -855,7 +855,7 @@ async function runToolLoop(
   // 每发生一次工具调用就回调一次，用于实时把记录推到 UI
   onToolInvocation?: (inv: ToolInvocation) => void,
   signal?: AbortSignal,
-  options?: { webCruiseEnabled?: boolean; sessionId?: string }
+  options?: { webCruiseEnabled?: boolean; sessionId?: string; conversationId?: string; messageId?: string }
 ): Promise<boolean> {
   const settings = useSettingsStore.getState();
   const webCruiseEnabled = !!options?.webCruiseEnabled;
@@ -915,6 +915,16 @@ async function runToolLoop(
       maxTokens,
       tools,
       sessionId: options?.sessionId,
+      usageContext: {
+        feature: 'chat',
+        requestKind: 'tool-loop',
+        conversationId: options?.conversationId,
+        messageId: options?.messageId,
+        metadata: {
+          toolCallRound: toolCallCount + 1,
+          toolCount: tools.length,
+        },
+      },
     }, onToken, signal);
 
     const toolCalls = message.tool_calls;
@@ -1319,7 +1329,12 @@ async function streamAssistantResponse(
       onToken,
       appendToolInvocation,
       abortController.signal,
-      { webCruiseEnabled: !!pendingWebCruise, sessionId }
+      {
+        webCruiseEnabled: !!pendingWebCruise,
+        sessionId,
+        conversationId,
+        messageId: assistantMessage.id,
+      }
     );
     requestStarted = true;
 
@@ -1332,6 +1347,12 @@ async function streamAssistantResponse(
           messages: outgoingMessages,
           maxTokens: settings.maxOutputTokens || undefined,
           sessionId,
+          usageContext: {
+            feature: 'chat',
+            requestKind: 'assistant-response',
+            conversationId,
+            messageId: assistantMessage.id,
+          },
         },
         onToken,
         abortController.signal

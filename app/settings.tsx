@@ -2618,6 +2618,12 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         >
           <Text style={styles.diagnosticsButtonText}>打开聊天数据库诊断</Text>
         </Pressable>
+        <Pressable
+          style={styles.diagnosticsButton}
+          onPress={() => router.push('/api-usage')}
+        >
+          <Text style={styles.diagnosticsButtonText}>打开 API 使用日志</Text>
+        </Pressable>
       </View>
 
       {/* Model picker modal */}

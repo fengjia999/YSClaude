@@ -1,5 +1,8 @@
 import { fetch as expoFetch } from 'expo/fetch';
+import { randomUUID } from 'expo-crypto';
 import { ToolDefinition } from './tools';
+import { insertApiUsageEvent } from '../db/operations';
+import { ApiTokenUsage, ApiUsageStatus } from '../types';
 
 export interface ChatMessage {
   role: string;
@@ -16,6 +19,7 @@ interface ChatRequest {
   maxTokens?: number;
   temperature?: number;
   sessionId?: string;
+  usageContext?: ApiUsageContext;
 }
 
 interface ChatRequestWithTools extends ChatRequest {
@@ -40,6 +44,7 @@ interface ChatCompletionChoice {
 
 export interface ChatCompletionResponse {
   choices: ChatCompletionChoice[];
+  usage?: RawApiUsage;
 }
 
 export interface StreamChatCompletionResult {
@@ -53,9 +58,33 @@ export interface StreamChatCompletionResult {
     };
   }[];
   finish_reason?: string;
+  usage?: ApiTokenUsage;
 }
 
 type StreamToolCall = NonNullable<StreamChatCompletionResult['tool_calls']>[number];
+
+interface ApiUsageContext {
+  feature?: string;
+  requestKind?: string;
+  conversationId?: string;
+  messageId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface RawApiUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+    [key: string]: unknown;
+  };
+  completion_tokens_details?: {
+    reasoning_tokens?: number;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
 
 function createEmptyToolCall(): StreamToolCall {
   return {
@@ -149,6 +178,77 @@ function expandConcatenatedToolNames(
   return expanded;
 }
 
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeUsage(raw: RawApiUsage | null | undefined): ApiTokenUsage | undefined {
+  if (!raw) return undefined;
+  return {
+    promptTokens: numberOrUndefined(raw.prompt_tokens),
+    completionTokens: numberOrUndefined(raw.completion_tokens),
+    totalTokens: numberOrUndefined(raw.total_tokens),
+    cachedTokens: numberOrUndefined(raw.prompt_tokens_details?.cached_tokens),
+    reasoningTokens: numberOrUndefined(raw.completion_tokens_details?.reasoning_tokens),
+    detailsJson: JSON.stringify(raw),
+  };
+}
+
+function statusForError(error: unknown): ApiUsageStatus {
+  const name = String((error as any)?.name || '').toLowerCase();
+  const message = String((error as any)?.message || '').toLowerCase();
+  if (name === 'aborterror' || message.includes('abort') || message.includes('cancel')) {
+    return 'aborted';
+  }
+  return 'error';
+}
+
+async function recordApiUsage({
+  request,
+  streaming,
+  startedAt,
+  endedAt,
+  status,
+  usage,
+  errorMessage,
+}: {
+  request: ChatRequest;
+  streaming: boolean;
+  startedAt: number;
+  endedAt: number;
+  status: ApiUsageStatus;
+  usage?: ApiTokenUsage;
+  errorMessage?: string;
+}): Promise<void> {
+  const context = request.usageContext;
+  try {
+    await insertApiUsageEvent({
+      id: randomUUID(),
+      feature: context?.feature || 'unknown',
+      requestKind: context?.requestKind || 'chat',
+      streaming,
+      status,
+      model: request.model,
+      baseUrl: request.baseUrl.trim().replace(/\/$/, ''),
+      conversationId: context?.conversationId,
+      messageId: context?.messageId,
+      promptTokens: usage?.promptTokens,
+      completionTokens: usage?.completionTokens,
+      totalTokens: usage?.totalTokens,
+      cachedTokens: usage?.cachedTokens,
+      reasoningTokens: usage?.reasoningTokens,
+      detailsJson: usage?.detailsJson,
+      startedAt,
+      endedAt,
+      durationMs: Math.max(0, endedAt - startedAt),
+      errorMessage,
+      metadataJson: context?.metadata ? JSON.stringify(context.metadata) : undefined,
+    });
+  } catch (error) {
+    console.warn('[API usage] failed to record usage event:', error);
+  }
+}
+
 /**
  * 非流式 chat completions（Tool Use 阶段使用）
  */
@@ -156,6 +256,7 @@ export async function chatCompletion(
   request: ChatRequestWithTools
 ): Promise<ChatCompletionResponse> {
   const { baseUrl, apiKey, model, messages, maxTokens, temperature, tools, sessionId } = request;
+  const startedAt = Date.now();
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
 
@@ -177,21 +278,42 @@ export async function chatCompletion(
     body.session_id = sessionId;
   }
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey.trim()}`,
-    },
-    body: JSON.stringify(body),
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey.trim()}`,
+      },
+      body: JSON.stringify(body),
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API Error ${response.status}: ${errorText}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API Error ${response.status}: ${errorText}`);
+    }
+
+    const json = await response.json();
+    await recordApiUsage({
+      request,
+      streaming: false,
+      startedAt,
+      endedAt: Date.now(),
+      status: 'success',
+      usage: normalizeUsage(json.usage),
+    });
+    return json;
+  } catch (error: any) {
+    await recordApiUsage({
+      request,
+      streaming: false,
+      startedAt,
+      endedAt: Date.now(),
+      status: statusForError(error),
+      errorMessage: error?.message || String(error),
+    });
+    throw error;
   }
-
-  return await response.json();
 }
 
 export async function streamChatCompletion(
@@ -200,6 +322,7 @@ export async function streamChatCompletion(
   signal?: AbortSignal
 ): Promise<StreamChatCompletionResult> {
   const { baseUrl, apiKey, model, messages, maxTokens, temperature, tools, sessionId } = request;
+  const startedAt = Date.now();
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
 
@@ -207,6 +330,7 @@ export async function streamChatCompletion(
     model,
     messages,
     stream: true,
+    stream_options: { include_usage: true },
   };
   if (maxTokens) {
     body.max_tokens = maxTokens;
@@ -221,121 +345,149 @@ export async function streamChatCompletion(
     body.session_id = sessionId;
   }
 
-  const response = await expoFetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey.trim()}`,
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+  let rawUsage: RawApiUsage | undefined;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API Error ${response.status}: ${errorText}`);
-  }
+  try {
+    const response = await expoFetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey.trim()}`,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
 
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('No response body');
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let content = '';
-  let finishReason: string | undefined;
-  const toolCallParts: StreamToolCall[] = [];
-  const knownToolNames = new Set((tools || []).map((tool) => tool.function.name));
-  let lastToolCallIndex = -1;
-
-  const handleJson = (json: any) => {
-    const choice = json.choices?.[0];
-    if (!choice) return;
-    if (choice.finish_reason) {
-      finishReason = choice.finish_reason;
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API Error ${response.status}: ${errorText}`);
     }
 
-    const delta = choice.delta || {};
-    if (delta.content) {
-      content += delta.content;
-      onToken(delta.content);
-    }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body');
 
-    if (Array.isArray(delta.tool_calls)) {
-      for (let position = 0; position < delta.tool_calls.length; position++) {
-        const partial = delta.tool_calls[position];
-        let index = resolveToolCallIndex(
-          toolCallParts,
-          partial,
-          position,
-          delta.tool_calls.length,
-          lastToolCallIndex
-        );
-        if (!toolCallParts[index]) {
-          toolCallParts[index] = createEmptyToolCall();
-        }
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let content = '';
+    let finishReason: string | undefined;
+    const toolCallParts: StreamToolCall[] = [];
+    const knownToolNames = new Set((tools || []).map((tool) => tool.function.name));
+    let lastToolCallIndex = -1;
 
-        let target = toolCallParts[index];
-        if (partial.id) target.id = partial.id;
-        if (partial.type) target.type = partial.type;
-        if (partial.function?.name) {
-          const incomingName = partial.function.name;
-          if (
-            knownToolNames.has(target.function.name) &&
-            knownToolNames.has(incomingName) &&
-            target.function.name !== incomingName
-          ) {
-            index = toolCallParts.length;
-            toolCallParts[index] = {
-              ...createEmptyToolCall(),
-              id:
-                partial.id && partial.id !== target.id
-                  ? partial.id
-                  : `${target.id || `call_${index - 1}`}_${index}`,
-              type: partial.type || target.type,
-            };
-            target = toolCallParts[index];
+    const handleJson = (json: any) => {
+      if (json.usage) {
+        rawUsage = json.usage;
+      }
+      const choice = json.choices?.[0];
+      if (!choice) return;
+      if (choice.finish_reason) {
+        finishReason = choice.finish_reason;
+      }
+
+      const delta = choice.delta || {};
+      if (delta.content) {
+        content += delta.content;
+        onToken(delta.content);
+      }
+
+      if (Array.isArray(delta.tool_calls)) {
+        for (let position = 0; position < delta.tool_calls.length; position++) {
+          const partial = delta.tool_calls[position];
+          let index = resolveToolCallIndex(
+            toolCallParts,
+            partial,
+            position,
+            delta.tool_calls.length,
+            lastToolCallIndex
+          );
+          if (!toolCallParts[index]) {
+            toolCallParts[index] = createEmptyToolCall();
           }
-          target.function.name = mergeToolName(target.function.name, incomingName);
+
+          let target = toolCallParts[index];
+          if (partial.id) target.id = partial.id;
+          if (partial.type) target.type = partial.type;
+          if (partial.function?.name) {
+            const incomingName = partial.function.name;
+            if (
+              knownToolNames.has(target.function.name) &&
+              knownToolNames.has(incomingName) &&
+              target.function.name !== incomingName
+            ) {
+              index = toolCallParts.length;
+              toolCallParts[index] = {
+                ...createEmptyToolCall(),
+                id:
+                  partial.id && partial.id !== target.id
+                    ? partial.id
+                    : `${target.id || `call_${index - 1}`}_${index}`,
+                type: partial.type || target.type,
+              };
+              target = toolCallParts[index];
+            }
+            target.function.name = mergeToolName(target.function.name, incomingName);
+          }
+          if (partial.function?.arguments) {
+            target.function.arguments += partial.function.arguments;
+          }
+          lastToolCallIndex = index;
         }
-        if (partial.function?.arguments) {
-          target.function.arguments += partial.function.arguments;
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed === 'data: [DONE]') continue;
+        if (!trimmed.startsWith('data: ')) continue;
+
+        try {
+          handleJson(JSON.parse(trimmed.slice(6)));
+        } catch {
+          // skip malformed JSON
         }
-        lastToolCallIndex = index;
       }
     }
-  };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    const toolCalls = expandConcatenatedToolNames(
+      toolCallParts.filter((tc) => tc.function.name),
+      knownToolNames
+    );
+    const usage = normalizeUsage(rawUsage);
+    await recordApiUsage({
+      request,
+      streaming: true,
+      startedAt,
+      endedAt: Date.now(),
+      status: 'success',
+      usage,
+    });
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed === 'data: [DONE]') continue;
-      if (!trimmed.startsWith('data: ')) continue;
-
-      try {
-        handleJson(JSON.parse(trimmed.slice(6)));
-      } catch {
-        // skip malformed JSON
-      }
-    }
+    return {
+      content,
+      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+      finish_reason: finishReason,
+      usage,
+    };
+  } catch (error: any) {
+    await recordApiUsage({
+      request,
+      streaming: true,
+      startedAt,
+      endedAt: Date.now(),
+      status: statusForError(error),
+      usage: normalizeUsage(rawUsage),
+      errorMessage: error?.message || String(error),
+    });
+    throw error;
   }
-
-  const toolCalls = expandConcatenatedToolNames(
-    toolCallParts.filter((tc) => tc.function.name),
-    knownToolNames
-  );
-
-  return {
-    content,
-    tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-    finish_reason: finishReason,
-  };
 }
 
 export async function streamChat(
@@ -344,6 +496,7 @@ export async function streamChat(
   signal?: AbortSignal
 ): Promise<void> {
   const { baseUrl, apiKey, model, messages, maxTokens, temperature, sessionId } = request;
+  const startedAt = Date.now();
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
 
@@ -351,6 +504,7 @@ export async function streamChat(
     model,
     messages,
     stream: true,
+    stream_options: { include_usage: true },
   };
   if (maxTokens) {
     body.max_tokens = maxTokens;
@@ -362,49 +516,76 @@ export async function streamChat(
     body.session_id = sessionId;
   }
 
-  const response = await expoFetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey.trim()}`,
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+  let rawUsage: RawApiUsage | undefined;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API Error ${response.status}: ${errorText}`);
-  }
+  try {
+    const response = await expoFetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey.trim()}`,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
 
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('No response body');
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API Error ${response.status}: ${errorText}`);
+    }
 
-  const decoder = new TextDecoder();
-  let buffer = '';
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body');
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    const decoder = new TextDecoder();
+    let buffer = '';
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed === 'data: [DONE]') continue;
-      if (!trimmed.startsWith('data: ')) continue;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
 
-      try {
-        const json = JSON.parse(trimmed.slice(6));
-        const delta = json.choices?.[0]?.delta?.content;
-        if (delta) {
-          onToken(delta);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed === 'data: [DONE]') continue;
+        if (!trimmed.startsWith('data: ')) continue;
+
+        try {
+          const json = JSON.parse(trimmed.slice(6));
+          if (json.usage) {
+            rawUsage = json.usage;
+          }
+          const delta = json.choices?.[0]?.delta?.content;
+          if (delta) {
+            onToken(delta);
+          }
+        } catch {
+          // skip malformed JSON
         }
-      } catch {
-        // skip malformed JSON
       }
     }
+
+    await recordApiUsage({
+      request,
+      streaming: true,
+      startedAt,
+      endedAt: Date.now(),
+      status: 'success',
+      usage: normalizeUsage(rawUsage),
+    });
+  } catch (error: any) {
+    await recordApiUsage({
+      request,
+      streaming: true,
+      startedAt,
+      endedAt: Date.now(),
+      status: statusForError(error),
+      usage: normalizeUsage(rawUsage),
+      errorMessage: error?.message || String(error),
+    });
+    throw error;
   }
 }

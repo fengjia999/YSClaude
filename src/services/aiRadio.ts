@@ -401,6 +401,11 @@ async function generateOpeningPlan(options: RadioGenerationOptions): Promise<Rad
     model: options.apiConfig.model,
     temperature: 0.85,
     maxTokens: 1800,
+    usageContext: {
+      feature: 'radio',
+      requestKind: 'opening-plan',
+      conversationId: options.conversationId,
+    },
     messages: [
       {
         role: 'system',
@@ -446,6 +451,11 @@ async function generateContinuationPlan(options: ContinueRadioOptions): Promise<
     model: options.apiConfig.model,
     temperature: 0.85,
     maxTokens: 1800,
+    usageContext: {
+      feature: 'radio',
+      requestKind: 'continuation-plan',
+      conversationId: options.conversationId,
+    },
     messages: [
       {
         role: 'system',
@@ -510,6 +520,11 @@ async function generateScriptPlan({
     model: apiConfig.model,
     temperature: 0.8,
     maxTokens: 2400,
+    usageContext: {
+      feature: 'radio',
+      requestKind: `${mode}-script`,
+      conversationId,
+    },
     messages: [
       {
         role: 'system',
@@ -704,6 +719,11 @@ export async function summarizeRadioSession({
     model: apiConfig.model,
     temperature: 0.5,
     maxTokens: 900,
+    usageContext: {
+      feature: 'radio',
+      requestKind: 'session-summary',
+      conversationId,
+    },
     messages: [
       {
         role: 'system',
