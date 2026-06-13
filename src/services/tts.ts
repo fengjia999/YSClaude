@@ -7,6 +7,10 @@ let currentSubscription: { remove: () => void } | null = null;
 let currentWaitResolve: (() => void) | null = null;
 
 async function createTTSPlayer(text: string, config: TTSConfig): Promise<ReturnType<typeof createAudioPlayer>> {
+  const speakableText = sanitizeTTSInput(text);
+  if (!speakableText) {
+    throw new Error('没有可朗读的内容');
+  }
   if (!config.apiKey || !config.groupId) {
     throw new Error('请先配置 MiniMax Group ID 和 API Key');
   }
@@ -23,7 +27,7 @@ async function createTTSPlayer(text: string, config: TTSConfig): Promise<ReturnT
     },
     body: JSON.stringify({
       model: config.model,
-      text,
+      text: speakableText,
       stream: false,
       voice_setting: {
         voice_id: config.voiceId,
@@ -117,6 +121,21 @@ export async function stopTTS(): Promise<void> {
     currentPlayer.release();
     currentPlayer = null;
   }
+}
+
+export function sanitizeTTSInput(text: string): string {
+  let next = text
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, ' ')
+    .replace(/<[^<>]*>/g, ' ');
+  const bracketedContentPattern =
+    /\[[^\[\]]*\]|\([^()]*\)|\{[^{}]*\}|\u3010[^\u3010\u3011]*\u3011|\uFF08[^\uFF08\uFF09]*\uFF09|\uFF5B[^\uFF5B\uFF5D]*\uFF5D|<[^<>]*>|\uFF1C[^\uFF1C\uFF1E]*\uFF1E|\u300A[^\u300A\u300B]*\u300B/g;
+
+  while (bracketedContentPattern.test(next)) {
+    next = next.replace(bracketedContentPattern, ' ');
+    bracketedContentPattern.lastIndex = 0;
+  }
+
+  return next.replace(/\s+/g, ' ').trim();
 }
 
 function hexToBytes(hex: string): Uint8Array {
