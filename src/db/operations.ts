@@ -452,6 +452,104 @@ export async function deleteChatDiagnosticsMessage(
   }
 }
 
+export async function clearChatDiagnosticsEmptyAssistantIssues(
+  conversationId?: string
+): Promise<number> {
+  const db = await getDatabase();
+  let deletedCount = 0;
+
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    const conversationWhere = conversationId ? 'AND m.conversation_id = ?' : '';
+    const targets = await txn.getAllAsync<{
+      id: string;
+      conversation_id: string;
+      floor_number: number;
+    }>(
+      `SELECT
+          m.id,
+          m.conversation_id,
+          (
+            SELECT COUNT(*)
+              FROM messages fm
+             WHERE fm.conversation_id = m.conversation_id
+               AND fm.role IN ('user', 'assistant')
+               AND (fm.created_at < m.created_at OR (fm.created_at = m.created_at AND fm.id <= m.id))
+          ) as floor_number
+         FROM messages m
+        WHERE m.role = 'assistant'
+          AND TRIM(COALESCE(m.content, '')) = ''
+          AND (m.tool_invocations IS NULL OR m.tool_invocations = '' OR m.tool_invocations = '[]')
+          ${conversationWhere}
+        ORDER BY m.conversation_id ASC, m.created_at ASC, m.id ASC`,
+      conversationId ? [conversationId] : []
+    );
+
+    if (targets.length === 0) return;
+
+    const targetsByConversation = new Map<string, typeof targets>();
+    for (const target of targets) {
+      const list = targetsByConversation.get(target.conversation_id);
+      if (list) {
+        list.push(target);
+      } else {
+        targetsByConversation.set(target.conversation_id, [target]);
+      }
+    }
+
+    const now = Date.now();
+    for (const [targetConversationId, conversationTargets] of targetsByConversation) {
+      const conversation = await txn.getFirstAsync<{
+        hidden_ranges: string | null;
+        hidden_message_ids: string | null;
+        pending_response_boundary_message_id: string | null;
+      }>(
+        'SELECT hidden_ranges, hidden_message_ids, pending_response_boundary_message_id FROM conversations WHERE id = ?',
+        [targetConversationId]
+      );
+
+      const targetIds = new Set(conversationTargets.map((target) => target.id));
+      let nextHiddenRanges = parseHiddenRanges(conversation?.hidden_ranges);
+      for (const target of [...conversationTargets].sort((a, b) => b.floor_number - a.floor_number)) {
+        nextHiddenRanges = shiftHiddenRangesAfterDeletedFloor(nextHiddenRanges, target.floor_number);
+      }
+
+      const nextHiddenMessageIds = parseStringArray(conversation?.hidden_message_ids).filter(
+        (id) => !targetIds.has(id)
+      );
+      const nextPendingBoundary = targetIds.has(conversation?.pending_response_boundary_message_id || '')
+        ? null
+        : conversation?.pending_response_boundary_message_id ?? null;
+
+      for (const target of conversationTargets) {
+        await txn.runAsync('DELETE FROM messages WHERE conversation_id = ? AND id = ?', [
+          targetConversationId,
+          target.id,
+        ]);
+      }
+
+      await txn.runAsync(
+        `UPDATE conversations
+            SET hidden_ranges = ?,
+                hidden_message_ids = ?,
+                pending_response_boundary_message_id = ?,
+                updated_at = ?
+          WHERE id = ?`,
+        [
+          JSON.stringify(nextHiddenRanges),
+          JSON.stringify(nextHiddenMessageIds),
+          nextPendingBoundary,
+          now,
+          targetConversationId,
+        ]
+      );
+    }
+
+    deletedCount = targets.length;
+  });
+
+  return deletedCount;
+}
+
 function parseJsonArray<T>(raw: string | null | undefined): T[] | undefined {
   if (!raw) return undefined;
   try {

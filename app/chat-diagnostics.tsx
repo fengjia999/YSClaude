@@ -15,6 +15,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { lightColors, useThemeColors, type ThemeColors } from '../src/theme/colors';
 import { fonts } from '../src/theme/fonts';
 import {
+  clearChatDiagnosticsEmptyAssistantIssues,
   deleteChatDiagnosticsMessage,
   getChatDiagnosticsConversation,
   getChatDiagnosticsConversations,
@@ -54,6 +55,7 @@ export default function ChatDiagnosticsScreen() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
   const [hidingMessageId, setHidingMessageId] = useState<string | null>(null);
+  const [clearingEmptyIssues, setClearingEmptyIssues] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const messageListRef = useRef<FlatList<ChatDiagnosticsMessage>>(null);
   const pendingJumpMessageIdRef = useRef<string | null>(null);
@@ -118,6 +120,7 @@ export default function ChatDiagnosticsScreen() {
         acc.messages += conversation.totalMessageCount;
         acc.floorMessages += conversation.floorMessageCount;
         acc.issues += conversation.issueCount;
+        acc.emptyAssistantMessages += conversation.emptyAssistantCount;
         acc.duplicateGroups += conversation.duplicateTimestampGroupCount;
         return acc;
       },
@@ -126,6 +129,7 @@ export default function ChatDiagnosticsScreen() {
         messages: 0,
         floorMessages: 0,
         issues: 0,
+        emptyAssistantMessages: 0,
         duplicateGroups: 0,
       }
     );
@@ -297,6 +301,40 @@ export default function ChatDiagnosticsScreen() {
     }
   }, [hidingMessageId, loadConversations, loadDetail, selectedId]);
 
+  const confirmClearEmptyIssues = useCallback((targetConversationId?: string, emptyCount?: number) => {
+    if (clearingEmptyIssues) return;
+    const scoped = !!targetConversationId;
+    const countText = typeof emptyCount === 'number' ? `${emptyCount} 条` : '所有';
+    Alert.alert(
+      scoped ? '清除当前对话空楼层' : '清除全部空楼层',
+      `将删除${scoped ? '当前对话中' : '所有对话中'}的 ${countText}空助手消息，并自动修正隐藏楼层范围。\n\n这个操作不可撤销。`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '清除',
+          style: 'destructive',
+          onPress: async () => {
+            setClearingEmptyIssues(true);
+            setError(null);
+            try {
+              const deleted = await clearChatDiagnosticsEmptyAssistantIssues(targetConversationId);
+              await loadConversations();
+              const detailId = selectedId;
+              if (detailId) {
+                await loadDetail(detailId);
+              }
+              Alert.alert('已清除', `已删除 ${deleted} 条空助手消息。`);
+            } catch (err: any) {
+              setError(err?.message || 'Failed to clear empty issues');
+            } finally {
+              setClearingEmptyIssues(false);
+            }
+          },
+        },
+      ]
+    );
+  }, [clearingEmptyIssues, loadConversations, loadDetail, selectedId]);
+
   const renderConversation = useCallback(
     ({ item }: { item: ChatDiagnosticsConversation }) => (
       <Pressable style={styles.conversationRow} onPress={() => openConversation(item.id)}>
@@ -414,6 +452,8 @@ export default function ChatDiagnosticsScreen() {
       filteredMessageCount={filteredMessages.length}
       issueJumpTargets={issueJumpTargets}
       onJumpToIssue={jumpToIssue}
+      clearingEmptyIssues={clearingEmptyIssues}
+      onClearEmptyIssues={() => confirmClearEmptyIssues(selectedId || undefined, detail?.emptyAssistantCount ?? 0)}
     />
   ) : (
     <View>
@@ -428,6 +468,17 @@ export default function ChatDiagnosticsScreen() {
           <Text style={styles.warningText}>
             Found {totals.duplicateGroups} timestamp groups that can affect floor offsets.
           </Text>
+        )}
+        {totals.emptyAssistantMessages > 0 && (
+          <Pressable
+            style={[styles.clearIssuesButton, clearingEmptyIssues && styles.disabledButton]}
+            onPress={() => confirmClearEmptyIssues(undefined, totals.emptyAssistantMessages)}
+            disabled={clearingEmptyIssues}
+          >
+            <Text style={styles.clearIssuesButtonText}>
+              {clearingEmptyIssues ? 'Clearing...' : `Clear empty floors (${totals.emptyAssistantMessages})`}
+            </Text>
+          </Pressable>
         )}
       </View>
       <DiagnosticsLegend />
@@ -544,6 +595,8 @@ function DetailHeader({
   filteredMessageCount,
   issueJumpTargets,
   onJumpToIssue,
+  clearingEmptyIssues,
+  onClearEmptyIssues,
 }: {
   detail: ChatDiagnosticsDetail | null;
   loading: boolean;
@@ -553,6 +606,8 @@ function DetailHeader({
   filteredMessageCount: number;
   issueJumpTargets: IssueJumpTarget[];
   onJumpToIssue: (target: IssueJumpTarget) => void;
+  clearingEmptyIssues: boolean;
+  onClearEmptyIssues: () => void;
 }) {
   if (loading && !detail) {
     return (
@@ -594,6 +649,17 @@ function DetailHeader({
       <Text style={styles.metaLine}>
         pending boundary: {detail.pendingResponseBoundaryMessageId === undefined ? 'unset' : detail.pendingResponseBoundaryMessageId || 'start'}
       </Text>
+      {detail.emptyAssistantCount > 0 && (
+        <Pressable
+          style={[styles.clearIssuesButton, clearingEmptyIssues && styles.disabledButton]}
+          onPress={onClearEmptyIssues}
+          disabled={clearingEmptyIssues}
+        >
+          <Text style={styles.clearIssuesButtonText}>
+            {clearingEmptyIssues ? 'Clearing...' : `Clear empty floors (${detail.emptyAssistantCount})`}
+          </Text>
+        </Pressable>
+      )}
       {issueJumpTargets.length > 0 && (
         <View style={styles.issueJumpPanel}>
           <Text style={styles.warningText}>问题跳转</Text>
@@ -935,6 +1001,24 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.primary,
     fontSize: 13,
     fontWeight: '700',
+  },
+  clearIssuesButton: {
+    alignSelf: 'flex-start',
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    backgroundColor: colors.dangerSurface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 2,
+  },
+  clearIssuesButtonText: {
+    color: colors.danger,
+    fontSize: 13,
+    fontWeight: '800',
   },
   detailTitle: {
     color: colors.text,
