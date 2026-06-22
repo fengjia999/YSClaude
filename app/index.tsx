@@ -165,6 +165,7 @@ export default function ChatScreen() {
   const topBarIconUris = appearanceConfig?.topBarIconUris || {};
   const topBarIconsHidden = !!appearanceConfig?.topBarIconsHidden;
   const topBarFadeHidden = !!appearanceConfig?.topBarFadeHidden;
+  const topBarBackgroundImageUri = appearanceConfig?.topBarBackgroundImageUri;
   const chatBackgroundImageUri = appearanceConfig?.chatBackgroundImageUri;
   const {
     conversationId,
@@ -840,6 +841,7 @@ export default function ChatScreen() {
       onContentSizeChange={handleContentSizeChange}
       onScroll={handleScroll}
       scrollEventThrottle={16}
+      removeClippedSubviews={false}
       maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       onScrollToIndexFailed={({ index }) => {
         setTimeout(() => {
@@ -869,6 +871,13 @@ export default function ChatScreen() {
         )}
       </BlurTargetView>
       <View style={styles.header}>
+        {topBarBackgroundImageUri && (
+          <Image
+            source={{ uri: topBarBackgroundImageUri }}
+            style={styles.headerBackgroundImage}
+            resizeMode="cover"
+          />
+        )}
         {!topBarFadeHidden && (
           <LinearGradient
             pointerEvents="none"
@@ -953,8 +962,8 @@ export default function ChatScreen() {
       >
         <ChatInput
           blurTarget={blurTargetRef}
-          onSend={async (text, imageUri) => {
-            await addUserMessage(text, imageUri);
+          onSend={async (text, imageUri, imageGenerationReferenceUris) => {
+            await addUserMessage(text, imageUri, imageGenerationReferenceUris);
           }}
           onTriggerResponse={triggerResponse}
           onEnableWebCruise={handleEnableWebCruise}
@@ -1179,6 +1188,10 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingTop: 48,
     paddingHorizontal: 12,
     paddingBottom: 8,
+    overflow: 'hidden',
+  },
+  headerBackgroundImage: {
+    ...StyleSheet.absoluteFill,
   },
   headerFade: {
     position: 'absolute',

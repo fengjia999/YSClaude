@@ -69,6 +69,7 @@ async function initTables(database: SQLite.SQLiteDatabase) {
       tool_call_id TEXT,
       tool_invocations TEXT,
       generated_pics TEXT,
+      image_generation_reference_uris TEXT,
       created_at INTEGER NOT NULL,
       FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
     );
@@ -528,6 +529,16 @@ async function runMigrations(database: SQLite.SQLiteDatabase) {
 
       PRAGMA user_version = 16;
     `);
+  }
+
+  // v17: persist reference images that should be passed to the image edit API.
+  if (!(await hasColumn(database, 'messages', 'image_generation_reference_uris'))) {
+    await database.execAsync(
+      `ALTER TABLE messages ADD COLUMN image_generation_reference_uris TEXT;`
+    );
+  }
+  if (version < 17) {
+    await database.execAsync('PRAGMA user_version = 17;');
   }
 }
 

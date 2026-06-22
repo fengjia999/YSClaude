@@ -3,6 +3,7 @@ import {
   McpToolConfig,
   MemoryVaultConfig,
   NativeToolConfig,
+  RunCommandConfig,
   ShizukuFileConfig,
   WebInteractionConfig,
   WebPageReaderConfig,
@@ -28,6 +29,7 @@ export interface ToolDefinitionConfig {
   webPageReader?: boolean;
   webInteraction?: boolean;
   hotboard?: boolean;
+  runCommand?: RunCommandConfig;
   nativeTools?: NativeToolConfig;
   shizukuFile?: ShizukuFileConfig;
   mcpTools?: McpToolConfig;
@@ -39,6 +41,7 @@ export interface ToolExecutionContext {
   webPageReaderConfig: WebPageReaderConfig;
   webInteractionConfig: WebInteractionConfig;
   hotboardConfig: HotboardConfig;
+  runCommandConfig: RunCommandConfig;
   nativeToolConfig: NativeToolConfig;
   shizukuFileConfig: ShizukuFileConfig;
   mcpToolConfig: McpToolConfig;

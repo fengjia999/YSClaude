@@ -10,7 +10,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { lightColors, useThemeColors, type ThemeColors } from '../src/theme/colors';
 
 import { fonts } from '../src/theme/fonts';
-import { useSettingsStore, NamedAPIConfig, TTSConfig, MemoryVaultConfig, WebSearchConfig, type ChatInputIconKey, type ChatInputAppearanceStyle, type AssistantBubbleAppearanceStyle, type ShizukuFileRoot, type StickerOwner, type CustomSticker, type QQBotConfig } from '../src/stores/settings';
+import { useSettingsStore, NamedAPIConfig, TTSConfig, MemoryVaultConfig, WebSearchConfig, type BubbleTextureConfig, type ChatInputIconKey, type ChatInputAppearanceStyle, type AssistantBubbleAppearanceStyle, type ShizukuFileRoot, type StickerOwner, type CustomSticker, type QQBotConfig } from '../src/stores/settings';
 import { TopBarIcon, TOP_BAR_ICON_ITEMS } from '../src/components/TopBarIcon';
 import type { TopBarIconKey } from '../src/utils/topBarIconTypes';
 import { useChatStore } from '../src/stores/chat';
@@ -58,6 +58,9 @@ const CUSTOM_TOP_BAR_ICON_MAX_SIDE = 2048;
 const CUSTOM_BACKGROUND_MAX_BYTES = 8 * 1024 * 1024;
 const CUSTOM_BACKGROUND_MIN_SIDE = 320;
 const CUSTOM_BACKGROUND_MAX_SIDE = 6000;
+const CUSTOM_BUBBLE_TEXTURE_MAX_BYTES = 8 * 1024 * 1024;
+const CUSTOM_BUBBLE_TEXTURE_MIN_SIDE = 48;
+const CUSTOM_BUBBLE_TEXTURE_MAX_SIDE = 4096;
 const CUSTOM_STICKER_MAX_BYTES = 5 * 1024 * 1024;
 const CUSTOM_STICKER_MIN_SIDE = 32;
 const CUSTOM_STICKER_MAX_SIDE = 4096;
@@ -84,6 +87,7 @@ const IMAGE_SIZE_OPTIONS = ['auto', '1024x1024', '1536x1024', '1024x1536'] as co
 const IMAGE_QUALITY_OPTIONS = ['auto', 'low', 'medium', 'high'] as const;
 type ModelPickerTarget = 'chat' | 'image';
 type ImageOptionTarget = 'size' | 'quality';
+type BubbleTextureOwner = 'user' | 'assistant';
 
 export default function SettingsScreen() {
   colors = useThemeColors();
@@ -411,6 +415,88 @@ function validateBackgroundAsset(asset: ImagePicker.ImagePickerAsset): string | 
     return `图片边长不能超过 ${CUSTOM_BACKGROUND_MAX_SIDE}px`;
   }
   return null;
+}
+
+function validateBubbleTextureAsset(asset: ImagePicker.ImagePickerAsset): string | null {
+  const mimeType = asset.mimeType?.toLowerCase();
+  const extension = topBarIconExtension(asset);
+  const isAllowedType =
+    mimeType === 'image/png' ||
+    mimeType === 'image/webp' ||
+    mimeType === 'image/jpeg' ||
+    mimeType === 'image/jpg' ||
+    ['.png', '.webp', '.jpg'].includes(extension);
+
+  if (!isAllowedType) {
+    return '只支持 PNG、WebP 或 JPG，推荐使用透明 PNG';
+  }
+  if (asset.fileSize && asset.fileSize > CUSTOM_BUBBLE_TEXTURE_MAX_BYTES) {
+    return '图片不能超过 8MB';
+  }
+  if (
+    asset.width < CUSTOM_BUBBLE_TEXTURE_MIN_SIDE ||
+    asset.height < CUSTOM_BUBBLE_TEXTURE_MIN_SIDE
+  ) {
+    return `图片边长至少 ${CUSTOM_BUBBLE_TEXTURE_MIN_SIDE}px`;
+  }
+  if (
+    asset.width > CUSTOM_BUBBLE_TEXTURE_MAX_SIDE ||
+    asset.height > CUSTOM_BUBBLE_TEXTURE_MAX_SIDE
+  ) {
+    return `图片边长不能超过 ${CUSTOM_BUBBLE_TEXTURE_MAX_SIDE}px`;
+  }
+  return null;
+}
+
+function clampBubbleInset(value: number, max: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(0, Math.round(value)), Math.max(0, Math.floor(max)));
+}
+
+function normalizeBubbleTextureConfig(config: BubbleTextureConfig): BubbleTextureConfig {
+  const halfWidth = Math.max(1, Math.floor(config.originalWidth / 2) - 1);
+  const halfHeight = Math.max(1, Math.floor(config.originalHeight / 2) - 1);
+
+  return {
+    ...config,
+    stretchInsets: {
+      left: clampBubbleInset(config.stretchInsets.left, halfWidth),
+      top: clampBubbleInset(config.stretchInsets.top, halfHeight),
+      right: clampBubbleInset(config.stretchInsets.right, halfWidth),
+      bottom: clampBubbleInset(config.stretchInsets.bottom, halfHeight),
+    },
+    contentInsets: {
+      left: clampBubbleInset(config.contentInsets.left, config.originalWidth - 1),
+      top: clampBubbleInset(config.contentInsets.top, config.originalHeight - 1),
+      right: clampBubbleInset(config.contentInsets.right, config.originalWidth - 1),
+      bottom: clampBubbleInset(config.contentInsets.bottom, config.originalHeight - 1),
+    },
+  };
+}
+
+function createBubbleTextureConfig(asset: ImagePicker.ImagePickerAsset, uri: string): BubbleTextureConfig {
+  const width = Math.max(CUSTOM_BUBBLE_TEXTURE_MIN_SIDE, asset.width || 240);
+  const height = Math.max(CUSTOM_BUBBLE_TEXTURE_MIN_SIDE, asset.height || 120);
+  const horizontal = Math.round(width * 0.24);
+  const vertical = Math.round(height * 0.30);
+
+  return normalizeBubbleTextureConfig({
+    uri,
+    originalWidth: width,
+    originalHeight: height,
+    stretchInsets: {
+      left: horizontal,
+      top: vertical,
+      right: horizontal,
+      bottom: vertical,
+    },
+    contentInsets: {
+      left: horizontal + 8,
+      top: vertical + 4,
+      right: horizontal + 8,
+      bottom: vertical + 4,
+    },
+  });
 }
 
 function validateStickerAsset(asset: ImagePicker.ImagePickerAsset): string | null {
@@ -817,8 +903,13 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   } = useSettingsStore();
   const [pickingKey, setPickingKey] = useState<TopBarIconKey | null>(null);
   const [pickingInputIconKey, setPickingInputIconKey] = useState<ChatInputIconKey | null>(null);
-  const [pickingBackground, setPickingBackground] = useState<'chat' | 'input' | null>(null);
+  const [pickingBackground, setPickingBackground] = useState<'chat' | 'input' | 'topBar' | null>(null);
   const [pickingAvatar, setPickingAvatar] = useState<'user' | 'assistant' | null>(null);
+  const [pickingBubbleTexture, setPickingBubbleTexture] = useState<BubbleTextureOwner | null>(null);
+  const [editingBubbleTexture, setEditingBubbleTexture] = useState<{
+    owner: BubbleTextureOwner;
+    config: BubbleTextureConfig;
+  } | null>(null);
   const [appearanceThemeName, setAppearanceThemeName] = useState('');
   const [appearanceThemesExpanded, setAppearanceThemesExpanded] = useState(false);
   const [userBubbleColorInput, setUserBubbleColorInput] = useState(appearanceConfig?.userBubbleColor || colors.userBubble);
@@ -832,15 +923,19 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const topBarIconUris = appearanceConfig?.topBarIconUris || {};
   const topBarIconsHidden = !!appearanceConfig?.topBarIconsHidden;
   const topBarFadeHidden = !!appearanceConfig?.topBarFadeHidden;
+  const topBarBackgroundImageUri = appearanceConfig?.topBarBackgroundImageUri;
   const inputIconUris = appearanceConfig?.inputIconUris || {};
   const inputStyle = appearanceConfig?.inputStyle || 'default';
   const inputBlurIntensity = appearanceConfig?.inputBlurIntensity ?? 72;
+  const inputBorderRadius = appearanceConfig?.inputBorderRadius ?? 24;
   const inputBackgroundTransparent = !!appearanceConfig?.inputBackgroundTransparent;
   const userBubbleTransparent = !!appearanceConfig?.userBubbleTransparent;
   const userBubbleWidthPercent = appearanceConfig?.userBubbleWidthPercent ?? 75;
+  const userBubbleTexture = appearanceConfig?.userBubbleTexture;
   const assistantBubbleStyle = appearanceConfig?.assistantBubbleStyle || 'plain';
   const assistantBubbleTransparent = !!appearanceConfig?.assistantBubbleTransparent;
   const assistantBubbleWidthPercent = appearanceConfig?.assistantBubbleWidthPercent ?? 75;
+  const assistantBubbleTexture = appearanceConfig?.assistantBubbleTexture;
   const messageAvatarsVisible = !!appearanceConfig?.messageAvatarsVisible;
   const messageMetaVisible = appearanceConfig?.messageMetaVisible ?? true;
   const userAvatarImageUri = appearanceConfig?.userAvatarImageUri;
@@ -907,7 +1002,7 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     showToast('已恢复默认顶栏图标');
   }
 
-  async function handlePickBackground(kind: 'chat' | 'input') {
+  async function handlePickBackground(kind: 'chat' | 'input' | 'topBar') {
     if (pickingBackground) return;
     setPickingBackground(kind);
     try {
@@ -927,15 +1022,25 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
 
       const uri = await copyAppearanceImage(
         asset,
-        kind === 'chat' ? 'chat-backgrounds' : 'chat-input-backgrounds',
-        kind === 'chat' ? 'chat-bg' : 'input-bg'
+        kind === 'chat'
+          ? 'chat-backgrounds'
+          : kind === 'topBar'
+            ? 'top-bar-backgrounds'
+            : 'chat-input-backgrounds',
+        kind === 'chat'
+          ? 'chat-bg'
+          : kind === 'topBar'
+            ? 'top-bar-bg'
+            : 'input-bg'
       );
       setAppearanceConfig(
         kind === 'chat'
           ? { chatBackgroundImageUri: uri }
+          : kind === 'topBar'
+            ? { topBarBackgroundImageUri: uri }
           : { inputBackgroundImageUri: uri }
       );
-      showToast(kind === 'chat' ? '聊天背景已更新' : '输入框背景已更新');
+      showToast(kind === 'chat' ? '聊天背景已更新' : kind === 'topBar' ? '顶栏背景已更新' : '输入框背景已更新');
     } catch (error: any) {
       Alert.alert('选择背景失败', error?.message || '无法读取所选图片');
     } finally {
@@ -1005,6 +1110,83 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     }
   }
 
+  async function handlePickBubbleTexture(owner: BubbleTextureOwner) {
+    if (pickingBubbleTexture) return;
+    setPickingBubbleTexture(owner);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 1,
+      });
+      if (result.canceled || !result.assets[0]?.uri) return;
+
+      const asset = result.assets[0];
+      const validationError = validateBubbleTextureAsset(asset);
+      if (validationError) {
+        Alert.alert('气泡贴图不可用', validationError);
+        return;
+      }
+
+      const uri = await copyAppearanceImage(asset, 'bubble-textures', `${owner}-bubble`);
+      const config = createBubbleTextureConfig(asset, uri);
+      setAppearanceConfig(
+        owner === 'user'
+          ? { userBubbleTexture: config }
+          : { assistantBubbleTexture: config, assistantBubbleStyle: 'bubble' }
+      );
+      setEditingBubbleTexture({ owner, config });
+      showToast(owner === 'user' ? '用户气泡贴图已更新' : 'AI 气泡贴图已更新');
+    } catch (error: any) {
+      Alert.alert('选择气泡贴图失败', error?.message || '无法读取所选图片');
+    } finally {
+      setPickingBubbleTexture(null);
+    }
+  }
+
+  function handleEditBubbleTexture(owner: BubbleTextureOwner) {
+    const config = owner === 'user' ? userBubbleTexture : assistantBubbleTexture;
+    if (!config) return;
+    setEditingBubbleTexture({ owner, config });
+  }
+
+  function handleClearBubbleTexture(owner: BubbleTextureOwner) {
+    setAppearanceConfig(owner === 'user' ? { userBubbleTexture: undefined } : { assistantBubbleTexture: undefined });
+    showToast(owner === 'user' ? '用户气泡贴图已移除' : 'AI 气泡贴图已移除');
+  }
+
+  function updateEditingBubbleTexture(
+    group: 'stretchInsets' | 'contentInsets',
+    key: keyof BubbleTextureConfig['stretchInsets'],
+    value: number
+  ) {
+    setEditingBubbleTexture((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        config: normalizeBubbleTextureConfig({
+          ...current.config,
+          [group]: {
+            ...current.config[group],
+            [key]: value,
+          },
+        }),
+      };
+    });
+  }
+
+  function saveEditingBubbleTexture() {
+    if (!editingBubbleTexture) return;
+    const config = normalizeBubbleTextureConfig(editingBubbleTexture.config);
+    setAppearanceConfig(
+      editingBubbleTexture.owner === 'user'
+        ? { userBubbleTexture: config }
+        : { assistantBubbleTexture: config, assistantBubbleStyle: 'bubble' }
+    );
+    setEditingBubbleTexture(null);
+    showToast('气泡文字区域已保存');
+  }
+
   function commitColor(
     label: string,
     value: string,
@@ -1027,7 +1209,13 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
 
   function setInputStyle(nextStyle: ChatInputAppearanceStyle) {
     setAppearanceConfig({ inputStyle: nextStyle });
-    showToast(nextStyle === 'glass' ? '输入框已切换为磨砂玻璃' : '输入框已切换为默认风格');
+    showToast(
+      nextStyle === 'compact'
+        ? '输入框已切换为单行样式'
+        : nextStyle === 'glass'
+          ? '输入框已切换为磨砂玻璃'
+          : '输入框已切换为默认风格'
+    );
   }
 
   function setAssistantBubbleStyle(nextStyle: AssistantBubbleAppearanceStyle) {
@@ -1090,7 +1278,133 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     );
   }
 
+  function renderBubbleTextureRow(owner: BubbleTextureOwner) {
+    const texture = owner === 'user' ? userBubbleTexture : assistantBubbleTexture;
+    const isPicking = pickingBubbleTexture === owner;
+    const label = owner === 'user' ? '用户气泡贴图' : 'AI 气泡贴图';
+
+    return (
+      <View style={styles.appearanceAssetRow}>
+        <View style={styles.appearanceImagePreview}>
+          {texture?.uri ? (
+            <Image source={{ uri: texture.uri }} style={styles.appearanceImageThumb} resizeMode="contain" />
+          ) : (
+            <Text style={styles.appearanceImagePlaceholder}>{owner === 'user' ? 'UB' : 'AB'}</Text>
+          )}
+        </View>
+        <View style={styles.appearanceIconText}>
+          <Text style={styles.label}>{label}</Text>
+          <Text style={styles.hint}>
+            {texture?.uri ? '已启用贴图；红框区域会随文字拉伸。' : '上传透明 PNG 效果最好；可在上传后设置文字区域。'}
+          </Text>
+        </View>
+        <View style={styles.appearanceIconActions}>
+          <Pressable
+            style={[styles.smallActionButton, isPicking && styles.smallActionButtonDisabled]}
+            onPress={() => handlePickBubbleTexture(owner)}
+            disabled={!!pickingBubbleTexture}
+          >
+            {isPicking ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.smallActionText}>上传</Text>}
+          </Pressable>
+          <Pressable
+            style={[styles.smallActionButton, !texture?.uri && styles.smallActionButtonDisabled]}
+            onPress={() => handleEditBubbleTexture(owner)}
+            disabled={!texture?.uri}
+          >
+            <Text style={[styles.smallActionText, !texture?.uri && styles.smallActionTextDisabled]}>区域</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.smallActionButton, !texture?.uri && styles.smallActionButtonDisabled]}
+            onPress={() => handleClearBubbleTexture(owner)}
+            disabled={!texture?.uri}
+          >
+            <Text style={[styles.smallActionText, !texture?.uri && styles.smallActionTextDisabled]}>默认</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
+  function renderBubbleInsetEditor(
+    title: string,
+    group: 'stretchInsets' | 'contentInsets',
+    fallback: number
+  ) {
+    if (!editingBubbleTexture) return null;
+    const values = editingBubbleTexture.config[group];
+    const maxHorizontal =
+      group === 'stretchInsets'
+        ? Math.max(1, Math.floor(editingBubbleTexture.config.originalWidth / 2) - 1)
+        : Math.max(1, editingBubbleTexture.config.originalWidth - 1);
+    const maxVertical =
+      group === 'stretchInsets'
+        ? Math.max(1, Math.floor(editingBubbleTexture.config.originalHeight / 2) - 1)
+        : Math.max(1, editingBubbleTexture.config.originalHeight - 1);
+
+    return (
+      <>
+        <Text style={styles.bubbleTextureModalSection}>{title}</Text>
+        <View style={styles.appearanceNumberGrid}>
+          {(['left', 'right'] as const).map((key) => (
+            <View key={`${group}-${key}`} style={styles.appearanceNumberField}>
+              <Text style={styles.label}>{key === 'left' ? '左' : '右'}</Text>
+              <ClampedNumberInput
+                value={values[key]}
+                fallback={fallback}
+                min={0}
+                max={maxHorizontal}
+                onCommit={(value) => updateEditingBubbleTexture(group, key, value)}
+              />
+            </View>
+          ))}
+        </View>
+        <View style={styles.appearanceNumberGrid}>
+          {(['top', 'bottom'] as const).map((key) => (
+            <View key={`${group}-${key}`} style={styles.appearanceNumberField}>
+              <Text style={styles.label}>{key === 'top' ? '上' : '下'}</Text>
+              <ClampedNumberInput
+                value={values[key]}
+                fallback={fallback}
+                min={0}
+                max={maxVertical}
+                onCommit={(value) => updateEditingBubbleTexture(group, key, value)}
+              />
+            </View>
+          ))}
+        </View>
+      </>
+    );
+  }
+
+  const bubbleTextureModalConfig = editingBubbleTexture?.config;
+  const bubbleTexturePreviewWidth = bubbleTextureModalConfig
+    ? Math.min(260, Math.max(160, bubbleTextureModalConfig.originalWidth))
+    : 220;
+  const bubbleTexturePreviewHeight = bubbleTextureModalConfig
+    ? Math.max(90, Math.round((bubbleTexturePreviewWidth * bubbleTextureModalConfig.originalHeight) / bubbleTextureModalConfig.originalWidth))
+    : 120;
+  const bubbleTextureScale = bubbleTextureModalConfig
+    ? bubbleTexturePreviewWidth / bubbleTextureModalConfig.originalWidth
+    : 1;
+  const bubbleTextureStretchRect = bubbleTextureModalConfig
+    ? {
+        left: bubbleTextureModalConfig.stretchInsets.left * bubbleTextureScale,
+        top: bubbleTextureModalConfig.stretchInsets.top * bubbleTextureScale,
+        right: bubbleTextureModalConfig.stretchInsets.right * bubbleTextureScale,
+        bottom: bubbleTextureModalConfig.stretchInsets.bottom * bubbleTextureScale,
+      }
+    : null;
+  const bubbleTextureContentRect = bubbleTextureModalConfig
+    ? {
+        left: bubbleTextureModalConfig.contentInsets.left * bubbleTextureScale,
+        top: bubbleTextureModalConfig.contentInsets.top * bubbleTextureScale,
+        right: bubbleTextureModalConfig.contentInsets.right * bubbleTextureScale,
+        bottom: bubbleTextureModalConfig.contentInsets.bottom * bubbleTextureScale,
+      }
+    : null;
+
   return (
+    <>
     <ScrollView
       style={styles.content}
       contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }}
@@ -1200,6 +1514,9 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       </Text>
 
       <View style={styles.topBarPreview}>
+        {topBarBackgroundImageUri && (
+          <Image source={{ uri: topBarBackgroundImageUri }} style={styles.topBarPreviewBackground} resizeMode="cover" />
+        )}
         {TOP_BAR_ICON_ITEMS.map((item) => (
           <View key={item.key} style={styles.topBarPreviewButton}>
             <TopBarIcon
@@ -1210,6 +1527,39 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
             />
           </View>
         ))}
+      </View>
+
+      <View style={styles.appearanceAssetRow}>
+        <View style={styles.appearanceImagePreview}>
+          {topBarBackgroundImageUri ? (
+            <Image source={{ uri: topBarBackgroundImageUri }} style={styles.appearanceImageThumb} resizeMode="cover" />
+          ) : (
+            <Text style={styles.appearanceImagePlaceholder}>TB</Text>
+          )}
+        </View>
+        <View style={styles.appearanceIconText}>
+          <Text style={styles.label}>顶栏背景贴图</Text>
+          <Text style={styles.hint}>{topBarBackgroundImageUri ? '已使用自定义顶栏背景' : '使用主题遮罩和透明顶栏'}</Text>
+        </View>
+        <View style={styles.appearanceIconActions}>
+          <Pressable
+            style={[styles.smallActionButton, pickingBackground === 'topBar' && styles.smallActionButtonDisabled]}
+            onPress={() => handlePickBackground('topBar')}
+            disabled={!!pickingBackground}
+          >
+            {pickingBackground === 'topBar' ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.smallActionText}>替换</Text>}
+          </Pressable>
+          <Pressable
+            style={[styles.smallActionButton, !topBarBackgroundImageUri && styles.smallActionButtonDisabled]}
+            onPress={() => {
+              setAppearanceConfig({ topBarBackgroundImageUri: undefined });
+              showToast('顶栏背景已恢复默认');
+            }}
+            disabled={!topBarBackgroundImageUri}
+          >
+            <Text style={[styles.smallActionText, !topBarBackgroundImageUri && styles.smallActionTextDisabled]}>默认</Text>
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.switchRow}>
@@ -1445,6 +1795,8 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
 
       <Text style={styles.sectionTitle}>聊天气泡与文字</Text>
       <Text style={styles.hint}>颜色使用 #RRGGBB 格式；磨砂系数为 0 时关闭玻璃效果。</Text>
+      {renderBubbleTextureRow('user')}
+      {renderBubbleTextureRow('assistant')}
       <View style={styles.switchRow}>
         <View style={styles.switchText}>
           <Text style={styles.label}>隐藏 AI 回复尾部标识</Text>
@@ -1740,14 +2092,14 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
 
       <Text style={styles.sectionTitle}>输入框自定义</Text>
       <View style={styles.segmentedRow}>
-        {(['default', 'glass'] as ChatInputAppearanceStyle[]).map((styleKey) => (
+        {(['default', 'glass', 'compact'] as ChatInputAppearanceStyle[]).map((styleKey) => (
           <Pressable
             key={styleKey}
             style={[styles.segmentedButton, inputStyle === styleKey && styles.segmentedButtonActive]}
             onPress={() => setInputStyle(styleKey)}
           >
             <Text style={[styles.segmentedText, inputStyle === styleKey && styles.segmentedTextActive]}>
-              {styleKey === 'default' ? '默认原版' : '磨砂玻璃'}
+              {styleKey === 'default' ? '默认原版' : styleKey === 'glass' ? '磨砂玻璃' : '单行'}
             </Text>
           </Pressable>
         ))}
@@ -1763,6 +2115,17 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
             max={100}
             placeholder="72"
             onCommit={(value) => setAppearanceConfig({ inputBlurIntensity: value })}
+          />
+        </View>
+        <View style={styles.appearanceNumberField}>
+          <Text style={styles.label}>输入框圆角</Text>
+          <ClampedNumberInput
+            value={inputBorderRadius}
+            fallback={24}
+            min={0}
+            max={36}
+            placeholder="24"
+            onCommit={(value) => setAppearanceConfig({ inputBorderRadius: value })}
           />
         </View>
       </View>
@@ -1866,6 +2229,83 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         </Pressable>
       </View>
     </ScrollView>
+    <Modal
+      transparent
+      visible={!!editingBubbleTexture}
+      animationType="fade"
+      onRequestClose={() => setEditingBubbleTexture(null)}
+    >
+      <Pressable style={styles.overlay} onPress={() => setEditingBubbleTexture(null)}>
+        <View style={styles.bubbleTextureModal} onStartShouldSetResponder={() => true}>
+          <Text style={styles.modalTitle}>
+            {editingBubbleTexture?.owner === 'user' ? '用户气泡文字区域' : 'AI 气泡文字区域'}
+          </Text>
+          <Text style={styles.hint}>红框内会随气泡尺寸拉伸；虚线框是文字放置区域，尾巴和装饰尽量放在红框外。</Text>
+          <ScrollView style={styles.bubbleTextureModalBody} keyboardShouldPersistTaps="handled">
+            {bubbleTextureModalConfig && (
+              <View style={styles.bubbleTexturePreviewStage}>
+                <View
+                  style={[
+                    styles.bubbleTexturePreview,
+                    {
+                      width: bubbleTexturePreviewWidth,
+                      height: bubbleTexturePreviewHeight,
+                    },
+                  ]}
+                >
+                  <Image
+                    source={{ uri: bubbleTextureModalConfig.uri }}
+                    style={styles.appearanceImageThumb}
+                    resizeMode="stretch"
+                  />
+                  {bubbleTextureStretchRect && (
+                    <View
+                      pointerEvents="none"
+                      style={[
+                        styles.bubbleTextureStretchGuide,
+                        {
+                          left: bubbleTextureStretchRect.left,
+                          top: bubbleTextureStretchRect.top,
+                          right: bubbleTextureStretchRect.right,
+                          bottom: bubbleTextureStretchRect.bottom,
+                        },
+                      ]}
+                    />
+                  )}
+                  {bubbleTextureContentRect && (
+                    <View
+                      pointerEvents="none"
+                      style={[
+                        styles.bubbleTextureContentGuide,
+                        {
+                          left: bubbleTextureContentRect.left,
+                          top: bubbleTextureContentRect.top,
+                          right: bubbleTextureContentRect.right,
+                          bottom: bubbleTextureContentRect.bottom,
+                        },
+                      ]}
+                    >
+                      <Text style={styles.bubbleTextureContentGuideText}>文字区域</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            )}
+            {renderBubbleInsetEditor('拉伸保护边距', 'stretchInsets', 24)}
+            {renderBubbleInsetEditor('文字内边距', 'contentInsets', 32)}
+          </ScrollView>
+          <View style={styles.modalButtons}>
+            <Pressable style={styles.modalCancel} onPress={() => setEditingBubbleTexture(null)}>
+              <Text style={styles.modalCancelText}>取消</Text>
+            </Pressable>
+            <Pressable style={styles.modalConfirm} onPress={saveEditingBubbleTexture}>
+              <Text style={styles.modalConfirmText}>保存</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Pressable>
+    </Modal>
+    </>
   );
 }
 
@@ -3317,6 +3757,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     webPageReaderConfig,
     webInteractionConfig,
     hotboardConfig,
+    runCommandConfig,
     qqBotConfig,
     nativeToolConfig,
     shizukuFileConfig,
@@ -3327,6 +3768,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     setWebPageReaderConfig,
     setWebInteractionConfig,
     setHotboardConfig,
+    setRunCommandConfig,
     setQqBotConfig,
     setNativeToolConfig,
     setShizukuFileConfig,
@@ -3363,6 +3805,15 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     normalizeHotboardPlatformTypes(hotboardConfig?.platforms || DEFAULT_HOTBOARD_PLATFORM_TYPES.join(','))
   );
   const [hbPlatformsExpanded, setHbPlatformsExpanded] = useState(false);
+
+  const [rcEnabled, setRcEnabled] = useState(!!runCommandConfig?.enabled);
+  const [rcEndpointUrl, setRcEndpointUrl] = useState(runCommandConfig?.endpointUrl || '');
+  const [rcAccessToken, setRcAccessToken] = useState(runCommandConfig?.accessToken || '');
+  const [rcDefaultCwd, setRcDefaultCwd] = useState(runCommandConfig?.defaultCwd || '');
+  const [rcTimeoutMs, setRcTimeoutMs] = useState(String(runCommandConfig?.timeoutMs || 30000));
+  const [rcMaxOutputChars, setRcMaxOutputChars] = useState(String(runCommandConfig?.maxOutputChars || 12000));
+  const [rcMaxCalls, setRcMaxCalls] = useState(String(runCommandConfig?.maxToolCalls || 4));
+  const [rcTesting, setRcTesting] = useState(false);
 
   const [qqEnabled, setQqEnabled] = useState(!!qqBotConfig?.enabled);
   const [qqBackendUrl, setQqBackendUrl] = useState(qqBotConfig?.backendUrl || 'http://127.0.0.1:8788');
@@ -3577,6 +4028,68 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       platforms: hbPlatformTypes.join(','),
     });
     showToast(hbEnabled ? 'AI 网页巡游热榜配置已保存' : 'AI 网页巡游热榜已关闭');
+  }
+
+  function buildRunCommandConfigDraft() {
+    const timeoutMs = parseInt(rcTimeoutMs, 10);
+    const maxOutputChars = parseInt(rcMaxOutputChars, 10);
+    const maxToolCalls = parseInt(rcMaxCalls, 10);
+    return {
+      enabled: rcEnabled,
+      endpointUrl: rcEndpointUrl.trim(),
+      accessToken: rcAccessToken.trim(),
+      defaultCwd: rcDefaultCwd.trim(),
+      timeoutMs: isNaN(timeoutMs) || timeoutMs <= 0 ? 30000 : Math.min(300000, Math.max(1000, timeoutMs)),
+      maxOutputChars: isNaN(maxOutputChars) || maxOutputChars <= 0 ? 12000 : Math.min(100000, Math.max(1000, maxOutputChars)),
+      maxToolCalls: isNaN(maxToolCalls) || maxToolCalls <= 0 ? 4 : maxToolCalls,
+    };
+  }
+
+  function handleSaveRunCommand() {
+    const config = buildRunCommandConfigDraft();
+    if (config.enabled && !/^https?:\/\//i.test(config.endpointUrl)) {
+      Alert.alert('提示', '启用远程命令时请填写以 http:// 或 https:// 开头的服务地址');
+      return false;
+    }
+    setRunCommandConfig(config);
+    showToast(config.enabled ? '远程命令工具已保存' : '远程命令工具已关闭');
+    return true;
+  }
+
+  async function handleTestRunCommand() {
+    const config = buildRunCommandConfigDraft();
+    if (!/^https?:\/\//i.test(config.endpointUrl)) {
+      Alert.alert('提示', '请先填写以 http:// 或 https:// 开头的服务地址');
+      return;
+    }
+    setRcTesting(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), Math.min(config.timeoutMs, 30000) + 1000);
+    try {
+      const resp = await fetch(config.endpointUrl.replace(/\/$/, ''), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(config.accessToken
+            ? { Authorization: config.accessToken.toLowerCase().startsWith('bearer ') ? config.accessToken : `Bearer ${config.accessToken}` }
+            : {}),
+        },
+        body: JSON.stringify({
+          command: 'echo ysclaude-run-command-ok',
+          cwd: config.defaultCwd || undefined,
+          timeout_ms: Math.min(config.timeoutMs, 30000),
+        }),
+        signal: controller.signal,
+      });
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${text.slice(0, 200)}`);
+      showToast(text.includes('ysclaude-run-command-ok') ? '远程命令服务正常' : '服务已响应，请确认返回格式');
+    } catch (error: any) {
+      Alert.alert('连接失败', error?.name === 'AbortError' ? '测试超时' : error?.message || '无法连接远程命令服务');
+    } finally {
+      clearTimeout(timeoutId);
+      setRcTesting(false);
+    }
   }
 
   function buildQqBotConfigDraft(): QQBotConfig {
@@ -4498,6 +5011,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     { key: 'webSearch', name: '联网搜索', intro: '通过 Tavily 搜索互联网，补充实时信息。', enabled: wsEnabled, onValueChange: setWsEnabled, meta: '1 个工具' },
     { key: 'webPageReader', name: '网页读取', intro: '读取链接中的网页正文，可配置渲染服务兜底。', enabled: wprEnabled, onValueChange: setWprEnabled, meta: '1 个工具' },
     { key: 'hotboard', name: '热榜查询', intro: '从已选择的平台列表中查询热门话题。', enabled: hbEnabled, onValueChange: setHbEnabled, meta: hbPlatformTypes.length + ' 个平台' },
+    { key: 'runCommand', name: '远程命令', intro: '通过你配置的远程命令服务执行 shell 命令。', enabled: rcEnabled, onValueChange: setRcEnabled, meta: '最多 ' + (rcMaxCalls || '4') + ' 次' },
     { key: 'qqBot', name: 'QQ 机器人', intro: '把 QQ 官方机器人消息接入独立后端，由 YSClaude 生成回复。', enabled: qqEnabled, onValueChange: setQqEnabled, meta: qqBackendStatus === '尚未检测' ? '官方 Bot' : qqBackendStatus },
     { key: 'webInteraction', name: '网页交互', intro: '允许 AI 打开、观察并操作应用内网页面板。', enabled: wiEnabled, onValueChange: setWiEnabled, meta: '最多 ' + (wiMaxCalls || '8') + ' 次' },
     { key: 'shizukuFile', name: 'Shizuku 文件', intro: '读写你明确授权的 Shizuku 路径内文件。', enabled: shizukuEnabled, onValueChange: setShizukuEnabled, meta: shizukuRoots.length + ' 个路径' },
@@ -4618,6 +5132,8 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       case 'hotboard':
         handleSaveHotboard();
         break;
+      case 'runCommand':
+        return handleSaveRunCommand();
       case 'webInteraction':
         handleSaveWebInteraction();
         break;
@@ -4656,6 +5172,10 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
             case 'hotboard':
               setHbEnabled(false);
               setHotboardConfig({ enabled: false });
+              break;
+            case 'runCommand':
+              setRcEnabled(false);
+              setRunCommandConfig({ enabled: false });
               break;
             case 'webInteraction':
               setWiEnabled(false);
@@ -4728,6 +5248,23 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         return (<><Text style={styles.toolModalDescription}>AI 可以读取链接中的网页正文。</Text><View style={styles.switchRow}><Text style={styles.label}>启用网页读取</Text><Switch value={wprEnabled} onValueChange={setWprEnabled} trackColor={{ true: colors.primary }} /></View><View style={styles.field}><Text style={styles.label}>渲染读取服务地址</Text><TextInput style={styles.input} value={wprRenderServiceUrl} onChangeText={setWprRenderServiceUrl} placeholder="http://localhost:8787/read" placeholderTextColor={colors.textTertiary} autoCapitalize="none" /></View></>);
       case 'hotboard':
         return (<><Text style={styles.toolModalDescription}>AI 可以从已选择的平台类型中查询热榜。</Text><View style={styles.switchRow}><Text style={styles.label}>启用热榜查询</Text><Switch value={hbEnabled} onValueChange={setHbEnabled} trackColor={{ true: colors.primary }} /></View><View style={styles.field}><Text style={styles.label}>UAPI 密钥</Text><TextInput style={styles.input} value={hbApiKey} onChangeText={setHbApiKey} placeholder="Bearer 令牌" placeholderTextColor={colors.textTertiary} secureTextEntry autoCapitalize="none" /></View><View style={styles.platformActions}><Pressable style={styles.platformActionButton} onPress={selectDefaultHotboardPlatforms}><Text style={styles.platformActionText}>默认</Text></Pressable><Pressable style={styles.platformActionButton} onPress={selectAllHotboardPlatforms}><Text style={styles.platformActionText}>全选</Text></Pressable><Pressable style={styles.platformActionButton} onPress={clearHotboardPlatforms}><Text style={styles.platformActionText}>清空</Text></Pressable></View><View style={styles.platformGrid}>{HOTBOARD_PLATFORMS.map((platform) => { const selected = hbPlatformTypes.includes(platform.type); return (<Pressable key={platform.type} style={[styles.platformChip, selected && styles.platformChipSelected]} onPress={() => toggleHotboardPlatform(platform.type)}><Text style={[styles.platformChipLabel, selected && styles.platformChipLabelSelected]}>{platform.label}</Text><Text style={[styles.platformChipType, selected && styles.platformChipTypeSelected]}>{platform.type}</Text></Pressable>); })}</View></>);
+      case 'runCommand':
+        return (
+          <>
+            <Text style={styles.toolModalDescription}>AI 会把命令发送到你配置的远程命令服务，由服务器端执行 shell 并返回 stdout/stderr。</Text>
+            <View style={styles.switchRow}><Text style={styles.label}>启用远程命令</Text><Switch value={rcEnabled} onValueChange={setRcEnabled} trackColor={{ true: colors.primary }} /></View>
+            <View style={styles.field}><Text style={styles.label}>服务地址</Text><TextInput style={styles.input} value={rcEndpointUrl} onChangeText={setRcEndpointUrl} placeholder="https://your-server.example.com/run-command" placeholderTextColor={colors.textTertiary} autoCapitalize="none" /></View>
+            <View style={styles.field}><Text style={styles.label}>访问令牌</Text><TextInput style={styles.input} value={rcAccessToken} onChangeText={setRcAccessToken} placeholder="Bearer token 或纯 token" placeholderTextColor={colors.textTertiary} secureTextEntry autoCapitalize="none" /></View>
+            <View style={styles.field}><Text style={styles.label}>默认工作目录</Text><TextInput style={styles.input} value={rcDefaultCwd} onChangeText={setRcDefaultCwd} placeholder="/home/ubuntu/app" placeholderTextColor={colors.textTertiary} autoCapitalize="none" /></View>
+            <View style={styles.toolNumberRow}>
+              <View style={styles.toolNumberField}><Text style={styles.label}>超时 ms</Text><TextInput style={styles.input} value={rcTimeoutMs} onChangeText={setRcTimeoutMs} keyboardType="number-pad" placeholder="30000" placeholderTextColor={colors.textTertiary} /></View>
+              <View style={styles.toolNumberField}><Text style={styles.label}>输出上限</Text><TextInput style={styles.input} value={rcMaxOutputChars} onChangeText={setRcMaxOutputChars} keyboardType="number-pad" placeholder="12000" placeholderTextColor={colors.textTertiary} /></View>
+            </View>
+            <View style={styles.field}><Text style={styles.label}>每轮最大调用次数</Text><TextInput style={styles.input} value={rcMaxCalls} onChangeText={setRcMaxCalls} keyboardType="number-pad" placeholder="4" placeholderTextColor={colors.textTertiary} /></View>
+            <Text style={styles.hint}>服务需接受 POST JSON：command、cwd、timeout_ms；建议只允许 HTTPS、强 Token、服务器侧目录/命令白名单。</Text>
+            <Pressable style={styles.testButton} onPress={handleTestRunCommand} disabled={rcTesting}>{rcTesting ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.testButtonText}>测试连接</Text>}</Pressable>
+          </>
+        );
       case 'qqBot':
         const visibleConversations = getVisibleBotPanelConversations();
         return (
@@ -6004,6 +6541,59 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' },
   modal: { backgroundColor: colors.background, borderRadius: 16, padding: 20, width: '85%', maxHeight: '60%' },
   modalTitle: { fontSize: 17, fontWeight: '600', color: colors.text, marginBottom: 12 },
+  bubbleTextureModal: {
+    backgroundColor: colors.background,
+    borderRadius: 16,
+    padding: 18,
+    width: '90%',
+    maxHeight: '86%',
+  },
+  bubbleTextureModalBody: {
+    flexShrink: 1,
+  },
+  bubbleTexturePreviewStage: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  bubbleTexturePreview: {
+    overflow: 'hidden',
+    backgroundColor: colors.inputBackground,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  bubbleTextureStretchGuide: {
+    position: 'absolute',
+    borderWidth: 2,
+    borderColor: '#EF4444',
+    backgroundColor: 'rgba(239,68,68,0.10)',
+  },
+  bubbleTextureContentGuide: {
+    position: 'absolute',
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.primary,
+    backgroundColor: 'rgba(60,120,255,0.10)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 28,
+    minHeight: 18,
+  },
+  bubbleTextureContentGuideText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  bubbleTextureModalSection: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    marginBottom: 8,
+  },
   modelList: { maxHeight: 300 },
   modelItem: { paddingVertical: 12, paddingHorizontal: 12, borderRadius: 8, marginBottom: 2 },
   modelItemActive: { backgroundColor: colors.surface },
@@ -6177,6 +6767,11 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 10,
     marginBottom: 14,
+    overflow: 'hidden',
+  },
+  topBarPreviewBackground: {
+    ...StyleSheet.absoluteFill,
+    opacity: 0.88,
   },
   topBarPreviewButton: {
     width: 34,

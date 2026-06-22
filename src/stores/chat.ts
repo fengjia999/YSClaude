@@ -71,17 +71,50 @@ const FLOATING_STREAM_SOFT_BOUNDARIES = '，,、';
 const FLOATING_STREAM_MIN_SOFT_SEGMENT_CHARS = 18;
 const FLOATING_STREAM_MAX_SEGMENT_CHARS = 72;
 const FLOATING_VISUAL_SEGMENT_INTERVAL_MS = 2000;
+const MAX_IMAGE_GENERATION_REFERENCE_IMAGES = 16;
 
-function createPendingGeneratedPictures(content: string, basePrompt: string | undefined): GeneratedPicture[] {
+function normalizeReferenceImageUris(uris: string[] | undefined): string[] | undefined {
+  if (!uris || uris.length === 0) return undefined;
+  const normalized = [...new Set(uris.map((uri) => uri.trim()).filter(Boolean))]
+    .slice(0, MAX_IMAGE_GENERATION_REFERENCE_IMAGES);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function createPendingGeneratedPictures(
+  content: string,
+  basePrompt: string | undefined,
+  referenceImageUris?: string[]
+): GeneratedPicture[] {
   const now = Date.now();
   return extractPictureTokens(content).map((token) => ({
     tokenIndex: token.tokenIndex,
     prompt: token.prompt,
     finalPrompt: composePicturePrompt(basePrompt, token.prompt),
     status: 'pending' as const,
+    referenceImageUris,
     createdAt: now,
     updatedAt: now,
   }));
+}
+
+function getReferenceImagesForAssistantMessage(messages: Message[], assistantMessageId: string): string[] | undefined {
+  const assistantIndex = messages.findIndex((message) => message.id === assistantMessageId);
+  const searchEnd = assistantIndex >= 0 ? assistantIndex : messages.length;
+  for (let index = searchEnd - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== 'user') continue;
+    return normalizeReferenceImageUris(message.imageGenerationReferenceUris);
+  }
+  return undefined;
+}
+
+function appendImageGenerationReferenceNotice(content: string, referenceImageCount: number): string {
+  if (referenceImageCount <= 0) return content;
+  const notice = [
+    `[生图参考图：用户已附加 ${referenceImageCount} 张图片。]`,
+    '如果需要生成或修改图片，请在回复中使用 [Pic:图片描述]；这些参考图会自动传给生图 API，不需要把它们当作聊天识图附件复述。',
+  ].join('\n');
+  return content.trim() ? `${content}\n\n${notice}` : notice;
 }
 
 function shiftGeneratedPicturesAfterTokenDeletion(
@@ -129,7 +162,8 @@ async function generatePictureForMessage(
   messageId: string,
   tokenIndex: number,
   prompt: string,
-  finalPrompt: string
+  finalPrompt: string,
+  referenceImageUris?: string[]
 ): Promise<void> {
   const config = resolveImageGenerationConfig();
   const message = get().messages.find((item) => item.id === messageId) ?? null;
@@ -146,6 +180,7 @@ async function generatePictureForMessage(
       finalPrompt,
       status: 'failed' as const,
       errorMessage: '生图功能未配置',
+      referenceImageUris,
       createdAt: now,
       updatedAt: now,
     };
@@ -166,6 +201,7 @@ async function generatePictureForMessage(
     prompt,
     finalPrompt,
     status: 'pending' as const,
+    referenceImageUris,
     createdAt: now,
     updatedAt: now,
   };
@@ -187,6 +223,7 @@ async function generatePictureForMessage(
       prompt: finalPrompt,
       size: config.size,
       quality: config.quality,
+      referenceImages: referenceImageUris?.map((uri) => ({ uri })),
     });
 
     const latestMessage = get().messages.find((item) => item.id === messageId) ?? null;
@@ -222,6 +259,7 @@ async function generatePictureForMessage(
       errorMessage: error?.message || '生图失败',
       updatedAt: Date.now(),
       finalPrompt,
+      referenceImageUris,
       imageUri: undefined,
     };
     set((state) => ({
@@ -246,7 +284,8 @@ async function processPicturesForAssistantMessage(
   if (tokens.length === 0) return;
 
   const finalPromptBase = settings.imageGenerationPrompt || '';
-  const pendingPics = createPendingGeneratedPictures(content, finalPromptBase);
+  const referenceImageUris = getReferenceImagesForAssistantMessage(get().messages, messageId);
+  const pendingPics = createPendingGeneratedPictures(content, finalPromptBase, referenceImageUris);
 
   set((state) => ({
     messages: state.messages.map((item) =>
@@ -257,15 +296,28 @@ async function processPicturesForAssistantMessage(
 
   for (const token of tokens) {
     const finalPrompt = composePicturePrompt(settings.imageGenerationPrompt, token.prompt);
-    await generatePictureForMessage(get, set, messageId, token.tokenIndex, token.prompt, finalPrompt);
+    await generatePictureForMessage(
+      get,
+      set,
+      messageId,
+      token.tokenIndex,
+      token.prompt,
+      finalPrompt,
+      referenceImageUris
+    );
   }
 }
 
 async function deleteMessageGeneratedPictureFiles(message: Message | undefined): Promise<void> {
-  if (!message?.generatedPics || message.generatedPics.length === 0) return;
+  if (!message) return;
   await Promise.all(
-    message.generatedPics
+    (message.generatedPics || [])
       .map((picture) => picture.imageUri)
+      .filter((imageUri): imageUri is string => !!imageUri)
+      .map((imageUri) => deleteGeneratedImageFile(imageUri))
+  );
+  await Promise.all(
+    (message.imageGenerationReferenceUris || [])
       .filter((imageUri): imageUri is string => !!imageUri)
       .map((imageUri) => deleteGeneratedImageFile(imageUri))
   );
@@ -284,8 +336,8 @@ interface ChatState {
   isStreaming: boolean;
   error: string | null;
 
-  sendMessage: (content: string, imageUri?: string) => Promise<void>;
-  addUserMessage: (content: string, imageUri?: string) => Promise<Message | null>;
+  sendMessage: (content: string, imageUri?: string, imageGenerationReferenceUris?: string[]) => Promise<void>;
+  addUserMessage: (content: string, imageUri?: string, imageGenerationReferenceUris?: string[]) => Promise<Message | null>;
   addSharedLinkToLatestConversation: (url: string) => Promise<string>;
   addSystemMessage: (content: string) => Promise<Message | null>;
   enableWebCruise: () => Promise<void>;
@@ -896,6 +948,8 @@ async function runToolLoop(
   const webInteractionEnabled =
     webCruiseEnabled ||
     !!settings.webInteractionConfig?.enabled;
+  const runCommandEnabled =
+    !!settings.runCommandConfig?.enabled && !!settings.runCommandConfig?.endpointUrl?.trim();
   const androidAccessibilityControlEnabled =
     messagesContainText(requestMessages, ANDROID_ACCESSIBILITY_CONTROL_MARKER);
 
@@ -905,6 +959,7 @@ async function runToolLoop(
     webPageReader: webPageReaderEnabled,
     webInteraction: webInteractionEnabled,
     hotboard: webCruiseEnabled,
+    runCommand: runCommandEnabled ? settings.runCommandConfig : undefined,
     nativeTools: {
       ...settings.nativeToolConfig,
       accessibilityControlEnabled:
@@ -925,6 +980,7 @@ async function runToolLoop(
     webInteractionEnabled ? settings.webInteractionConfig?.maxToolCalls || 8 : 0,
     settings.shizukuFileConfig?.enabled ? settings.shizukuFileConfig.maxToolCalls || 6 : 0,
     settings.mcpToolConfig?.enabled ? settings.mcpToolConfig.maxToolCalls || 6 : 0,
+    runCommandEnabled ? settings.runCommandConfig.maxToolCalls || 4 : 0,
     webCruiseEnabled ? 10 : 0,
     androidAccessibilityControlEnabled ? 10 : 0
   );
@@ -1004,6 +1060,7 @@ async function runToolLoop(
           enabled: webInteractionEnabled,
         },
         hotboardConfig: settings.hotboardConfig,
+        runCommandConfig: settings.runCommandConfig,
         nativeToolConfig: settings.nativeToolConfig,
         shizukuFileConfig: settings.shizukuFileConfig,
         mcpToolConfig: settings.mcpToolConfig,
@@ -1123,6 +1180,10 @@ async function streamAssistantResponse(
     let msgContent = m.content;
     if (settings.stripThinking) {
       msgContent = msgContent.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+    }
+    const referenceImageUris = normalizeReferenceImageUris(m.imageGenerationReferenceUris);
+    if (m.role === 'user' && referenceImageUris && referenceImageUris.length > 0) {
+      msgContent = appendImageGenerationReferenceNotice(msgContent, referenceImageUris.length);
     }
     const prefixLines = [
       needMarker ? `[时间 ${formatTimeMarker(m.createdAt)}]` : null,
@@ -1460,7 +1521,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   error: null,
 
   // 仅把用户消息加入列表并持久化，不触发 AI 回复。
-  addUserMessage: async (content: string, imageUri?: string) => {
+  addUserMessage: async (content: string, imageUri?: string, imageGenerationReferenceUris?: string[]) => {
     const { isStreaming } = get();
     if (isStreaming) return null;
 
@@ -1474,12 +1535,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return null;
     }
 
+    const referenceImageUris = normalizeReferenceImageUris(imageGenerationReferenceUris);
+
     if (!conversationId) {
       conversationId = randomUUID();
       const now = Date.now();
       const conv: Conversation = {
         id: conversationId,
-        title: content.slice(0, 30) || (imageUri ? '[图片]' : ''),
+        title: content.slice(0, 30) || (imageUri ? '[图片]' : referenceImageUris ? '[生图参考图]' : ''),
         systemPrompt: settings.systemPrompt,
         model: config.model,
         createdAt: now,
@@ -1502,6 +1565,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       role: 'user',
       content,
       imageUri,
+      imageGenerationReferenceUris: referenceImageUris,
       createdAt: Date.now(),
     };
 
@@ -1693,7 +1757,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   // 一体化发送：加用户消息 + 触发 AI 回复（向后兼容）。
-  sendMessage: async (content: string, imageUri?: string) => {
+  sendMessage: async (content: string, imageUri?: string, imageGenerationReferenceUris?: string[]) => {
     const { isStreaming } = get();
     if (isStreaming) return;
     const previousConversationId = get().conversationId;
@@ -1701,7 +1765,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ? (await getAllConversations()).find((conversation) => conversation.id === previousConversationId)
       : null;
     const beforeMessageIds = new Set(get().messages.map((message) => message.id));
-    const userMessage = await get().addUserMessage(content, imageUri);
+    const userMessage = await get().addUserMessage(content, imageUri, imageGenerationReferenceUris);
     // addUserMessage 可能因为缺少配置而设置 error 并提前返回，
     // 此时不应继续触发回复。
     if (get().error) return;
@@ -1930,7 +1994,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const existing = getPictureRecord(message.generatedPics, tokenIndex);
     await deleteGeneratedImageFile(existing?.imageUri);
     const finalPrompt = composePicturePrompt(useSettingsStore.getState().imageGenerationPrompt, token.prompt);
-    await generatePictureForMessage(get, set, messageId, tokenIndex, token.prompt, finalPrompt);
+    await generatePictureForMessage(
+      get,
+      set,
+      messageId,
+      tokenIndex,
+      token.prompt,
+      finalPrompt,
+      normalizeReferenceImageUris(existing?.referenceImageUris)
+    );
   },
 
   deleteGeneratedPictureOnly: async (messageId: string, tokenIndex: number) => {

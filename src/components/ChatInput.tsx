@@ -16,6 +16,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import { randomUUID } from 'expo-crypto';
+import { Directory, File, Paths } from 'expo-file-system';
 import { BlurView } from 'expo-blur';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 
@@ -32,11 +34,16 @@ import {
 let colors = lightColors;
 const STICKER_PANEL_HEIGHT = Math.min(420, Dimensions.get('window').height * 0.48);
 const MCP_PANEL_HEIGHT = Math.min(560, Dimensions.get('window').height * 0.68);
+const MAX_IMAGE_REFERENCE_COUNT = 16;
 type McpPanelTab = 'tools' | 'resources' | 'prompts';
 
 function clampNumber(value: number | undefined, fallback: number, min: number, max: number) {
   if (!Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(min, value as number));
+}
+
+function glassBlurIntensity(value: number): number {
+  return Math.round(8 + value * 0.22);
 }
 
 function getStickerSuggestionQuery(value: string): string {
@@ -46,9 +53,30 @@ function getStickerSuggestionQuery(value: string): string {
   return parts[parts.length - 1] || '';
 }
 
+function extensionFromPickedImage(asset: ImagePicker.ImagePickerAsset): string {
+  const mime = (asset.mimeType || '').toLowerCase();
+  if (mime.includes('jpeg')) return '.jpg';
+  if (mime.includes('png')) return '.png';
+  if (mime.includes('webp')) return '.webp';
+  const name = (asset.fileName || asset.uri || '').toLowerCase().split('?')[0];
+  if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return '.jpg';
+  if (name.endsWith('.png')) return '.png';
+  if (name.endsWith('.webp')) return '.webp';
+  return '.png';
+}
+
+async function copyImageGenerationReference(asset: ImagePicker.ImagePickerAsset): Promise<string> {
+  const dir = new Directory(Paths.document, 'image-generation-references');
+  dir.create({ intermediates: true, idempotent: true });
+  const source = new File(asset.uri);
+  const destination = new File(dir, `ref-${Date.now().toString(36)}-${randomUUID()}${extensionFromPickedImage(asset)}`);
+  await source.copy(destination, { overwrite: true });
+  return destination.uri;
+}
+
 interface Props {
   blurTarget?: RefObject<View | null>;
-  onSend: (text: string, imageUri?: string) => void | Promise<void>;
+  onSend: (text: string, imageUri?: string, imageGenerationReferenceUris?: string[]) => void | Promise<void>;
   onTriggerResponse: () => void | Promise<void>;
   onEnableWebCruise?: () => void | Promise<void>;
   disabled?: boolean;
@@ -73,6 +101,7 @@ export function ChatInput({
 
   const [text, setText] = useState('');
   const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [pendingImageRefs, setPendingImageRefs] = useState<string[]>([]);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [stickerPickerVisible, setStickerPickerVisible] = useState(false);
   const [optionsMenuVisible, setOptionsMenuVisible] = useState(false);
@@ -124,19 +153,24 @@ export function ChatInput({
   const inputBackgroundImageUri = appearanceConfig?.inputBackgroundImageUri;
   const inputBackgroundTransparent = !!appearanceConfig?.inputBackgroundTransparent;
   const inputBlurIntensity = clampNumber(appearanceConfig?.inputBlurIntensity, 72, 0, 100);
-  const isGlassInput = inputStyle === 'glass';
-  const glassAlpha = 0.16 + (inputBlurIntensity / 100) * 0.16;
+  const inputBorderRadius = clampNumber(appearanceConfig?.inputBorderRadius, 24, 0, 36);
+  const isCompactInput = inputStyle === 'compact';
+  const isGlassInput = inputStyle === 'glass' || isCompactInput;
+  const glassBlur = glassBlurIntensity(inputBlurIntensity);
+  const glassAlpha = isDarkTheme ? 0.10 + (inputBlurIntensity / 100) * 0.06 : 0.26 + (inputBlurIntensity / 100) * 0.10;
   const hasCustomInputSurface = isGlassInput || !!inputBackgroundImageUri || inputBackgroundTransparent;
   const inputPanelBackground = inputBackgroundTransparent
     ? 'transparent'
     : isGlassInput || inputBackgroundImageUri
-    ? (isDarkTheme ? `rgba(26,22,18,${glassAlpha})` : `rgba(255,255,255,${glassAlpha})`)
+    ? (isDarkTheme ? `rgba(255,255,255,${glassAlpha})` : `rgba(255,255,255,${glassAlpha})`)
     : colors.inputBackground;
   const inputOverlayBackground = inputBackgroundTransparent
     ? 'transparent'
-    : colors.background === '#12100D'
-      ? 'rgba(18,16,13,0.08)'
-      : 'rgba(255,255,255,0.08)';
+    : isGlassInput
+      ? (isDarkTheme ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.34)')
+      : colors.background === '#12100D'
+        ? 'rgba(18,16,13,0.08)'
+        : 'rgba(255,255,255,0.08)';
 
   const pickImage = async () => {
     setOptionsMenuVisible(false);
@@ -148,6 +182,31 @@ export function ChatInput({
     if (!result.canceled && result.assets[0]) {
       setPendingImage(result.assets[0].uri);
     }
+  };
+
+  const pickImageReferences = async () => {
+    setOptionsMenuVisible(false);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 1,
+        allowsEditing: false,
+        allowsMultipleSelection: true,
+        selectionLimit: MAX_IMAGE_REFERENCE_COUNT,
+        orderedSelection: true,
+      });
+      if (!result.canceled) {
+        const assets = result.assets.slice(0, MAX_IMAGE_REFERENCE_COUNT);
+        const uris = await Promise.all(assets.map(copyImageGenerationReference));
+        setPendingImageRefs(uris);
+      }
+    } catch (error: any) {
+      Alert.alert('选择生图参考图失败', error?.message || '无法读取所选图片');
+    }
+  };
+
+  const removeImageReference = (uri: string) => {
+    setPendingImageRefs((current) => current.filter((item) => item !== uri));
   };
 
   const handleEnableWebCruise = async () => {
@@ -264,18 +323,21 @@ export function ChatInput({
 
   const handleSend = async (value: string) => {
     const trimmed = value.trim();
-    if (!trimmed && !pendingImage) return;
+    if (!trimmed && !pendingImage && pendingImageRefs.length === 0) return;
     if (disabled) return;
     if (sendInFlightRef.current) return;
     sendInFlightRef.current = true;
     const submittedImage = pendingImage || undefined;
+    const submittedImageRefs = pendingImageRefs.length > 0 ? pendingImageRefs : undefined;
     setText('');
     setPendingImage(null);
+    setPendingImageRefs([]);
     try {
-      await onSend(trimmed, submittedImage);
+      await onSend(trimmed, submittedImage, submittedImageRefs);
     } catch (err) {
       setText(value);
       setPendingImage(submittedImage || null);
+      setPendingImageRefs(submittedImageRefs || []);
       throw err;
     } finally {
       sendInFlightRef.current = false;
@@ -320,6 +382,7 @@ export function ChatInput({
     setStickerPickerVisible(false);
     setText('');
     setPendingImage(null);
+    setPendingImageRefs([]);
     await onSend(token);
   };
 
@@ -356,7 +419,15 @@ export function ChatInput({
           </ScrollView>
         </View>
       )}
-      <View style={[styles.container, { backgroundColor: inputPanelBackground }, hasCustomInputSurface && styles.customContainer]}>
+      <View
+        style={[
+          styles.container,
+          { backgroundColor: inputPanelBackground, borderRadius: inputBorderRadius },
+          hasCustomInputSurface && styles.customContainer,
+          isGlassInput && styles.glassContainer,
+          isCompactInput && styles.compactContainer,
+        ]}
+      >
         {inputBackgroundImageUri && (
           <Image source={{ uri: inputBackgroundImageUri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
         )}
@@ -365,15 +436,30 @@ export function ChatInput({
             blurTarget={blurTarget}
             blurMethod="dimezisBlurView"
             blurReductionFactor={1}
-            intensity={inputBlurIntensity}
-            tint={isDarkTheme ? 'dark' : 'light'}
+            intensity={glassBlur}
+            tint="light"
             style={StyleSheet.absoluteFill}
           />
         )}
         {hasCustomInputSurface && (
           <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: inputOverlayBackground }]} />
         )}
-        {pendingImage && (
+        {isGlassInput && (
+          <>
+            <View pointerEvents="none" style={styles.glassTopHighlight} />
+            <View
+              pointerEvents="none"
+              style={[
+                styles.glassInnerSheen,
+                {
+                  borderTopLeftRadius: Math.max(0, inputBorderRadius - 1),
+                  borderTopRightRadius: Math.max(0, inputBorderRadius - 1),
+                },
+              ]}
+            />
+          </>
+        )}
+        {pendingImage && !isCompactInput && (
           <View style={styles.previewRow}>
             <View style={styles.previewWrap}>
               <Image source={{ uri: pendingImage }} style={styles.previewImage} resizeMode="cover" />
@@ -383,23 +469,105 @@ export function ChatInput({
             </View>
           </View>
         )}
-        <TextInput
-          style={styles.input}
-          value={text}
-          onChangeText={handleChangeText}
-          onSubmitEditing={() => void handleSend(text)}
-          placeholder="Reply to Claude..."
-          placeholderTextColor={colors.textTertiary}
-          multiline
-          submitBehavior="submit"
-          returnKeyType="send"
-          maxLength={10000}
-          scrollEnabled
-          editable={!disabled}
-          onFocus={() => setIsInputFocused(true)}
-          onBlur={() => setIsInputFocused(false)}
-        />
-        <View style={styles.toolbar}>
+        {pendingImageRefs.length > 0 && !isCompactInput && (
+          <View style={styles.referencePreviewRow}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.referencePreviewList}
+            >
+              {pendingImageRefs.map((uri, index) => (
+                <View key={`${uri}-${index}`} style={styles.referencePreviewWrap}>
+                  <Image source={{ uri }} style={styles.referencePreviewImage} resizeMode="cover" />
+                  <Pressable style={styles.previewClose} onPress={() => removeImageReference(uri)}>
+                    <Text style={styles.previewCloseText}>x</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+        {isCompactInput ? (
+          <View style={styles.compactRow}>
+            <Pressable style={styles.optionsButton} onPress={() => setOptionsMenuVisible(true)}>
+              <Image
+                source={inputIconUris.options ? { uri: inputIconUris.options } : require('../../assets/optionsbutton.png')}
+                style={styles.optionsImage}
+                resizeMode="contain"
+              />
+            </Pressable>
+            {pendingImage && (
+              <View style={styles.compactPreviewWrap}>
+                <Image source={{ uri: pendingImage }} style={styles.compactPreviewImage} resizeMode="cover" />
+                <Pressable style={styles.compactPreviewClose} onPress={() => setPendingImage(null)}>
+                  <Text style={styles.compactPreviewCloseText}>x</Text>
+                </Pressable>
+              </View>
+            )}
+            {pendingImageRefs.length > 0 && (
+              <View style={styles.compactReferencePill}>
+                <Text style={styles.compactReferenceText}>{pendingImageRefs.length} 参考图</Text>
+                <Pressable onPress={() => setPendingImageRefs([])}>
+                  <Text style={styles.compactReferenceClear}>x</Text>
+                </Pressable>
+              </View>
+            )}
+            <TextInput
+              style={[styles.input, styles.compactInput]}
+              value={text}
+              onChangeText={handleChangeText}
+              onSubmitEditing={() => void handleSend(text)}
+              placeholder="Reply to Claude..."
+              placeholderTextColor={colors.textTertiary}
+              multiline={false}
+              submitBehavior="submit"
+              returnKeyType="send"
+              maxLength={10000}
+              scrollEnabled={false}
+              editable={!disabled}
+              onFocus={() => setIsInputFocused(true)}
+              onBlur={() => setIsInputFocused(false)}
+            />
+            <View style={styles.rightButtons}>
+              <Pressable style={styles.stickerButton} onPress={() => setStickerPickerVisible(true)}>
+                <Image
+                  source={inputIconUris.sticker ? { uri: inputIconUris.sticker } : require('../../assets/sticker.png')}
+                  style={styles.stickerButtonImage}
+                  resizeMode="contain"
+                />
+              </Pressable>
+              <Pressable
+                style={styles.sendButton}
+                onPressIn={() => void handleGetResponsePressIn()}
+                onPress={() => void handleGetResponsePress()}
+              >
+                <Image
+                  source={getResponseIcon()}
+                  style={[styles.sendImage, shouldInvertResponseIcon && styles.invertedImageIcon]}
+                  resizeMode="contain"
+                />
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <>
+            <TextInput
+              style={styles.input}
+              value={text}
+              onChangeText={handleChangeText}
+              onSubmitEditing={() => void handleSend(text)}
+              placeholder="Reply to Claude..."
+              placeholderTextColor={colors.textTertiary}
+              multiline
+              submitBehavior="submit"
+              returnKeyType="send"
+              maxLength={10000}
+              scrollEnabled
+              editable={!disabled}
+              onFocus={() => setIsInputFocused(true)}
+              onBlur={() => setIsInputFocused(false)}
+            />
+            <View style={styles.toolbar}>
           <Pressable style={styles.optionsButton} onPress={() => setOptionsMenuVisible(true)}>
             <Image
               source={inputIconUris.options ? { uri: inputIconUris.options } : require('../../assets/optionsbutton.png')}
@@ -432,7 +600,9 @@ export function ChatInput({
               />
             </Pressable>
           </View>
-        </View>
+            </View>
+          </>
+        )}
       </View>
 
       <Modal transparent visible={stickerPickerVisible} animationType="fade" onRequestClose={() => setStickerPickerVisible(false)}>
@@ -480,6 +650,10 @@ export function ChatInput({
             <View style={styles.optionDivider} />
             <Pressable style={styles.optionItem} onPress={() => void pickImage()}>
               <Text style={styles.optionText}>图片</Text>
+            </Pressable>
+            <View style={styles.optionDivider} />
+            <Pressable style={styles.optionItem} onPress={() => void pickImageReferences()}>
+              <Text style={styles.optionText}>生图参考图</Text>
             </Pressable>
           </View>
         </Pressable>
@@ -674,6 +848,44 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.18)',
   },
+  glassContainer: {
+    borderColor: 'rgba(255,255,255,0.54)',
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  compactContainer: {
+    minHeight: 52,
+    paddingTop: 8,
+    paddingBottom: 8,
+    paddingHorizontal: 8,
+  },
+  compactRow: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  glassTopHighlight: {
+    position: 'absolute',
+    left: 10,
+    right: 10,
+    top: 1,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.78)',
+  },
+  glassInnerSheen: {
+    position: 'absolute',
+    left: 1,
+    right: 1,
+    top: 1,
+    height: 32,
+    borderTopLeftRadius: 23,
+    borderTopRightRadius: 23,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
   suggestionPanel: {
     minHeight: 84,
     marginBottom: 8,
@@ -725,6 +937,24 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     width: 72,
     height: 72,
   },
+  referencePreviewRow: {
+    marginBottom: 8,
+  },
+  referencePreviewList: {
+    gap: 8,
+    paddingRight: 2,
+  },
+  referencePreviewWrap: {
+    width: 58,
+    height: 58,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: colors.surfaceHover,
+  },
+  referencePreviewImage: {
+    width: 58,
+    height: 58,
+  },
   previewClose: {
     position: 'absolute',
     top: 2,
@@ -748,6 +978,15 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     maxHeight: 120,
     minHeight: 28,
     paddingVertical: 0,
+  },
+  compactInput: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 36,
+    maxHeight: 36,
+    paddingHorizontal: 6,
+    paddingVertical: 0,
+    textAlignVertical: 'center',
   },
   toolbar: {
     flexDirection: 'row',
@@ -806,6 +1045,57 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   sendImage: {
     width: 30,
     height: 30,
+  },
+  compactPreviewWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: colors.surfaceHover,
+  },
+  compactPreviewImage: {
+    width: 34,
+    height: 34,
+  },
+  compactPreviewClose: {
+    position: 'absolute',
+    top: 1,
+    right: 1,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: 'rgba(0,0,0,0.52)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  compactPreviewCloseText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '700',
+  },
+  compactReferencePill: {
+    height: 30,
+    maxWidth: 96,
+    borderRadius: 15,
+    paddingLeft: 10,
+    paddingRight: 8,
+    backgroundColor: colors.surfaceHover,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  compactReferenceText: {
+    flexShrink: 1,
+    fontSize: 11,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  compactReferenceClear: {
+    fontSize: 12,
+    lineHeight: 14,
+    color: colors.textTertiary,
+    fontWeight: '700',
   },
   invertedImageIcon: {
     tintColor: colors.text,

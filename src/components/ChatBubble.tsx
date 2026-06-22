@@ -3,11 +3,12 @@ import type { RefObject } from 'react';
 import { View, Text, StyleSheet, Pressable, Image, Alert, TextInput, Modal, Dimensions, ScrollView, ActivityIndicator } from 'react-native';
 import Markdown from '@ronradtke/react-native-markdown-display';
 import { BlurView } from 'expo-blur';
+import Svg, { ClipPath, Defs, G, Image as SvgImage, Rect } from 'react-native-svg';
 import { Message, type GeneratedPicture } from '../types';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 import { fonts } from '../theme/fonts';
 import { useChatStore } from '../stores/chat';
-import { useSettingsStore } from '../stores/settings';
+import { useSettingsStore, type BubbleTextureConfig } from '../stores/settings';
 import { playTTS, stopTTS } from '../services/tts';
 import { saveGeneratedImageToLibrary } from '../services/imageGeneration';
 import { openWebView } from '../services/webviewController';
@@ -40,6 +41,136 @@ function withAlpha(hex: string, alpha: number): string {
 
 function percentWidth(value: number): `${number}%` {
   return `${value}%`;
+}
+
+function glassBlurIntensity(value: number): number {
+  return Math.round(8 + value * 0.22);
+}
+
+function scaleBubbleTextureInsets(texture: BubbleTextureConfig) {
+  const scale = Math.min(1, 220 / texture.originalWidth, 120 / texture.originalHeight);
+  return {
+    paddingLeft: Math.min(58, Math.round(texture.contentInsets.left * scale)),
+    paddingTop: Math.min(42, Math.round(texture.contentInsets.top * scale)),
+    paddingRight: Math.min(58, Math.round(texture.contentInsets.right * scale)),
+    paddingBottom: Math.min(42, Math.round(texture.contentInsets.bottom * scale)),
+  };
+}
+
+function BubbleTextureBackground({ texture }: { texture: BubbleTextureConfig }) {
+  const [layout, setLayout] = useState({ width: 0, height: 0 });
+  const clipPrefix = useMemo(() => `bubble-texture-${Math.random().toString(36).slice(2)}`, []);
+  const width = layout.width;
+  const height = layout.height;
+
+  const cells = useMemo(() => {
+    if (width <= 1 || height <= 1) return [];
+
+    const sourceWidth = Math.max(1, texture.originalWidth);
+    const sourceHeight = Math.max(1, texture.originalHeight);
+    const left = Math.min(texture.stretchInsets.left, sourceWidth - 1);
+    const top = Math.min(texture.stretchInsets.top, sourceHeight - 1);
+    const right = Math.min(texture.stretchInsets.right, sourceWidth - left - 1);
+    const bottom = Math.min(texture.stretchInsets.bottom, sourceHeight - top - 1);
+    const renderScale = Math.min(1, width / sourceWidth, height / sourceHeight);
+    const destLeft = Math.min(Math.round(left * renderScale), Math.floor(width / 2) - 1);
+    const destTop = Math.min(Math.round(top * renderScale), Math.floor(height / 2) - 1);
+    const destRight = Math.min(Math.round(right * renderScale), Math.floor(width / 2) - 1);
+    const destBottom = Math.min(Math.round(bottom * renderScale), Math.floor(height / 2) - 1);
+
+    const sourceColumns = [
+      { start: 0, size: left },
+      { start: left, size: sourceWidth - left - right },
+      { start: sourceWidth - right, size: right },
+    ];
+    const sourceRows = [
+      { start: 0, size: top },
+      { start: top, size: sourceHeight - top - bottom },
+      { start: sourceHeight - bottom, size: bottom },
+    ];
+    const destColumns = [
+      { start: 0, size: Math.max(0, destLeft) },
+      { start: Math.max(0, destLeft), size: Math.max(0, width - destLeft - destRight) },
+      { start: Math.max(0, width - destRight), size: Math.max(0, destRight) },
+    ];
+    const destRows = [
+      { start: 0, size: Math.max(0, destTop) },
+      { start: Math.max(0, destTop), size: Math.max(0, height - destTop - destBottom) },
+      { start: Math.max(0, height - destBottom), size: Math.max(0, destBottom) },
+    ];
+
+    const nextCells: Array<{
+      key: string;
+      sx: number;
+      sy: number;
+      sw: number;
+      sh: number;
+      dx: number;
+      dy: number;
+      dw: number;
+      dh: number;
+    }> = [];
+
+    sourceRows.forEach((sourceRow, rowIndex) => {
+      sourceColumns.forEach((sourceColumn, columnIndex) => {
+        const destRow = destRows[rowIndex];
+        const destColumn = destColumns[columnIndex];
+        if (sourceColumn.size <= 0 || sourceRow.size <= 0 || destColumn.size <= 0 || destRow.size <= 0) return;
+        nextCells.push({
+          key: `${rowIndex}-${columnIndex}`,
+          sx: sourceColumn.start,
+          sy: sourceRow.start,
+          sw: sourceColumn.size,
+          sh: sourceRow.size,
+          dx: destColumn.start,
+          dy: destRow.start,
+          dw: destColumn.size,
+          dh: destRow.size,
+        });
+      });
+    });
+
+    return nextCells;
+  }, [height, texture, width]);
+
+  return (
+    <View
+      pointerEvents="none"
+      style={styles.bubbleTextureBackground}
+      onLayout={(event) => {
+        const next = event.nativeEvent.layout;
+        setLayout({ width: next.width, height: next.height });
+      }}
+    >
+      {width > 1 && height > 1 && (
+        <Svg width={width} height={height}>
+          <Defs>
+            {cells.map((cell) => (
+              <ClipPath key={`clip-${cell.key}`} id={`${clipPrefix}-${cell.key}`}>
+                <Rect x={cell.dx} y={cell.dy} width={cell.dw} height={cell.dh} />
+              </ClipPath>
+            ))}
+          </Defs>
+          {cells.map((cell) => {
+            const scaleX = cell.dw / cell.sw;
+            const scaleY = cell.dh / cell.sh;
+            return (
+              <G key={cell.key} clipPath={`url(#${clipPrefix}-${cell.key})`}>
+                <SvgImage
+                  href={{ uri: texture.uri }}
+                  x={cell.dx - cell.sx * scaleX}
+                  y={cell.dy - cell.sy * scaleY}
+                  width={texture.originalWidth * scaleX}
+                  height={texture.originalHeight * scaleY}
+                  preserveAspectRatio="none"
+                />
+              </G>
+            );
+          })}
+        </Svg>
+      )}
+    </View>
+  );
 }
 
 const markdownRules = {
@@ -199,12 +330,14 @@ export const ChatBubble = React.memo(function ChatBubble({
   const userBubbleRadius = numberOrDefault(appearanceConfig?.userBubbleRadius, 20, 0, 36);
   const userBubbleBlurIntensity = numberOrDefault(appearanceConfig?.userBubbleBlurIntensity, 0, 0, 100);
   const userBubbleWidthPercent = numberOrDefault(appearanceConfig?.userBubbleWidthPercent, 75, 45, 100);
+  const userBubbleTexture = appearanceConfig?.userBubbleTexture;
   const assistantBubbleStyle = appearanceConfig?.assistantBubbleStyle || 'plain';
   const assistantBubbleColor = appearanceConfig?.assistantBubbleColor || colors.userBubble;
   const assistantBubbleTransparent = !!appearanceConfig?.assistantBubbleTransparent;
   const assistantBubbleRadius = numberOrDefault(appearanceConfig?.assistantBubbleRadius, 20, 0, 36);
   const assistantBubbleBlurIntensity = numberOrDefault(appearanceConfig?.assistantBubbleBlurIntensity, 0, 0, 100);
   const assistantBubbleWidthPercent = numberOrDefault(appearanceConfig?.assistantBubbleWidthPercent, 75, 45, 100);
+  const assistantBubbleTexture = appearanceConfig?.assistantBubbleTexture;
   const assistantFooterHidden = !!appearanceConfig?.assistantFooterHidden;
   const assistantActionsHidden = !!appearanceConfig?.assistantActionsHidden;
   const assistantFooterColor = appearanceConfig?.assistantFooterColor || colors.textTertiary;
@@ -433,19 +566,27 @@ export const ChatBubble = React.memo(function ChatBubble({
     const MENU_HEIGHT = 44;
     const menuLeft = Math.max(8, menuAnchor.x + menuAnchor.width - MENU_WIDTH);
     const menuTop = Math.max(8, menuAnchor.y - MENU_HEIGHT - 8);
-    const shouldBlurUserBubble = !messageIsStickerOnly && userBubbleBlurIntensity > 0;
+    const userBubbleTextureEnabled = !!userBubbleTexture?.uri && !messageIsStickerOnly;
+    const userBubbleTexturePadding = userBubbleTextureEnabled
+      ? scaleBubbleTextureInsets(userBubbleTexture)
+      : null;
+    const shouldBlurUserBubble = !userBubbleTextureEnabled && !messageIsStickerOnly && userBubbleBlurIntensity > 0;
     const userBubbleBaseStyle = [
       styles.userBubble,
       {
-        backgroundColor: userBubbleTransparent
+        backgroundColor: userBubbleTextureEnabled
+          ? 'transparent'
+          : userBubbleTransparent
           ? 'transparent'
           : shouldBlurUserBubble
-            ? withAlpha(userBubbleColor, 0.22)
+            ? 'rgba(255,255,255,0.28)'
             : userBubbleColor,
         borderRadius: userBubbleRadius,
       },
+      userBubbleTextureEnabled && styles.bubbleTextureHost,
+      userBubbleTexturePadding,
       shouldBlurUserBubble && styles.userBubbleGlass,
-      messageHasSticker && styles.userBubbleWithSticker,
+      messageHasSticker && !userBubbleTextureEnabled && styles.userBubbleWithSticker,
       messageIsStickerOnly && styles.userStickerOnlyBubble,
     ];
 
@@ -468,6 +609,21 @@ export const ChatBubble = React.memo(function ChatBubble({
               />
             </Pressable>
           )}
+          {message.imageGenerationReferenceUris && message.imageGenerationReferenceUris.length > 0 && (
+            <View style={styles.referenceImagesBlock}>
+              <Text style={styles.referenceImagesLabel}>生图参考图</Text>
+              <View style={styles.referenceImagesList}>
+                {message.imageGenerationReferenceUris.slice(0, 16).map((uri, index) => (
+                  <Pressable
+                    key={`${uri}-${index}`}
+                    onPress={() => setPreviewImage({ uri, title: `生图参考图 ${index + 1}` })}
+                  >
+                    <Image source={{ uri }} style={styles.referenceImageThumb} resizeMode="cover" />
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          )}
           {message.content.length > 0 && (
             <Pressable
               ref={bubbleRef}
@@ -475,15 +631,25 @@ export const ChatBubble = React.memo(function ChatBubble({
               onLongPress={handleUserLongPress}
               style={userBubbleBaseStyle}
             >
+              {userBubbleTextureEnabled && userBubbleTexture && (
+                <BubbleTextureBackground texture={userBubbleTexture} />
+              )}
               {shouldBlurUserBubble && (
                 <BlurView
                   blurTarget={blurTarget}
                   blurMethod="dimezisBlurView"
                   blurReductionFactor={1}
-                  intensity={userBubbleBlurIntensity}
-                  tint={userBubbleTransparent ? 'default' : colors.background === '#12100D' ? 'dark' : 'light'}
+                  intensity={glassBlurIntensity(userBubbleBlurIntensity)}
+                  tint="light"
                   style={StyleSheet.absoluteFill}
                 />
+              )}
+              {shouldBlurUserBubble && (
+                <>
+                  <View pointerEvents="none" style={styles.glassSurfaceOverlay} />
+                  <View pointerEvents="none" style={styles.glassTopHighlight} />
+                  <View pointerEvents="none" style={styles.glassInnerGlow} />
+                </>
               )}
               {sharedLinkUrl ? (
                 <SharedLinkCard url={sharedLinkUrl} />
@@ -498,22 +664,32 @@ export const ChatBubble = React.memo(function ChatBubble({
               )}
             </Pressable>
           )}
-          {message.content.length === 0 && !message.imageUri && (
+          {message.content.length === 0 && !message.imageUri && !(message.imageGenerationReferenceUris?.length) && (
             <Pressable
               ref={bubbleRef}
               onPress={onBubblePress}
               onLongPress={handleUserLongPress}
               style={userBubbleBaseStyle}
             >
+              {userBubbleTextureEnabled && userBubbleTexture && (
+                <BubbleTextureBackground texture={userBubbleTexture} />
+              )}
               {shouldBlurUserBubble && (
                 <BlurView
                   blurTarget={blurTarget}
                   blurMethod="dimezisBlurView"
                   blurReductionFactor={1}
-                  intensity={userBubbleBlurIntensity}
-                  tint={userBubbleTransparent ? 'default' : colors.background === '#12100D' ? 'dark' : 'light'}
+                  intensity={glassBlurIntensity(userBubbleBlurIntensity)}
+                  tint="light"
                   style={StyleSheet.absoluteFill}
                 />
+              )}
+              {shouldBlurUserBubble && (
+                <>
+                  <View pointerEvents="none" style={styles.glassSurfaceOverlay} />
+                  <View pointerEvents="none" style={styles.glassTopHighlight} />
+                  <View pointerEvents="none" style={styles.glassInnerGlow} />
+                </>
               )}
               <Text style={[styles.userText, userTextStyle]}>{message.content}</Text>
             </Pressable>
@@ -655,21 +831,29 @@ export const ChatBubble = React.memo(function ChatBubble({
   }
 
   const assistantBubbleEnabled = assistantBubbleStyle === 'bubble';
-  const shouldBlurAssistantBubble = assistantBubbleEnabled && !messageIsStickerOnly && assistantBubbleBlurIntensity > 0;
+  const assistantBubbleTextureEnabled = assistantBubbleEnabled && !!assistantBubbleTexture?.uri && !messageIsStickerOnly;
+  const assistantBubbleTexturePadding = assistantBubbleTextureEnabled && assistantBubbleTexture
+    ? scaleBubbleTextureInsets(assistantBubbleTexture)
+    : null;
+  const shouldBlurAssistantBubble = assistantBubbleEnabled && !assistantBubbleTextureEnabled && !messageIsStickerOnly && assistantBubbleBlurIntensity > 0;
   const assistantContentStyle = assistantBubbleEnabled
     ? [
         styles.assistantBubble,
         {
           maxWidth: percentWidth(assistantBubbleWidthPercent),
-          backgroundColor: assistantBubbleTransparent
+          backgroundColor: assistantBubbleTextureEnabled
+            ? 'transparent'
+            : assistantBubbleTransparent
             ? 'transparent'
             : shouldBlurAssistantBubble
-              ? withAlpha(assistantBubbleColor, 0.22)
+              ? 'rgba(255,255,255,0.28)'
               : assistantBubbleColor,
           borderRadius: assistantBubbleRadius,
         },
+        assistantBubbleTextureEnabled && styles.bubbleTextureHost,
+        assistantBubbleTexturePadding,
         shouldBlurAssistantBubble && styles.userBubbleGlass,
-        messageHasSticker && styles.userBubbleWithSticker,
+        messageHasSticker && !assistantBubbleTextureEnabled && styles.userBubbleWithSticker,
         messageIsStickerOnly && styles.userStickerOnlyBubble,
       ]
     : styles.assistantContent;
@@ -730,15 +914,25 @@ export const ChatBubble = React.memo(function ChatBubble({
         onPress={onBubblePress}
         onLongPress={handleAssistantLongPress}
       >
+        {assistantBubbleTextureEnabled && assistantBubbleTexture && (
+          <BubbleTextureBackground texture={assistantBubbleTexture} />
+        )}
         {shouldBlurAssistantBubble && (
           <BlurView
             blurTarget={blurTarget}
             blurMethod="dimezisBlurView"
             blurReductionFactor={1}
-            intensity={assistantBubbleBlurIntensity}
-            tint={assistantBubbleTransparent ? 'default' : colors.background === '#12100D' ? 'dark' : 'light'}
+            intensity={glassBlurIntensity(assistantBubbleBlurIntensity)}
+            tint="light"
             style={StyleSheet.absoluteFill}
           />
+        )}
+        {shouldBlurAssistantBubble && (
+          <>
+            <View pointerEvents="none" style={styles.glassSurfaceOverlay} />
+            <View pointerEvents="none" style={styles.glassTopHighlight} />
+            <View pointerEvents="none" style={styles.glassInnerGlow} />
+          </>
         )}
         <StickerContent
           content={body || ' '}
@@ -884,11 +1078,13 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'flex-end',
     paddingHorizontal: 16,
     marginVertical: 8,
+    minWidth: 0,
   },
   // 用户气泡列：让「已隐藏」标签右对齐于气泡上方
   userColumn: {
     alignItems: 'flex-end',
     maxWidth: '75%',
+    minWidth: 0,
   },
   messageAvatarHeader: {
     flexDirection: 'row',
@@ -1122,6 +1318,39 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   userBubbleGlass: {
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.50)',
+    shadowColor: '#000',
+    shadowOpacity: 0.14,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 6,
+  },
+  glassSurfaceOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(255,255,255,0.30)',
+  },
+  glassTopHighlight: {
+    position: 'absolute',
+    left: 10,
+    right: 10,
+    top: 1,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.82)',
+  },
+  glassInnerGlow: {
+    position: 'absolute',
+    left: 1,
+    right: 1,
+    top: 1,
+    height: 22,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  bubbleTextureHost: {
+    overflow: 'hidden',
+  },
+  bubbleTextureBackground: {
+    ...StyleSheet.absoluteFill,
   },
   userBubbleWithSticker: {
     paddingVertical: 8,
@@ -1174,6 +1403,30 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     height: IMAGE_MAX_WIDTH,
     borderRadius: 16,
     marginBottom: 6,
+  },
+  referenceImagesBlock: {
+    width: IMAGE_MAX_WIDTH,
+    marginBottom: 6,
+    alignItems: 'flex-end',
+  },
+  referenceImagesLabel: {
+    marginBottom: 4,
+    fontSize: 11,
+    color: colors.textTertiary,
+    fontWeight: '600',
+  },
+  referenceImagesList: {
+    width: IMAGE_MAX_WIDTH,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  referenceImageThumb: {
+    width: 54,
+    height: 54,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
   },
   userText: {
     fontSize: 16,

@@ -12,13 +12,32 @@ export type ChatInputIconKey =
   | 'sendFocused'
   | 'stop';
 
-export type ChatInputAppearanceStyle = 'default' | 'glass';
+export type ChatInputAppearanceStyle = 'default' | 'glass' | 'compact';
 export type AssistantBubbleAppearanceStyle = 'plain' | 'bubble';
+
+export interface BubbleTextureConfig {
+  uri: string;
+  originalWidth: number;
+  originalHeight: number;
+  stretchInsets: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  };
+  contentInsets: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  };
+}
 
 export interface AppearanceThemeSnapshot {
   topBarIconUris: Partial<Record<TopBarIconKey, string>>;
   topBarIconsHidden?: boolean;
   topBarFadeHidden?: boolean;
+  topBarBackgroundImageUri?: string;
   customGreetings?: string;
   welcomeLogoImageUri?: string;
   chatBackgroundImageUri?: string;
@@ -27,12 +46,14 @@ export interface AppearanceThemeSnapshot {
   userBubbleRadius?: number;
   userBubbleBlurIntensity?: number;
   userBubbleWidthPercent?: number;
+  userBubbleTexture?: BubbleTextureConfig;
   assistantBubbleStyle?: AssistantBubbleAppearanceStyle;
   assistantBubbleColor?: string;
   assistantBubbleTransparent?: boolean;
   assistantBubbleRadius?: number;
   assistantBubbleBlurIntensity?: number;
   assistantBubbleWidthPercent?: number;
+  assistantBubbleTexture?: BubbleTextureConfig;
   messageAvatarsVisible?: boolean;
   messageMetaVisible?: boolean;
   userAvatarImageUri?: string;
@@ -53,6 +74,7 @@ export interface AppearanceThemeSnapshot {
   inputBackgroundTransparent?: boolean;
   inputStyle?: ChatInputAppearanceStyle;
   inputBlurIntensity?: number;
+  inputBorderRadius?: number;
   inputIconUris?: Partial<Record<ChatInputIconKey, string>>;
 }
 
@@ -109,6 +131,16 @@ export interface HotboardConfig {
   enabled: boolean;
   apiKey: string;
   platforms: string;
+}
+
+export interface RunCommandConfig {
+  enabled: boolean;
+  endpointUrl: string;
+  accessToken: string;
+  defaultCwd: string;
+  timeoutMs: number;
+  maxOutputChars: number;
+  maxToolCalls: number;
 }
 
 export interface QQBotConfig {
@@ -398,6 +430,7 @@ const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig = {
   inputIconUris: {},
   inputStyle: 'default',
   inputBlurIntensity: 72,
+  inputBorderRadius: 24,
   appearanceThemes: [],
 };
 
@@ -421,18 +454,21 @@ function snapshotAppearanceConfig(config?: AppearanceConfig): AppearanceThemeSna
     topBarIconUris: { ...(source.topBarIconUris || {}) },
     topBarIconsHidden: source.topBarIconsHidden,
     topBarFadeHidden: source.topBarFadeHidden,
+    topBarBackgroundImageUri: source.topBarBackgroundImageUri,
     chatBackgroundImageUri: source.chatBackgroundImageUri,
     userBubbleColor: source.userBubbleColor,
     userBubbleTransparent: source.userBubbleTransparent,
     userBubbleRadius: source.userBubbleRadius,
     userBubbleBlurIntensity: source.userBubbleBlurIntensity,
     userBubbleWidthPercent: source.userBubbleWidthPercent,
+    userBubbleTexture: source.userBubbleTexture,
     assistantBubbleStyle: source.assistantBubbleStyle,
     assistantBubbleColor: source.assistantBubbleColor,
     assistantBubbleTransparent: source.assistantBubbleTransparent,
     assistantBubbleRadius: source.assistantBubbleRadius,
     assistantBubbleBlurIntensity: source.assistantBubbleBlurIntensity,
     assistantBubbleWidthPercent: source.assistantBubbleWidthPercent,
+    assistantBubbleTexture: source.assistantBubbleTexture,
     messageAvatarsVisible: source.messageAvatarsVisible,
     messageMetaVisible: source.messageMetaVisible,
     userAvatarImageUri: source.userAvatarImageUri,
@@ -453,6 +489,7 @@ function snapshotAppearanceConfig(config?: AppearanceConfig): AppearanceThemeSna
     inputBackgroundTransparent: source.inputBackgroundTransparent,
     inputStyle: source.inputStyle,
     inputBlurIntensity: source.inputBlurIntensity,
+    inputBorderRadius: source.inputBorderRadius,
     inputIconUris: { ...(source.inputIconUris || {}) },
   };
 }
@@ -471,6 +508,7 @@ interface SettingsState {
   webPageReaderConfig: WebPageReaderConfig;
   webInteractionConfig: WebInteractionConfig;
   hotboardConfig: HotboardConfig;
+  runCommandConfig: RunCommandConfig;
   qqBotConfig: QQBotConfig;
   nativeToolConfig: NativeToolConfig;
   shizukuFileConfig: ShizukuFileConfig;
@@ -498,6 +536,7 @@ interface SettingsState {
   setWebPageReaderConfig: (config: Partial<WebPageReaderConfig>) => void;
   setWebInteractionConfig: (config: Partial<WebInteractionConfig>) => void;
   setHotboardConfig: (config: Partial<HotboardConfig>) => void;
+  setRunCommandConfig: (config: Partial<RunCommandConfig>) => void;
   setQqBotConfig: (config: Partial<QQBotConfig>) => void;
   setNativeToolConfig: (config: Partial<NativeToolConfig>) => void;
   setShizukuFileConfig: (config: Partial<ShizukuFileConfig>) => void;
@@ -573,6 +612,15 @@ export const useSettingsStore = create<SettingsState>()(
         enabled: false,
         apiKey: '',
         platforms: DEFAULT_HOTBOARD_PLATFORM_TYPES.join(','),
+      },
+      runCommandConfig: {
+        enabled: false,
+        endpointUrl: '',
+        accessToken: '',
+        defaultCwd: '',
+        timeoutMs: 30000,
+        maxOutputChars: 12000,
+        maxToolCalls: 4,
       },
       qqBotConfig: {
         enabled: false,
@@ -723,6 +771,21 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ webInteractionConfig: { ...state.webInteractionConfig, ...config } })),
       setHotboardConfig: (config) =>
         set((state) => ({ hotboardConfig: { ...state.hotboardConfig, ...config } })),
+      setRunCommandConfig: (config) =>
+        set((state) => ({
+          runCommandConfig: {
+            ...(state.runCommandConfig || {
+              enabled: false,
+              endpointUrl: '',
+              accessToken: '',
+              defaultCwd: '',
+              timeoutMs: 30000,
+              maxOutputChars: 12000,
+              maxToolCalls: 4,
+            }),
+            ...config,
+          },
+        })),
       setQqBotConfig: (config) =>
         set((state) => ({ qqBotConfig: { ...state.qqBotConfig, ...config } })),
       setNativeToolConfig: (config) =>
@@ -978,6 +1041,7 @@ export const useSettingsStore = create<SettingsState>()(
         webPageReaderConfig: state.webPageReaderConfig,
         webInteractionConfig: state.webInteractionConfig,
         hotboardConfig: state.hotboardConfig,
+        runCommandConfig: state.runCommandConfig,
         qqBotConfig: state.qqBotConfig,
         nativeToolConfig: state.nativeToolConfig,
         shizukuFileConfig: state.shizukuFileConfig,

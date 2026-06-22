@@ -1,6 +1,11 @@
+import { fetch as expoFetch } from 'expo/fetch';
 import { randomUUID } from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
+
+export interface ImageGenerationReferenceImage {
+  uri: string;
+}
 
 export interface ImageGenerationRequest {
   baseUrl: string;
@@ -9,6 +14,7 @@ export interface ImageGenerationRequest {
   prompt: string;
   size?: string;
   quality?: string;
+  referenceImages?: ImageGenerationReferenceImage[];
   signal?: AbortSignal;
 }
 
@@ -58,6 +64,36 @@ async function saveImageBytes(
   return file.uri;
 }
 
+async function resultFromImageApiResponse(response: Response, fileStem: string): Promise<ImageGenerationResult> {
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`API Error ${response.status}: ${errorText}`);
+  }
+
+  const json = await response.json();
+  const item = json?.data?.[0];
+  if (!item) {
+    throw new Error('生图接口未返回图片数据');
+  }
+
+  if (typeof item.b64_json === 'string' && item.b64_json.trim()) {
+    const bytes = decodeBase64(item.b64_json.trim());
+    return {
+      imageUri: await saveImageBytes(bytes, 'image/png', fileStem),
+      revisedPrompt: item.revised_prompt || undefined,
+    };
+  }
+
+  if (typeof item.url === 'string' && item.url.trim()) {
+    return {
+      imageUri: await downloadImage(item.url.trim(), fileStem),
+      revisedPrompt: item.revised_prompt || undefined,
+    };
+  }
+
+  throw new Error('生图接口未返回可用的图片地址');
+}
+
 async function downloadImage(url: string, fileStem: string): Promise<string> {
   const response = await fetch(url);
   if (!response.ok) {
@@ -68,8 +104,47 @@ async function downloadImage(url: string, fileStem: string): Promise<string> {
   return saveImageBytes(bytes, response.headers.get('content-type'), fileStem);
 }
 
+async function editOpenAIImage(request: ImageGenerationRequest): Promise<ImageGenerationResult> {
+  const { baseUrl, apiKey, model, prompt, size, quality, referenceImages, signal } = request;
+  const url = `${normalizeBaseUrl(baseUrl)}/images/edits`;
+  const form = new FormData();
+
+  form.append('model', model);
+  form.append('prompt', prompt);
+  if (size) {
+    form.append('size', size);
+  }
+  if (quality) {
+    form.append('quality', quality);
+  }
+
+  const images = (referenceImages || []).slice(0, 16);
+  if (images.length === 0) {
+    throw new Error('未选择生图参考图');
+  }
+
+  images.forEach((image) => {
+    form.append('image[]', new File(image.uri) as any);
+  });
+
+  const response = await expoFetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey.trim()}`,
+    },
+    body: form as any,
+    signal,
+  });
+
+  return resultFromImageApiResponse(response as Response, `pic-${Date.now().toString(36)}-${randomUUID()}`);
+}
+
 export async function generateOpenAIImage(request: ImageGenerationRequest): Promise<ImageGenerationResult> {
-  const { baseUrl, apiKey, model, prompt, size, quality, signal } = request;
+  const { baseUrl, apiKey, model, prompt, size, quality, referenceImages, signal } = request;
+  if (referenceImages && referenceImages.length > 0) {
+    return editOpenAIImage(request);
+  }
+
   const url = `${normalizeBaseUrl(baseUrl)}/images/generations`;
   const body: Record<string, any> = {
     model,
@@ -92,34 +167,8 @@ export async function generateOpenAIImage(request: ImageGenerationRequest): Prom
     signal,
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API Error ${response.status}: ${errorText}`);
-  }
-
-  const json = await response.json();
-  const item = json?.data?.[0];
-  if (!item) {
-    throw new Error('生图接口未返回图片数据');
-  }
-
   const fileStem = `pic-${Date.now().toString(36)}-${randomUUID()}`;
-  if (typeof item.b64_json === 'string' && item.b64_json.trim()) {
-    const bytes = decodeBase64(item.b64_json.trim());
-    return {
-      imageUri: await saveImageBytes(bytes, 'image/png', fileStem),
-      revisedPrompt: item.revised_prompt || undefined,
-    };
-  }
-
-  if (typeof item.url === 'string' && item.url.trim()) {
-    return {
-      imageUri: await downloadImage(item.url.trim(), fileStem),
-      revisedPrompt: item.revised_prompt || undefined,
-    };
-  }
-
-  throw new Error('生图接口未返回可用的图片地址');
+  return resultFromImageApiResponse(response, fileStem);
 }
 
 export async function deleteGeneratedImageFile(imageUri?: string): Promise<void> {

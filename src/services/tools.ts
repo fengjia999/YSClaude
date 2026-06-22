@@ -2,6 +2,7 @@ import { hotboardTool } from './toolModules/hotboard';
 import { mcpRemoteTool } from './toolModules/mcpRemote';
 import { memoryVaultTool, uploadDiary } from './toolModules/memoryVault';
 import { nativeDeviceTool } from './toolModules/nativeDevice';
+import { runCommandTool } from './toolModules/runCommand';
 import { shizukuFileTool } from './toolModules/shizukuFile';
 import { webPageReaderTool } from './toolModules/webPageReader';
 import { webSearchTool } from './toolModules/webSearch';
@@ -22,6 +23,7 @@ const TOOL_MODULES: ToolModule[] = [
   webSearchTool,
   webPageReaderTool,
   hotboardTool,
+  runCommandTool,
   mcpRemoteTool,
   webViewTool,
   nativeDeviceTool,
