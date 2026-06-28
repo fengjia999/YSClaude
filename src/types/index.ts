@@ -25,6 +25,7 @@ export interface GeneratedPicture {
   status: GeneratedPictureStatus;
   imageUri?: string;
   referenceImageUris?: string[];
+  progressLabel?: string;
   errorMessage?: string;
   createdAt: number;
   updatedAt: number;

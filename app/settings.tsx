@@ -7,10 +7,11 @@ import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { randomUUID } from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
+import { copyAsync } from 'expo-file-system/legacy';
 import { lightColors, useThemeColors, type ThemeColors } from '../src/theme/colors';
 
 import { fonts } from '../src/theme/fonts';
-import { useSettingsStore, NamedAPIConfig, TTSConfig, MemoryVaultConfig, WebSearchConfig, type BubbleTextureConfig, type ChatInputIconKey, type ChatInputAppearanceStyle, type AssistantBubbleAppearanceStyle, type ShizukuFileRoot, type StickerOwner, type CustomSticker, type QQBotConfig } from '../src/stores/settings';
+import { useSettingsStore, NamedAPIConfig, TTSConfig, MemoryVaultConfig, WebSearchConfig, type BubbleTextureConfig, type ChatInputIconKey, type ChatInputAppearanceStyle, type AssistantBubbleAppearanceStyle, type ShizukuFileRoot, type StickerOwner, type CustomSticker, type QQBotConfig, type ImageGenerationFaceReference } from '../src/stores/settings';
 import { TopBarIcon, TOP_BAR_ICON_ITEMS } from '../src/components/TopBarIcon';
 import type { TopBarIconKey } from '../src/utils/topBarIconTypes';
 import { useChatStore } from '../src/stores/chat';
@@ -64,6 +65,10 @@ const CUSTOM_BUBBLE_TEXTURE_MAX_SIDE = 4096;
 const CUSTOM_STICKER_MAX_BYTES = 5 * 1024 * 1024;
 const CUSTOM_STICKER_MIN_SIDE = 32;
 const CUSTOM_STICKER_MAX_SIDE = 4096;
+const IMAGE_GENERATION_FACE_REFERENCE_MAX_BYTES = 8 * 1024 * 1024;
+const IMAGE_GENERATION_FACE_REFERENCE_MIN_SIDE = 64;
+const IMAGE_GENERATION_FACE_REFERENCE_MAX_SIDE = 4096;
+const IMAGE_GENERATION_FACE_REFERENCE_SELECTION_LIMIT = 16;
 const CUSTOM_FLOATING_BALL_MAX_BYTES = 8 * 1024 * 1024;
 const CUSTOM_FLOATING_BALL_MIN_SIDE = 24;
 const CUSTOM_FLOATING_BALL_MAX_SIDE = 2048;
@@ -325,9 +330,8 @@ async function copyTopBarIcon(asset: ImagePicker.ImagePickerAsset, key: TopBarIc
   const dir = new Directory(Paths.document, 'top-bar-icons');
   dir.create({ intermediates: true, idempotent: true });
 
-  const source = new File(asset.uri);
   const destination = new File(dir, `${key}-${randomUUID()}${topBarIconExtension(asset)}`);
-  await source.copy(destination, { overwrite: true });
+  await copyAsync({ from: asset.uri, to: destination.uri });
   return destination.uri;
 }
 
@@ -339,10 +343,56 @@ async function copyAppearanceImage(
   const dir = new Directory(Paths.document, directoryName);
   dir.create({ intermediates: true, idempotent: true });
 
-  const source = new File(asset.uri);
   const destination = new File(dir, `${prefix}-${randomUUID()}${topBarIconExtension(asset)}`);
-  await source.copy(destination, { overwrite: true });
+  await copyAsync({ from: asset.uri, to: destination.uri });
   return destination.uri;
+}
+
+function validateImageGenerationFaceReferenceAsset(asset: ImagePicker.ImagePickerAsset): string | null {
+  const mimeType = asset.mimeType?.toLowerCase();
+  const extension = topBarIconExtension(asset);
+  const isAllowedType =
+    mimeType === 'image/png' ||
+    mimeType === 'image/webp' ||
+    mimeType === 'image/jpeg' ||
+    mimeType === 'image/jpg' ||
+    ['.png', '.webp', '.jpg'].includes(extension);
+
+  if (!isAllowedType) {
+    return '只支持 PNG、WebP 或 JPG';
+  }
+  if (asset.fileSize && asset.fileSize > IMAGE_GENERATION_FACE_REFERENCE_MAX_BYTES) {
+    return '图片不能超过 8MB';
+  }
+  if (
+    asset.width < IMAGE_GENERATION_FACE_REFERENCE_MIN_SIDE ||
+    asset.height < IMAGE_GENERATION_FACE_REFERENCE_MIN_SIDE
+  ) {
+    return `图片边长至少 ${IMAGE_GENERATION_FACE_REFERENCE_MIN_SIDE}px`;
+  }
+  if (
+    asset.width > IMAGE_GENERATION_FACE_REFERENCE_MAX_SIDE ||
+    asset.height > IMAGE_GENERATION_FACE_REFERENCE_MAX_SIDE
+  ) {
+    return `图片边长不能超过 ${IMAGE_GENERATION_FACE_REFERENCE_MAX_SIDE}px`;
+  }
+  return null;
+}
+
+async function copyImageGenerationFaceReference(asset: ImagePicker.ImagePickerAsset): Promise<string> {
+  return copyAppearanceImage(asset, 'image-generation-face-references', 'face-ref');
+}
+
+function deleteLocalImageIfExists(uri?: string) {
+  if (!uri) return;
+  try {
+    const file = new File(uri);
+    if (file.exists) {
+      file.delete();
+    }
+  } catch {
+    // Ignore cleanup failures; the settings entry is still removed.
+  }
 }
 
 function validateFloatingBallAsset(asset: ImagePicker.ImagePickerAsset): string | null {
@@ -3023,7 +3073,7 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       </View>
 
       <Text style={styles.sectionTitle}>AI 生图 API</Text>
-      <Text style={styles.hint}>识别 AI 回复里的 [Pic:图片描述] 后调用 OpenAI 兼容的 /images/generations。Base URL 和 Key 留空时会沿用当前聊天 API 配置。</Text>
+      <Text style={styles.hint}>识别 AI 回复里的 [Pic:图片描述] 后调用 OpenAI 兼容生图接口；有参考图或锁脸图时会走 /images/edits。Base URL 和 Key 留空时会沿用当前聊天 API 配置。</Text>
       <View style={styles.switchRow}>
         <View style={styles.switchText}>
           <Text style={styles.label}>启用 AI 生图</Text>
@@ -3208,12 +3258,14 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     stripThinking,
     periodConfig,
     promptCacheConfig,
+    imageGenerationConfig,
     imageGenerationPrompt,
     setSystemPrompt,
     setMaxOutputTokens,
     setStripThinking,
     setPeriodConfig,
     setPromptCacheConfig,
+    setImageGenerationConfig,
     setImageGenerationPrompt,
   } = useSettingsStore();
   // 隐藏楼层现在按对话独立存储，数据源改为 chat store
@@ -3234,6 +3286,7 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const [promptText, setPromptText] = useState(systemPrompt);
   const [imagePromptText, setImagePromptText] = useState(imageGenerationPrompt || '');
   const [importingMyphone, setImportingMyphone] = useState(false);
+  const [pickingFaceReferences, setPickingFaceReferences] = useState(false);
   const [hiddenDiagnosticMessages, setHiddenDiagnosticMessages] = useState<ChatDiagnosticsMessage[]>([]);
 
   useEffect(() => {
@@ -3296,6 +3349,8 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const mergedHiddenRanges = mergeRanges([...hiddenRanges, ...hiddenMessageFloorRanges]);
   const hiddenContextRows = hiddenMessageRows.filter((row) => row.floor === null);
   const hasHiddenMessages = mergedHiddenRanges.length > 0 || hiddenContextRows.length > 0;
+  const faceReferences = imageGenerationConfig?.faceReferences || [];
+  const enabledFaceReferenceCount = faceReferences.filter((item) => item.enabled !== false).length;
 
   function handleAddRange() {
     const range = parseInputRange();
@@ -3406,6 +3461,73 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     }
   }
 
+  async function handlePickFaceReferences() {
+    if (pickingFaceReferences) return;
+    setPickingFaceReferences(true);
+    try {
+      const remainingSlots = Math.max(0, IMAGE_GENERATION_FACE_REFERENCE_SELECTION_LIMIT - faceReferences.length);
+      if (remainingSlots <= 0) {
+        Alert.alert('参考图已满', `最多保存 ${IMAGE_GENERATION_FACE_REFERENCE_SELECTION_LIMIT} 张锁脸参考图。`);
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 1,
+        allowsEditing: false,
+        allowsMultipleSelection: true,
+        selectionLimit: remainingSlots,
+        orderedSelection: true,
+      });
+      if (result.canceled) return;
+
+      const assets = result.assets.slice(0, remainingSlots);
+      const validationError = assets
+        .map(validateImageGenerationFaceReferenceAsset)
+        .find((message): message is string => !!message);
+      if (validationError) {
+        Alert.alert('图片不适合作为锁脸参考图', validationError);
+        return;
+      }
+
+      const now = Date.now();
+      const copiedReferences: ImageGenerationFaceReference[] = await Promise.all(
+        assets.map(async (asset, index) => ({
+          id: `face-ref-${now.toString(36)}-${index}-${randomUUID()}`,
+          uri: await copyImageGenerationFaceReference(asset),
+          enabled: true,
+          createdAt: now + index,
+        }))
+      );
+      if (copiedReferences.length === 0) return;
+
+      setImageGenerationConfig({
+        faceReferences: [...faceReferences, ...copiedReferences].slice(0, IMAGE_GENERATION_FACE_REFERENCE_SELECTION_LIMIT),
+      });
+      showToast(`已添加 ${copiedReferences.length} 张锁脸参考图`);
+    } catch (error: any) {
+      Alert.alert('选择锁脸参考图失败', error?.message || '无法读取所选图片');
+    } finally {
+      setPickingFaceReferences(false);
+    }
+  }
+
+  function handleToggleFaceReference(id: string, enabled: boolean) {
+    setImageGenerationConfig({
+      faceReferences: faceReferences.map((item) =>
+        item.id === id ? { ...item, enabled } : item
+      ),
+    });
+  }
+
+  function handleRemoveFaceReference(reference: ImageGenerationFaceReference) {
+    setImageGenerationConfig({
+      faceReferences: faceReferences.filter((item) => item.id !== reference.id),
+    });
+    deleteLocalImageIfExists(reference.uri);
+    showToast('锁脸参考图已删除');
+  }
+
   const messageCount = messages.filter((m) => m.role === 'user' || m.role === 'assistant').length;
   const loadedFloorFrom = messageCount > 0 ? messageFloorOffset + 1 : 0;
   const loadedFloorTo = messageFloorOffset + messageCount;
@@ -3429,7 +3551,7 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         placeholderTextColor={colors.textTertiary}
       />
 
-      <Text style={styles.sectionTitle}>AI 生图提示词</Text>
+      <Text style={styles.sectionTitle}>生图配置</Text>
       <Text style={styles.hint}>AI 回复中的 [Pic:图片描述] 会与这里的基础提示词组合后发送给生图 API；这里不会作为真实图片发回给聊天 AI。</Text>
       <TextInput
         style={[styles.input, { minHeight: 90, textAlignVertical: 'top' }]}
@@ -3440,6 +3562,62 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         placeholder="例如：高质量图片，画面清晰，主体明确，无水印。"
         placeholderTextColor={colors.textTertiary}
       />
+
+      <View style={styles.imageFaceReferenceHeader}>
+        <View style={styles.imageFaceReferenceHeaderText}>
+          <Text style={styles.label}>锁脸参考图</Text>
+          <Text style={styles.hint}>启用的参考图会自动用于文生图/图生图，和输入框临时参考图一起传给生图 API。</Text>
+        </View>
+        <Pressable
+          style={[styles.smallActionButton, pickingFaceReferences && styles.smallActionButtonDisabled]}
+          onPress={handlePickFaceReferences}
+          disabled={pickingFaceReferences}
+        >
+          <Text style={[styles.smallActionText, pickingFaceReferences && styles.smallActionTextDisabled]}>
+            {pickingFaceReferences ? '选择中' : '上传'}
+          </Text>
+        </Pressable>
+      </View>
+      <Text style={styles.hint}>
+        已启用 {enabledFaceReferenceCount} / {faceReferences.length} 张，最多 {IMAGE_GENERATION_FACE_REFERENCE_SELECTION_LIMIT} 张。
+      </Text>
+      {faceReferences.length === 0 ? (
+        <View style={styles.imageFaceReferenceEmpty}>
+          <Text style={styles.hint}>暂无锁脸参考图。</Text>
+        </View>
+      ) : (
+        <View style={styles.imageFaceReferenceGrid}>
+          {faceReferences.map((reference, index) => {
+            const enabled = reference.enabled !== false;
+            return (
+              <View
+                key={reference.id}
+                style={[
+                  styles.imageFaceReferenceItem,
+                  enabled && styles.imageFaceReferenceItemActive,
+                ]}
+              >
+                <Image source={{ uri: reference.uri }} style={styles.imageFaceReferenceImage} resizeMode="cover" />
+                <View style={styles.imageFaceReferenceMeta}>
+                  <Text style={styles.imageFaceReferenceLabel}>参考图 {index + 1}</Text>
+                  <Switch
+                    value={enabled}
+                    onValueChange={(value) => handleToggleFaceReference(reference.id, value)}
+                    trackColor={{ false: colors.border, true: colors.primary }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+                <Pressable
+                  style={styles.imageFaceReferenceRemove}
+                  onPress={() => handleRemoveFaceReference(reference)}
+                >
+                  <Text style={styles.imageFaceReferenceRemoveText}>删除</Text>
+                </Pressable>
+              </View>
+            );
+          })}
+        </View>
+      )}
 
       {/* 消息条数 */}
       <Text style={styles.sectionTitle}>当前对话</Text>
@@ -6607,6 +6785,80 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   infoLabel: { fontSize: 14, color: colors.text, fontWeight: '500' },
   infoValue: { fontSize: 14, color: colors.primary, fontWeight: '600' },
   hint: { fontSize: 12, color: colors.textTertiary, marginBottom: 12 },
+  imageFaceReferenceHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  imageFaceReferenceHeaderText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  imageFaceReferenceEmpty: {
+    minHeight: 54,
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 14,
+  },
+  imageFaceReferenceGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 14,
+  },
+  imageFaceReferenceItem: {
+    width: '48%',
+    minWidth: 142,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: 8,
+  },
+  imageFaceReferenceItemActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
+  },
+  imageFaceReferenceImage: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 10,
+    backgroundColor: colors.background,
+  },
+  imageFaceReferenceMeta: {
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 8,
+  },
+  imageFaceReferenceLabel: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  imageFaceReferenceRemove: {
+    minHeight: 32,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  imageFaceReferenceRemoveText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.danger,
+  },
   appearanceThemeSaveRow: {
     flexDirection: 'row',
     alignItems: 'center',

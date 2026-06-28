@@ -50,6 +50,7 @@ import {
   getMessagesByConversation,
   getConversationMessagePage,
   getConversationMessagePageAroundMessage,
+  getConversationNewerMessagePage,
   getConversationMessageCount,
   getHiddenRanges,
   getHiddenMessageIds,
@@ -80,18 +81,52 @@ function normalizeReferenceImageUris(uris: string[] | undefined): string[] | und
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function getEnabledFaceReferenceUris(): string[] {
+  const references = useSettingsStore.getState().imageGenerationConfig?.faceReferences || [];
+  return normalizeReferenceImageUris(
+    references
+      .filter((reference) => reference.enabled !== false)
+      .map((reference) => reference.uri)
+  ) || [];
+}
+
+function combineImageGenerationReferenceUris(
+  faceReferenceUris: string[],
+  messageReferenceUris?: string[]
+): string[] | undefined {
+  return normalizeReferenceImageUris([
+    ...faceReferenceUris,
+    ...(messageReferenceUris || []),
+  ]);
+}
+
+function composeImageGenerationPrompt(
+  basePrompt: string | undefined,
+  tokenPrompt: string,
+  faceReferenceCount: number
+): string {
+  const prompt = composePicturePrompt(basePrompt, tokenPrompt);
+  if (faceReferenceCount <= 0) return prompt;
+  const lockFaceInstruction = faceReferenceCount === 1
+    ? '请锁定参考图中的人脸身份、五官比例和面部特征，生成结果保持同一个人。'
+    : `请锁定 ${faceReferenceCount} 张参考图中的人脸身份、五官比例和面部特征，生成结果保持对应人物一致。`;
+  return prompt.trim() ? `${prompt}\n\n${lockFaceInstruction}` : lockFaceInstruction;
+}
+
 function createPendingGeneratedPictures(
   content: string,
   basePrompt: string | undefined,
-  referenceImageUris?: string[]
+  referenceImageUris: string[] | undefined,
+  faceReferenceCount: number
 ): GeneratedPicture[] {
   const now = Date.now();
   return extractPictureTokens(content).map((token) => ({
     tokenIndex: token.tokenIndex,
     prompt: token.prompt,
-    finalPrompt: composePicturePrompt(basePrompt, token.prompt),
+    finalPrompt: composeImageGenerationPrompt(basePrompt, token.prompt, faceReferenceCount),
     status: 'pending' as const,
     referenceImageUris,
+    progressLabel: '等待生成',
     createdAt: now,
     updatedAt: now,
   }));
@@ -140,6 +175,28 @@ function getPictureRecord(
   return generatedPics?.find((picture) => picture.tokenIndex === tokenIndex);
 }
 
+async function updateGeneratedPictureProgress(
+  get: () => ChatState,
+  set: (partial: Partial<ChatState> | ((s: ChatState) => Partial<ChatState>)) => void,
+  messageId: string,
+  tokenIndex: number,
+  progressLabel: string
+): Promise<void> {
+  const message = get().messages.find((item) => item.id === messageId) ?? null;
+  if (!message?.generatedPics) return;
+  const nextPics = message.generatedPics.map((picture) =>
+    picture.tokenIndex === tokenIndex && picture.status === 'pending'
+      ? { ...picture, progressLabel, updatedAt: Date.now() }
+      : picture
+  );
+  set((state) => ({
+    messages: state.messages.map((item) =>
+      item.id === messageId ? { ...item, generatedPics: nextPics } : item
+    ),
+  }));
+  await updateMessageGeneratedPics(messageId, nextPics);
+}
+
 function resolveImageGenerationConfig() {
   const settings = useSettingsStore.getState();
   const imageConfig = settings.imageGenerationConfig;
@@ -181,6 +238,7 @@ async function generatePictureForMessage(
       status: 'failed' as const,
       errorMessage: '生图功能未配置',
       referenceImageUris,
+      progressLabel: '配置检查失败',
       createdAt: now,
       updatedAt: now,
     };
@@ -202,6 +260,7 @@ async function generatePictureForMessage(
     finalPrompt,
     status: 'pending' as const,
     referenceImageUris,
+    progressLabel: '准备请求',
     createdAt: now,
     updatedAt: now,
   };
@@ -216,6 +275,7 @@ async function generatePictureForMessage(
   await updateMessageGeneratedPics(messageId, nextPics);
 
   try {
+    await updateGeneratedPictureProgress(get, set, messageId, tokenIndex, '提交请求');
     const result = await generateOpenAIImage({
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
@@ -224,8 +284,14 @@ async function generatePictureForMessage(
       size: config.size,
       quality: config.quality,
       referenceImages: referenceImageUris?.map((uri) => ({ uri })),
+      onProgress: (label) => {
+        updateGeneratedPictureProgress(get, set, messageId, tokenIndex, label).catch((error) => {
+          console.warn('[Chat] 更新生图进度失败:', error);
+        });
+      },
     });
 
+    await updateGeneratedPictureProgress(get, set, messageId, tokenIndex, '写入消息状态');
     const latestMessage = get().messages.find((item) => item.id === messageId) ?? null;
     if (!latestMessage) return;
     const latestPics = [...(latestMessage.generatedPics || [])];
@@ -237,6 +303,7 @@ async function generatePictureForMessage(
       status: 'done',
       imageUri: result.imageUri,
       errorMessage: undefined,
+      progressLabel: '完成',
       updatedAt: Date.now(),
       finalPrompt,
     };
@@ -257,6 +324,7 @@ async function generatePictureForMessage(
       ...latestPics[picIndex],
       status: 'failed',
       errorMessage: error?.message || '生图失败',
+      progressLabel: '失败',
       updatedAt: Date.now(),
       finalPrompt,
       referenceImageUris,
@@ -284,8 +352,15 @@ async function processPicturesForAssistantMessage(
   if (tokens.length === 0) return;
 
   const finalPromptBase = settings.imageGenerationPrompt || '';
-  const referenceImageUris = getReferenceImagesForAssistantMessage(get().messages, messageId);
-  const pendingPics = createPendingGeneratedPictures(content, finalPromptBase, referenceImageUris);
+  const faceReferenceUris = getEnabledFaceReferenceUris();
+  const messageReferenceUris = getReferenceImagesForAssistantMessage(get().messages, messageId);
+  const referenceImageUris = combineImageGenerationReferenceUris(faceReferenceUris, messageReferenceUris);
+  const pendingPics = createPendingGeneratedPictures(
+    content,
+    finalPromptBase,
+    referenceImageUris,
+    faceReferenceUris.length
+  );
 
   set((state) => ({
     messages: state.messages.map((item) =>
@@ -295,7 +370,11 @@ async function processPicturesForAssistantMessage(
   await updateMessageGeneratedPics(messageId, pendingPics);
 
   for (const token of tokens) {
-    const finalPrompt = composePicturePrompt(settings.imageGenerationPrompt, token.prompt);
+    const finalPrompt = composeImageGenerationPrompt(
+      settings.imageGenerationPrompt,
+      token.prompt,
+      faceReferenceUris.length
+    );
     await generatePictureForMessage(
       get,
       set,
@@ -330,6 +409,8 @@ interface ChatState {
   hiddenMessageIds: string[];
   hasOlderMessages: boolean;
   isLoadingOlderMessages: boolean;
+  hasNewerMessages: boolean;
+  isLoadingNewerMessages: boolean;
   messageFloorOffset: number;
   pendingScrollMessageId: string | null;
   openToBottomRequestId: number;
@@ -348,6 +429,7 @@ interface ChatState {
   loadConversation: (id: string) => Promise<void>;
   loadConversationAroundMessage: (conversationId: string, messageId: string) => Promise<void>;
   loadOlderMessages: () => Promise<void>;
+  loadNewerMessages: () => Promise<void>;
   clearPendingScrollMessage: () => void;
   setError: (error: string | null) => void;
   editMessage: (id: string, content: string) => Promise<void>;
@@ -1315,6 +1397,14 @@ async function streamAssistantResponse(
   if (pictureInstruction) {
     stableSystemSections.push(pictureInstruction);
   }
+  const enabledFaceReferenceCount = (settings.imageGenerationConfig?.faceReferences || [])
+    .filter((reference) => reference.enabled !== false && !!reference.uri)
+    .length;
+  if (settings.imageGenerationConfig?.enabled && enabledFaceReferenceCount > 0) {
+    stableSystemSections.push(
+      `生图配置已启用 ${enabledFaceReferenceCount} 张锁脸参考图。需要生成或修改人物图片时，直接使用 [Pic:图片描述]；这些参考图只会传给生图 API，不会作为聊天识图附件发送。`
+    );
+  }
   const fullSystemPrompt = stableSystemSections.join('\n\n---\n\n');
   const promptCacheEnabled = !!settings.promptCacheConfig?.enabled;
   const sessionId = promptCacheEnabled ? conversationId : undefined;
@@ -1389,7 +1479,15 @@ async function streamAssistantResponse(
 
     if (remainingMessages.length === 0 && (await getConversationMessageCount(conversationId)) === 0) {
       await deleteConversation(conversationId);
-      set({ conversationId: null, hiddenRanges: [], hiddenMessageIds: [], hasOlderMessages: false, messageFloorOffset: 0 });
+      set({
+        conversationId: null,
+        hiddenRanges: [],
+        hiddenMessageIds: [],
+        hasOlderMessages: false,
+        hasNewerMessages: false,
+        isLoadingNewerMessages: false,
+        messageFloorOffset: 0,
+      });
     }
 
     return remainingMessages;
@@ -1514,6 +1612,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   hiddenMessageIds: [],
   hasOlderMessages: false,
   isLoadingOlderMessages: false,
+  hasNewerMessages: false,
+  isLoadingNewerMessages: false,
   messageFloorOffset: 0,
   pendingScrollMessageId: null,
   openToBottomRequestId: 0,
@@ -1549,7 +1649,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         updatedAt: now,
       };
       await createConversation(conv);
-      set({ conversationId, hasOlderMessages: false, messageFloorOffset: 0 });
+      set({
+        conversationId,
+        hasOlderMessages: false,
+        hasNewerMessages: false,
+        isLoadingNewerMessages: false,
+        messageFloorOffset: 0,
+      });
     }
 
     if ((await getPendingResponseBoundaryMessageId(conversationId)) === undefined) {
@@ -1641,7 +1747,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         updatedAt: now,
       };
       await createConversation(conv);
-      set({ conversationId, hasOlderMessages: false, messageFloorOffset: 0 });
+      set({
+        conversationId,
+        hasOlderMessages: false,
+        hasNewerMessages: false,
+        isLoadingNewerMessages: false,
+        messageFloorOffset: 0,
+      });
     }
 
     const systemMessage: Message = {
@@ -1691,7 +1803,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         updatedAt: now,
       };
       await createConversation(conv);
-      set({ conversationId, hasOlderMessages: false, messageFloorOffset: 0 });
+      set({
+        conversationId,
+        hasOlderMessages: false,
+        hasNewerMessages: false,
+        isLoadingNewerMessages: false,
+        messageFloorOffset: 0,
+      });
     }
 
     const systemMessage: Message = {
@@ -1736,7 +1854,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         updatedAt: now,
       };
       await createConversation(conv);
-      set({ conversationId, hasOlderMessages: false, messageFloorOffset: 0 });
+      set({
+        conversationId,
+        hasOlderMessages: false,
+        hasNewerMessages: false,
+        isLoadingNewerMessages: false,
+        messageFloorOffset: 0,
+      });
       messages = get().messages;
     }
 
@@ -1785,7 +1909,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     if (!previousConversationId && failedConversationId && remainingMessages.length === 0) {
       await deleteConversation(failedConversationId);
-      set({ conversationId: null, hiddenRanges: [], hiddenMessageIds: [], hasOlderMessages: false, messageFloorOffset: 0 });
+      set({
+        conversationId: null,
+        hiddenRanges: [],
+        hiddenMessageIds: [],
+        hasOlderMessages: false,
+        hasNewerMessages: false,
+        isLoadingNewerMessages: false,
+        messageFloorOffset: 0,
+      });
     } else if (previousConversation) {
       await updateConversation(previousConversation.id, { updatedAt: previousConversation.updatedAt });
     }
@@ -1804,6 +1936,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       hiddenMessageIds: [],
       hasOlderMessages: false,
       isLoadingOlderMessages: false,
+      hasNewerMessages: false,
+      isLoadingNewerMessages: false,
       messageFloorOffset: 0,
       pendingScrollMessageId: null,
       error: null,
@@ -1821,6 +1955,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       hiddenMessageIds,
       hasOlderMessages: page.hasMore,
       isLoadingOlderMessages: false,
+      hasNewerMessages: false,
+      isLoadingNewerMessages: false,
       messageFloorOffset: page.floorOffset,
       pendingScrollMessageId: null,
       openToBottomRequestId: get().openToBottomRequestId + 1,
@@ -1843,6 +1979,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       hiddenMessageIds,
       hasOlderMessages: page.hasMore,
       isLoadingOlderMessages: false,
+      hasNewerMessages: !!page.hasMoreAfter,
+      isLoadingNewerMessages: false,
       messageFloorOffset: page.floorOffset,
       pendingScrollMessageId: messageId,
       error: null,
@@ -1858,6 +1996,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const page = await getConversationMessagePage(conversationId, {
         limit: MESSAGE_PAGE_SIZE,
         beforeCreatedAt: messages[0].createdAt,
+        beforeId: messages[0].id,
       });
       const existingIds = new Set(messages.map((message) => message.id));
       const olderMessages = page.messages.filter((message) => !existingIds.has(message.id));
@@ -1872,6 +2011,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({
         isLoadingOlderMessages: false,
         error: error?.message || '加载更早消息失败',
+      });
+    }
+  },
+
+  loadNewerMessages: async () => {
+    const { conversationId, messages, hasNewerMessages, isLoadingNewerMessages } = get();
+    if (!conversationId || !hasNewerMessages || isLoadingNewerMessages || messages.length === 0) return;
+
+    set({ isLoadingNewerMessages: true });
+    try {
+      const page = await getConversationNewerMessagePage(conversationId, {
+        limit: MESSAGE_PAGE_SIZE,
+        afterCreatedAt: messages[messages.length - 1].createdAt,
+        afterId: messages[messages.length - 1].id,
+      });
+      const existingIds = new Set(messages.map((message) => message.id));
+      const newerMessages = page.messages.filter((message) => !existingIds.has(message.id));
+      set((state) => ({
+        messages: [...state.messages, ...newerMessages],
+        hasNewerMessages: page.hasMore,
+        isLoadingNewerMessages: false,
+        error: null,
+      }));
+    } catch (error: any) {
+      set({
+        isLoadingNewerMessages: false,
+        error: error?.message || '加载更新消息失败',
       });
     }
   },
@@ -1958,7 +2124,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const nextHiddenMessageIds = hiddenMessageIds.filter((messageId) => messageId !== id);
     if (conversationId && nextMessages.length === 0 && (await getConversationMessageCount(conversationId)) === 0) {
       await deleteConversation(conversationId);
-      set({ conversationId: null, messages: [], hiddenRanges: [], hiddenMessageIds: [], hasOlderMessages: false, messageFloorOffset: 0, error: null });
+      set({
+        conversationId: null,
+        messages: [],
+        hiddenRanges: [],
+        hiddenMessageIds: [],
+        hasOlderMessages: false,
+        hasNewerMessages: false,
+        isLoadingNewerMessages: false,
+        messageFloorOffset: 0,
+        error: null,
+      });
       return;
     }
 
@@ -1993,7 +2169,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!token) return;
     const existing = getPictureRecord(message.generatedPics, tokenIndex);
     await deleteGeneratedImageFile(existing?.imageUri);
-    const finalPrompt = composePicturePrompt(useSettingsStore.getState().imageGenerationPrompt, token.prompt);
+    const faceReferenceUris = getEnabledFaceReferenceUris();
+    const messageReferenceUris = getReferenceImagesForAssistantMessage(get().messages, messageId);
+    const referenceImageUris = combineImageGenerationReferenceUris(faceReferenceUris, messageReferenceUris);
+    const finalPrompt = composeImageGenerationPrompt(
+      useSettingsStore.getState().imageGenerationPrompt,
+      token.prompt,
+      faceReferenceUris.length
+    );
     await generatePictureForMessage(
       get,
       set,
@@ -2001,7 +2184,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       tokenIndex,
       token.prompt,
       finalPrompt,
-      normalizeReferenceImageUris(existing?.referenceImageUris)
+      referenceImageUris
     );
   },
 

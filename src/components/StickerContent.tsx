@@ -84,12 +84,12 @@ function GeneratedPictureCard({
   const isDone = picture.status === 'done' && !!picture.imageUri;
   const label =
     picture.status === 'pending'
-      ? '生成中'
+      ? picture.progressLabel || '生成中'
       : picture.status === 'deleted'
         ? '图片已删除'
         : picture.status === 'failed'
-          ? '生成失败'
-          : '';
+          ? picture.errorMessage || picture.progressLabel || '生成失败'
+          : picture.progressLabel || '完成';
 
   return (
     <Pressable
@@ -99,14 +99,21 @@ function GeneratedPictureCard({
       accessibilityLabel={`AI 生成图片：${picture.prompt || prompt}`}
     >
       {isDone ? (
-        <Image source={{ uri: picture.imageUri! }} style={styles.generatedPicture} resizeMode="cover" />
+        <View style={styles.generatedPictureWrap}>
+          <Image source={{ uri: picture.imageUri! }} style={styles.generatedPicture} resizeMode="cover" />
+          {!!label && (
+            <View style={styles.pictureDoneBadge}>
+              <Text style={styles.pictureDoneBadgeText}>{label}</Text>
+            </View>
+          )}
+        </View>
       ) : (
         <View style={styles.pictureFallback}>
           {picture.status === 'pending' && <ActivityIndicator size="small" color={colors.primary} />}
           <Text style={styles.pictureFallbackText} numberOfLines={5}>
             {picture.prompt || prompt}
           </Text>
-          {!!label && <Text style={styles.pictureStatusText}>{label}</Text>}
+          {!!label && <Text style={styles.pictureStatusText} numberOfLines={3}>{label}</Text>}
         </View>
       )}
     </Pressable>
@@ -226,10 +233,30 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  generatedPictureWrap: {
+    width: '100%',
+    height: '100%',
+  },
   generatedPicture: {
     width: '100%',
     height: '100%',
     backgroundColor: colors.surface,
+  },
+  pictureDoneBadge: {
+    position: 'absolute',
+    left: 8,
+    bottom: 8,
+    maxWidth: '86%',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(0,0,0,0.52)',
+  },
+  pictureDoneBadgeText: {
+    fontSize: 11,
+    lineHeight: 14,
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
   pictureFallback: {
     flex: 1,

@@ -16,6 +16,7 @@ export interface ImageGenerationRequest {
   quality?: string;
   referenceImages?: ImageGenerationReferenceImage[];
   signal?: AbortSignal;
+  onProgress?: (label: string) => void;
 }
 
 export interface ImageGenerationResult {
@@ -64,7 +65,12 @@ async function saveImageBytes(
   return file.uri;
 }
 
-async function resultFromImageApiResponse(response: Response, fileStem: string): Promise<ImageGenerationResult> {
+async function resultFromImageApiResponse(
+  response: Response,
+  fileStem: string,
+  onProgress?: (label: string) => void
+): Promise<ImageGenerationResult> {
+  onProgress?.('解析 API 响应');
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`API Error ${response.status}: ${errorText}`);
@@ -77,7 +83,9 @@ async function resultFromImageApiResponse(response: Response, fileStem: string):
   }
 
   if (typeof item.b64_json === 'string' && item.b64_json.trim()) {
+    onProgress?.('解码图片数据');
     const bytes = decodeBase64(item.b64_json.trim());
+    onProgress?.('保存图片文件');
     return {
       imageUri: await saveImageBytes(bytes, 'image/png', fileStem),
       revisedPrompt: item.revised_prompt || undefined,
@@ -85,6 +93,7 @@ async function resultFromImageApiResponse(response: Response, fileStem: string):
   }
 
   if (typeof item.url === 'string' && item.url.trim()) {
+    onProgress?.('下载图片文件');
     return {
       imageUri: await downloadImage(item.url.trim(), fileStem),
       revisedPrompt: item.revised_prompt || undefined,
@@ -105,7 +114,7 @@ async function downloadImage(url: string, fileStem: string): Promise<string> {
 }
 
 async function editOpenAIImage(request: ImageGenerationRequest): Promise<ImageGenerationResult> {
-  const { baseUrl, apiKey, model, prompt, size, quality, referenceImages, signal } = request;
+  const { baseUrl, apiKey, model, prompt, size, quality, referenceImages, signal, onProgress } = request;
   const url = `${normalizeBaseUrl(baseUrl)}/images/edits`;
   const form = new FormData();
 
@@ -127,6 +136,7 @@ async function editOpenAIImage(request: ImageGenerationRequest): Promise<ImageGe
     form.append('image[]', new File(image.uri) as any);
   });
 
+  onProgress?.('上传参考图并请求生图');
   const response = await expoFetch(url, {
     method: 'POST',
     headers: {
@@ -136,11 +146,15 @@ async function editOpenAIImage(request: ImageGenerationRequest): Promise<ImageGe
     signal,
   });
 
-  return resultFromImageApiResponse(response as Response, `pic-${Date.now().toString(36)}-${randomUUID()}`);
+  return resultFromImageApiResponse(
+    response as Response,
+    `pic-${Date.now().toString(36)}-${randomUUID()}`,
+    onProgress
+  );
 }
 
 export async function generateOpenAIImage(request: ImageGenerationRequest): Promise<ImageGenerationResult> {
-  const { baseUrl, apiKey, model, prompt, size, quality, referenceImages, signal } = request;
+  const { baseUrl, apiKey, model, prompt, size, quality, referenceImages, signal, onProgress } = request;
   if (referenceImages && referenceImages.length > 0) {
     return editOpenAIImage(request);
   }
@@ -157,6 +171,7 @@ export async function generateOpenAIImage(request: ImageGenerationRequest): Prom
     body.quality = quality;
   }
 
+  onProgress?.('请求生图 API');
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -168,7 +183,7 @@ export async function generateOpenAIImage(request: ImageGenerationRequest): Prom
   });
 
   const fileStem = `pic-${Date.now().toString(36)}-${randomUUID()}`;
-  return resultFromImageApiResponse(response, fileStem);
+  return resultFromImageApiResponse(response, fileStem, onProgress);
 }
 
 export async function deleteGeneratedImageFile(imageUri?: string): Promise<void> {

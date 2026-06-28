@@ -60,6 +60,7 @@ interface MessageRow {
 export interface ConversationMessagePage {
   messages: Message[];
   hasMore: boolean;
+  hasMoreAfter?: boolean;
   floorOffset: number;
 }
 
@@ -70,6 +71,20 @@ export interface ChatSearchResult {
   role: Message['role'];
   content: string;
   createdAt: number;
+}
+
+export interface GeneratedPictureGalleryItem {
+  id: string;
+  conversationId: string;
+  conversationTitle: string;
+  messageId: string;
+  tokenIndex: number;
+  prompt: string;
+  finalPrompt: string;
+  imageUri: string;
+  createdAt: number;
+  updatedAt: number;
+  referenceImageUris?: string[];
 }
 
 export interface ChatDiagnosticsConversation {
@@ -582,16 +597,29 @@ function mapMessageRow(row: MessageRow): Message {
 export async function getMessagesByConversation(conversationId: string): Promise<Message[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<MessageRow>(
-    'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC',
+    'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, id ASC',
     [conversationId]
   );
 
   return rows.map(mapMessageRow);
 }
 
+export async function getMessageByConversationAndId(
+  conversationId: string,
+  messageId: string
+): Promise<Message | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<MessageRow>(
+    'SELECT * FROM messages WHERE conversation_id = ? AND id = ? LIMIT 1',
+    [conversationId, messageId]
+  );
+
+  return row ? mapMessageRow(row) : null;
+}
+
 export async function getConversationMessagePage(
   conversationId: string,
-  options: { limit: number; beforeCreatedAt?: number }
+  options: { limit: number; beforeCreatedAt?: number; beforeId?: string }
 ): Promise<ConversationMessagePage> {
   const db = await getDatabase();
   const pageLimit = Math.max(1, options.limit);
@@ -599,26 +627,26 @@ export async function getConversationMessagePage(
   let where = 'conversation_id = ?';
 
   if (options.beforeCreatedAt !== undefined) {
-    where += ' AND created_at < ?';
-    params.push(options.beforeCreatedAt);
+    where += ' AND (created_at < ? OR (created_at = ? AND id < ?))';
+    params.push(options.beforeCreatedAt, options.beforeCreatedAt, options.beforeId || '');
   }
 
   params.push(pageLimit + 1);
   const rows = await db.getAllAsync<MessageRow>(
-    `SELECT * FROM messages WHERE ${where} ORDER BY created_at DESC LIMIT ?`,
+    `SELECT * FROM messages WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT ?`,
     params
   );
   const visibleRows = rows.slice(0, pageLimit).reverse();
   const messages = visibleRows.map(mapMessageRow);
-  const firstCreatedAt = messages[0]?.createdAt;
+  const firstMessage = messages[0];
 
   return {
     messages,
     hasMore: rows.length > pageLimit,
     floorOffset:
-      firstCreatedAt === undefined
+      firstMessage === undefined
         ? 0
-        : await getConversationFloorOffset(conversationId, firstCreatedAt),
+        : await getConversationFloorOffset(conversationId, firstMessage.createdAt, firstMessage.id),
   };
 }
 
@@ -643,34 +671,66 @@ export async function getConversationMessagePageAroundMessage(
   const beforeRows = beforeLimit > 0
     ? await db.getAllAsync<MessageRow>(
         `SELECT * FROM messages
-          WHERE conversation_id = ? AND created_at < ?
-          ORDER BY created_at DESC
+          WHERE conversation_id = ?
+            AND (created_at < ? OR (created_at = ? AND id < ?))
+          ORDER BY created_at DESC, id DESC
           LIMIT ?`,
-        [conversationId, target.created_at, beforeLimit]
+        [conversationId, target.created_at, target.created_at, target.id, beforeLimit]
       )
     : [];
   const afterRows = afterLimit > 0
     ? await db.getAllAsync<MessageRow>(
         `SELECT * FROM messages
-          WHERE conversation_id = ? AND created_at > ?
-          ORDER BY created_at ASC
+          WHERE conversation_id = ?
+            AND (created_at > ? OR (created_at = ? AND id > ?))
+          ORDER BY created_at ASC, id ASC
           LIMIT ?`,
-        [conversationId, target.created_at, afterLimit]
+        [conversationId, target.created_at, target.created_at, target.id, afterLimit + 1]
       )
     : [];
-  const messages = [...beforeRows.reverse(), target, ...afterRows].map(mapMessageRow);
-  const firstCreatedAt = messages[0]?.createdAt;
+  const visibleAfterRows = afterRows.slice(0, afterLimit);
+  const messages = [...beforeRows.reverse(), target, ...visibleAfterRows].map(mapMessageRow);
+  const firstMessage = messages[0];
 
   return {
     messages,
     hasMore:
-      firstCreatedAt === undefined
+      firstMessage === undefined
         ? false
-        : (await getConversationFloorOffset(conversationId, firstCreatedAt)) > 0,
+        : (await getConversationFloorOffset(conversationId, firstMessage.createdAt, firstMessage.id)) > 0,
+    hasMoreAfter: afterRows.length > afterLimit,
     floorOffset:
-      firstCreatedAt === undefined
+      firstMessage === undefined
         ? 0
-        : await getConversationFloorOffset(conversationId, firstCreatedAt),
+        : await getConversationFloorOffset(conversationId, firstMessage.createdAt, firstMessage.id),
+  };
+}
+
+export async function getConversationNewerMessagePage(
+  conversationId: string,
+  options: { limit: number; afterCreatedAt: number; afterId?: string }
+): Promise<ConversationMessagePage> {
+  const db = await getDatabase();
+  const pageLimit = Math.max(1, options.limit);
+  const rows = await db.getAllAsync<MessageRow>(
+    `SELECT * FROM messages
+      WHERE conversation_id = ?
+        AND (created_at > ? OR (created_at = ? AND id > ?))
+      ORDER BY created_at ASC, id ASC
+      LIMIT ?`,
+    [conversationId, options.afterCreatedAt, options.afterCreatedAt, options.afterId || '', pageLimit + 1]
+  );
+  const visibleRows = rows.slice(0, pageLimit);
+  const messages = visibleRows.map(mapMessageRow);
+  const firstMessage = messages[0];
+
+  return {
+    messages,
+    hasMore: rows.length > pageLimit,
+    floorOffset:
+      firstMessage === undefined
+        ? 0
+        : await getConversationFloorOffset(conversationId, firstMessage.createdAt, firstMessage.id),
   };
 }
 
@@ -722,6 +782,53 @@ export async function searchMessages(
     content: row.content,
     createdAt: row.created_at,
   }));
+}
+
+export async function getGeneratedPictureGalleryItems(): Promise<GeneratedPictureGalleryItem[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{
+    conversation_id: string;
+    conversation_title: string;
+    message_id: string;
+    message_created_at: number;
+    generated_pics: string | null;
+  }>(
+    `SELECT
+        c.id as conversation_id,
+        c.title as conversation_title,
+        m.id as message_id,
+        m.created_at as message_created_at,
+        m.generated_pics as generated_pics
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE m.generated_pics IS NOT NULL
+        AND m.generated_pics != ''
+      ORDER BY m.created_at DESC`
+  );
+
+  const items: GeneratedPictureGalleryItem[] = [];
+  rows.forEach((row) => {
+    const pictures = parseJsonArray<GeneratedPicture>(row.generated_pics) || [];
+    pictures.forEach((picture) => {
+      if (picture.status !== 'done' || !picture.imageUri) return;
+      const updatedAt = picture.updatedAt || row.message_created_at;
+      items.push({
+        id: `${row.message_id}:${picture.tokenIndex}`,
+        conversationId: row.conversation_id,
+        conversationTitle: row.conversation_title,
+        messageId: row.message_id,
+        tokenIndex: picture.tokenIndex,
+        prompt: picture.prompt,
+        finalPrompt: picture.finalPrompt,
+        imageUri: picture.imageUri,
+        createdAt: picture.createdAt || row.message_created_at,
+        updatedAt,
+        referenceImageUris: picture.referenceImageUris,
+      });
+    });
+  });
+
+  return items.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export async function getConversationMessageCount(conversationId: string): Promise<number> {
@@ -906,16 +1013,17 @@ export async function getFirstMessageInDateRange(
 
 async function getConversationFloorOffset(
   conversationId: string,
-  beforeCreatedAt: number
+  beforeCreatedAt: number,
+  beforeId: string
 ): Promise<number> {
   const db = await getDatabase();
   const row = await db.getFirstAsync<{ count: number }>(
     `SELECT COUNT(*) as count
        FROM messages
       WHERE conversation_id = ?
-        AND created_at < ?
+        AND (created_at < ? OR (created_at = ? AND id < ?))
         AND role IN ('user', 'assistant')`,
-    [conversationId, beforeCreatedAt]
+    [conversationId, beforeCreatedAt, beforeCreatedAt, beforeId]
   );
   return row?.count ?? 0;
 }

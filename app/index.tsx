@@ -174,6 +174,8 @@ export default function ChatScreen() {
     hiddenMessageIds,
     hasOlderMessages,
     isLoadingOlderMessages,
+    hasNewerMessages,
+    isLoadingNewerMessages,
     messageFloorOffset,
     pendingScrollMessageId,
     openToBottomRequestId,
@@ -181,6 +183,7 @@ export default function ChatScreen() {
     error,
     addUserMessage,
     loadOlderMessages,
+    loadNewerMessages,
     loadConversationAroundMessage,
     clearPendingScrollMessage,
     enableWebCruise,
@@ -216,10 +219,12 @@ export default function ChatScreen() {
   const scrollFollowUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialPositioningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const newerMessagesAutoScrollResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enteringMessageTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const listHeightRef = useRef(0);
   const contentHeightRef = useRef(0);
   const shouldStickToBottomRef = useRef(true);
+  const suppressNextContentAutoScrollRef = useRef(false);
   const messageIdsRef = useRef<string[]>([]);
   const conversationIdRef = useRef<string | null>(null);
   const pendingScrollMessageIdRef = useRef<string | null>(null);
@@ -380,6 +385,9 @@ export default function ChatScreen() {
       }
       if (toastTimerRef.current !== null) {
         clearTimeout(toastTimerRef.current);
+      }
+      if (newerMessagesAutoScrollResetTimerRef.current !== null) {
+        clearTimeout(newerMessagesAutoScrollResetTimerRef.current);
       }
       enteringMessageTimersRef.current.forEach((timer) => clearTimeout(timer));
       enteringMessageTimersRef.current.clear();
@@ -573,6 +581,11 @@ export default function ChatScreen() {
       return;
     }
 
+    if (!pendingScrollMessageId && appended && suppressNextContentAutoScrollRef.current) {
+      shouldStickToBottomRef.current = false;
+      return;
+    }
+
     if (!pendingScrollMessageId && appended) {
       shouldStickToBottomRef.current = true;
       if (isInitialPositioningRef.current) return;
@@ -689,6 +702,15 @@ export default function ChatScreen() {
 
     if (isInitialPositioningRef.current && nextHeight > 0 && listHeightRef.current > 0) {
       finishInitialPositioning();
+      return;
+    }
+
+    if (heightChanged && suppressNextContentAutoScrollRef.current) {
+      suppressNextContentAutoScrollRef.current = false;
+      if (newerMessagesAutoScrollResetTimerRef.current !== null) {
+        clearTimeout(newerMessagesAutoScrollResetTimerRef.current);
+        newerMessagesAutoScrollResetTimerRef.current = null;
+      }
       return;
     }
 
@@ -828,6 +850,48 @@ export default function ChatScreen() {
     );
   }, [hasOlderMessages, isLoadingOlderMessages, loadOlderMessages]);
 
+  const handleLoadNewerMessages = useCallback(async () => {
+    if (!hasNewerMessages || isLoadingNewerMessages) return;
+
+    suppressNextContentAutoScrollRef.current = true;
+    if (newerMessagesAutoScrollResetTimerRef.current !== null) {
+      clearTimeout(newerMessagesAutoScrollResetTimerRef.current);
+    }
+
+    try {
+      await loadNewerMessages();
+    } finally {
+      newerMessagesAutoScrollResetTimerRef.current = setTimeout(() => {
+        suppressNextContentAutoScrollRef.current = false;
+        newerMessagesAutoScrollResetTimerRef.current = null;
+      }, 1000);
+    }
+  }, [hasNewerMessages, isLoadingNewerMessages, loadNewerMessages]);
+
+  const renderNewerMessagesFooter = useCallback(() => {
+    if (!hasNewerMessages) return null;
+    return (
+      <View style={styles.loadNewerContainer}>
+        <Pressable
+          style={[styles.loadOlderButton, isLoadingNewerMessages && styles.loadOlderButtonDisabled]}
+          onPress={handleLoadNewerMessages}
+          disabled={isLoadingNewerMessages}
+        >
+          {isLoadingNewerMessages ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Text style={styles.loadOlderText}>加载更新消息</Text>
+          )}
+        </Pressable>
+      </View>
+    );
+  }, [handleLoadNewerMessages, hasNewerMessages, isLoadingNewerMessages]);
+
+  const handleEndReached = useCallback(() => {
+    if (!hasNewerMessages || isLoadingNewerMessages) return;
+    void handleLoadNewerMessages();
+  }, [handleLoadNewerMessages, hasNewerMessages, isLoadingNewerMessages]);
+
   const messageListNode = (
     <FlatList
       ref={flatListRef}
@@ -841,6 +905,8 @@ export default function ChatScreen() {
       onContentSizeChange={handleContentSizeChange}
       onScroll={handleScroll}
       scrollEventThrottle={16}
+      onEndReached={handleEndReached}
+      onEndReachedThreshold={0.2}
       removeClippedSubviews={false}
       maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       onScrollToIndexFailed={({ index }) => {
@@ -853,6 +919,7 @@ export default function ChatScreen() {
         }, 120);
       }}
       ListHeaderComponent={renderOlderMessagesHeader}
+      ListFooterComponent={renderNewerMessagesFooter}
       ListEmptyComponent={<EmptyState />}
     />
   );
@@ -1299,6 +1366,11 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   loadOlderContainer: {
     alignItems: 'center',
     paddingTop: 8,
+    paddingBottom: 12,
+  },
+  loadNewerContainer: {
+    alignItems: 'center',
+    paddingTop: 10,
     paddingBottom: 12,
   },
   loadOlderButton: {

@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { randomUUID } from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
+import { copyAsync } from 'expo-file-system/legacy';
 import { BlurView } from 'expo-blur';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 
@@ -68,9 +69,8 @@ function extensionFromPickedImage(asset: ImagePicker.ImagePickerAsset): string {
 async function copyImageGenerationReference(asset: ImagePicker.ImagePickerAsset): Promise<string> {
   const dir = new Directory(Paths.document, 'image-generation-references');
   dir.create({ intermediates: true, idempotent: true });
-  const source = new File(asset.uri);
   const destination = new File(dir, `ref-${Date.now().toString(36)}-${randomUUID()}${extensionFromPickedImage(asset)}`);
-  await source.copy(destination, { overwrite: true });
+  await copyAsync({ from: asset.uri, to: destination.uri });
   return destination.uri;
 }
 

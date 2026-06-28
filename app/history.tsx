@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, Pressable, FlatList, Alert, TextInput, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, FlatList, Alert, TextInput, Modal, ActivityIndicator, Image, Dimensions } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { lightColors, useThemeColors, type ThemeColors } from '../src/theme/colors';
 
@@ -11,12 +11,21 @@ import {
   updateConversation,
   searchMessages,
   ChatSearchResult,
+  getGeneratedPictureGalleryItems,
+  getMessageByConversationAndId,
+  updateMessageGeneratedPics,
+  type GeneratedPictureGalleryItem,
 } from '../src/db/operations';
 import { useChatStore } from '../src/stores/chat';
+import { deleteGeneratedImageFile } from '../src/services/imageGeneration';
 
 
 let colors = lightColors;
 type SearchScope = 'current' | 'global';
+type HistoryViewMode = 'chats' | 'gallery';
+const GALLERY_COLUMNS = 3;
+const GALLERY_GAP = 8;
+const GALLERY_ITEM_SIZE = Math.floor((Dimensions.get('window').width - 32 - GALLERY_GAP * (GALLERY_COLUMNS - 1)) / GALLERY_COLUMNS);
 
 export default function HistoryScreen() {
   colors = useThemeColors();
@@ -31,18 +40,41 @@ export default function HistoryScreen() {
   const [searchResults, setSearchResults] = useState<ChatSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const { conversationId, loadConversation, loadConversationAroundMessage, newConversation } = useChatStore();
-  const isSearchActive = searchText.trim().length > 0;
+  const [viewMode, setViewMode] = useState<HistoryViewMode>('chats');
+  const [galleryItems, setGalleryItems] = useState<GeneratedPictureGalleryItem[]>([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+  const [previewPicture, setPreviewPicture] = useState<GeneratedPictureGalleryItem | null>(null);
+  const [deletingGalleryItemId, setDeletingGalleryItemId] = useState<string | null>(null);
+  const {
+    conversationId,
+    messages,
+    loadConversation,
+    loadConversationAroundMessage,
+    newConversation,
+    deleteGeneratedPictureOnly,
+  } = useChatStore();
+  const isSearchActive = viewMode === 'chats' && searchText.trim().length > 0;
 
   useFocusEffect(
     useCallback(() => {
       loadList();
+      loadGallery();
     }, [])
   );
 
   async function loadList() {
     const list = await getAllConversations();
     setConversations(list);
+  }
+
+  async function loadGallery() {
+    setGalleryLoading(true);
+    try {
+      const list = await getGeneratedPictureGalleryItems();
+      setGalleryItems(list);
+    } finally {
+      setGalleryLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -91,6 +123,73 @@ export default function HistoryScreen() {
     router.back();
   }
 
+  async function handleOpenGalleryItem(item: GeneratedPictureGalleryItem) {
+    setPreviewPicture(null);
+    await loadConversationAroundMessage(item.conversationId, item.messageId);
+    router.back();
+  }
+
+  async function deleteGalleryItem(item: GeneratedPictureGalleryItem) {
+    setDeletingGalleryItemId(item.id);
+    try {
+      const loadedMessage =
+        item.conversationId === conversationId
+          ? messages.find((message) => message.id === item.messageId)
+          : undefined;
+      const loadedPicture = loadedMessage?.generatedPics?.find(
+        (picture) => picture.tokenIndex === item.tokenIndex
+      );
+
+      if (loadedMessage && loadedPicture) {
+        await deleteGeneratedPictureOnly(item.messageId, item.tokenIndex);
+      } else {
+        const message = await getMessageByConversationAndId(item.conversationId, item.messageId);
+        const existing = message?.generatedPics?.find(
+          (picture) => picture.tokenIndex === item.tokenIndex
+        );
+        if (!message?.generatedPics || !existing) {
+          setGalleryItems((current) => current.filter((picture) => picture.id !== item.id));
+          setPreviewPicture((current) => (current?.id === item.id ? null : current));
+          return;
+        }
+
+        await deleteGeneratedImageFile(existing.imageUri);
+        const nextPics = message.generatedPics.map((picture) =>
+          picture.tokenIndex === item.tokenIndex
+            ? {
+                ...picture,
+                status: 'deleted' as const,
+                imageUri: undefined,
+                errorMessage: undefined,
+                updatedAt: Date.now(),
+              }
+            : picture
+        );
+        await updateMessageGeneratedPics(item.messageId, nextPics);
+      }
+
+      setGalleryItems((current) => current.filter((picture) => picture.id !== item.id));
+      setPreviewPicture((current) => (current?.id === item.id ? null : current));
+    } catch (error: any) {
+      Alert.alert('删除失败', error?.message || '无法删除这张图片');
+    } finally {
+      setDeletingGalleryItemId(null);
+    }
+  }
+
+  function handleDeleteGalleryItem(item: GeneratedPictureGalleryItem) {
+    Alert.alert('删除图片', '确定删除这张生成图吗？', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          void deleteGalleryItem(item);
+        },
+      },
+    ]);
+  }
+
   function handleLongPress(conv: Conversation) {
     setEditingConv(conv);
     setEditTitle(conv.title);
@@ -112,6 +211,7 @@ export default function HistoryScreen() {
         onPress: async () => {
           await deleteConversation(conv.id);
           loadList();
+          loadGallery();
         },
       },
     ]);
@@ -143,6 +243,11 @@ export default function HistoryScreen() {
     return clean.length > 90 ? `${clean.slice(0, 90)}…` : clean;
   }
 
+  function previewPrompt(text: string) {
+    const clean = text.replace(/\s+/g, ' ').trim();
+    return clean.length > 48 ? `${clean.slice(0, 48)}...` : clean;
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -155,40 +260,90 @@ export default function HistoryScreen() {
         </Pressable>
       </View>
 
-      <View style={styles.searchPanel}>
-        <View style={styles.searchInputRow}>
-          <TextInput
-            style={styles.searchInput}
-            value={searchText}
-            onChangeText={setSearchText}
-            placeholder="搜索聊天记录"
-            placeholderTextColor={colors.textTertiary}
-            returnKeyType="search"
-          />
-          {searching && <ActivityIndicator size="small" color={colors.primary} />}
-        </View>
-        <View style={styles.searchScopeRow}>
-          <Pressable
-            style={[styles.scopeButton, searchScope === 'current' && styles.scopeButtonActive]}
-            onPress={() => setSearchScope('current')}
-          >
-            <Text style={[styles.scopeButtonText, searchScope === 'current' && styles.scopeButtonTextActive]}>
-              当前窗口
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.scopeButton, searchScope === 'global' && styles.scopeButtonActive]}
-            onPress={() => setSearchScope('global')}
-          >
-            <Text style={[styles.scopeButtonText, searchScope === 'global' && styles.scopeButtonTextActive]}>
-              全局搜索
-            </Text>
-          </Pressable>
-        </View>
+      <View style={styles.modeTabs}>
+        <Pressable
+          style={[styles.modeTab, viewMode === 'chats' && styles.modeTabActive]}
+          onPress={() => setViewMode('chats')}
+        >
+          <Text style={[styles.modeTabText, viewMode === 'chats' && styles.modeTabTextActive]}>对话</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.modeTab, viewMode === 'gallery' && styles.modeTabActive]}
+          onPress={() => setViewMode('gallery')}
+        >
+          <Text style={[styles.modeTabText, viewMode === 'gallery' && styles.modeTabTextActive]}>图片画廊</Text>
+        </Pressable>
       </View>
 
-      {isSearchActive ? (
+      {viewMode === 'chats' && (
+        <View style={styles.searchPanel}>
+          <View style={styles.searchInputRow}>
+            <TextInput
+              style={styles.searchInput}
+              value={searchText}
+              onChangeText={setSearchText}
+              placeholder="搜索聊天记录"
+              placeholderTextColor={colors.textTertiary}
+              returnKeyType="search"
+            />
+            {searching && <ActivityIndicator size="small" color={colors.primary} />}
+          </View>
+          <View style={styles.searchScopeRow}>
+            <Pressable
+              style={[styles.scopeButton, searchScope === 'current' && styles.scopeButtonActive]}
+              onPress={() => setSearchScope('current')}
+            >
+              <Text style={[styles.scopeButtonText, searchScope === 'current' && styles.scopeButtonTextActive]}>
+                当前窗口
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.scopeButton, searchScope === 'global' && styles.scopeButtonActive]}
+              onPress={() => setSearchScope('global')}
+            >
+              <Text style={[styles.scopeButtonText, searchScope === 'global' && styles.scopeButtonTextActive]}>
+                全局搜索
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {viewMode === 'gallery' ? (
         <FlatList
+          key="gallery"
+          data={galleryItems}
+          numColumns={GALLERY_COLUMNS}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <Pressable
+              style={styles.galleryItem}
+              onPress={() => setPreviewPicture(item)}
+              onLongPress={() => handleOpenGalleryItem(item)}
+            >
+              <Image source={{ uri: item.imageUri }} style={styles.galleryImage} resizeMode="cover" />
+              <View style={styles.galleryCaption}>
+                <Text style={styles.galleryTitle} numberOfLines={1}>
+                  {item.conversationTitle || '新对话'}
+                </Text>
+              </View>
+            </Pressable>
+          )}
+          contentContainerStyle={styles.galleryList}
+          columnWrapperStyle={styles.galleryRow}
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              {galleryLoading ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Text style={styles.emptyText}>暂无生成图片</Text>
+              )}
+            </View>
+          }
+        />
+      ) : isSearchActive ? (
+        <FlatList
+          key="search"
           data={searchResults}
           keyExtractor={(item) => item.messageId}
           renderItem={({ item }) => (
@@ -216,6 +371,7 @@ export default function HistoryScreen() {
         />
       ) : (
         <FlatList
+          key="chats"
           data={conversations}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => {
@@ -277,6 +433,47 @@ export default function HistoryScreen() {
           </View>
         </Pressable>
       </Modal>
+
+      <Modal visible={!!previewPicture} transparent animationType="fade" onRequestClose={() => setPreviewPicture(null)}>
+        <View style={styles.previewOverlay}>
+          <Pressable style={styles.previewBackdrop} onPress={() => setPreviewPicture(null)} />
+          <View style={styles.previewPanel}>
+            {previewPicture && (
+              <>
+                <Image source={{ uri: previewPicture.imageUri }} style={styles.previewImage} resizeMode="contain" />
+                <Text style={styles.previewTitle} numberOfLines={1}>
+                  {previewPicture.conversationTitle || '新对话'}
+                </Text>
+                <Text style={styles.previewPrompt} numberOfLines={2}>
+                  {previewPrompt(previewPicture.prompt) || 'AI 生成图片'}
+                </Text>
+                <View style={styles.previewActions}>
+                  <Pressable
+                    style={[
+                      styles.previewDelete,
+                      deletingGalleryItemId === previewPicture.id && styles.previewButtonDisabled,
+                    ]}
+                    onPress={() => handleDeleteGalleryItem(previewPicture)}
+                    disabled={deletingGalleryItemId === previewPicture.id}
+                  >
+                    {deletingGalleryItemId === previewPicture.id ? (
+                      <ActivityIndicator size="small" color={colors.danger} />
+                    ) : (
+                      <Text style={styles.previewDeleteText}>删除图片</Text>
+                    )}
+                  </Pressable>
+                  <Pressable style={styles.previewCancel} onPress={() => setPreviewPicture(null)}>
+                    <Text style={styles.previewCancelText}>关闭</Text>
+                  </Pressable>
+                  <Pressable style={styles.previewOpen} onPress={() => handleOpenGalleryItem(previewPicture)}>
+                    <Text style={styles.previewOpenText}>打开对话</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -309,6 +506,32 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     borderRadius: 8,
   },
   newIcon: { fontSize: 20, color: colors.text },
+  modeTabs: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 2,
+  },
+  modeTab: {
+    flex: 1,
+    minHeight: 36,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modeTabActive: {
+    backgroundColor: colors.primary,
+  },
+  modeTabText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  modeTabTextActive: {
+    color: '#FFFFFF',
+  },
   searchPanel: {
     paddingHorizontal: 16,
     paddingTop: 12,
@@ -358,6 +581,41 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     color: '#FFFFFF',
   },
   list: { paddingVertical: 8 },
+  galleryList: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 24,
+  },
+  galleryRow: {
+    justifyContent: 'space-between',
+    marginBottom: GALLERY_GAP,
+  },
+  galleryItem: {
+    width: GALLERY_ITEM_SIZE,
+    height: GALLERY_ITEM_SIZE,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: colors.surface,
+  },
+  galleryImage: {
+    width: GALLERY_ITEM_SIZE,
+    height: GALLERY_ITEM_SIZE,
+  },
+  galleryCaption: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    minHeight: 28,
+    justifyContent: 'center',
+    paddingHorizontal: 7,
+    backgroundColor: 'rgba(0,0,0,0.48)',
+  },
+  galleryTitle: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
   item: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -491,6 +749,95 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: 15,
     color: '#FFFFFF',
     fontWeight: '500',
+  },
+  previewOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    padding: 18,
+  },
+  previewBackdrop: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  previewPanel: {
+    width: '100%',
+    maxWidth: 520,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: colors.background,
+  },
+  previewImage: {
+    width: '100%',
+    height: Math.min(520, Dimensions.get('window').height * 0.58),
+    backgroundColor: '#000000',
+  },
+  previewTitle: {
+    marginTop: 14,
+    paddingHorizontal: 16,
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  previewPrompt: {
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textSecondary,
+  },
+  previewActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: 10,
+    padding: 16,
+  },
+  previewDelete: {
+    minHeight: 36,
+    paddingHorizontal: 15,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.dangerSurface,
+  },
+  previewDeleteText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.danger,
+  },
+  previewButtonDisabled: {
+    opacity: 0.6,
+  },
+  previewCancel: {
+    minHeight: 36,
+    paddingHorizontal: 15,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+  },
+  previewCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  previewOpen: {
+    minHeight: 36,
+    paddingHorizontal: 15,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+  },
+  previewOpenText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
 });
 

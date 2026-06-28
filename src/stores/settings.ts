@@ -311,6 +311,13 @@ export interface PromptCacheConfig {
   enabled: boolean;
 }
 
+export interface ImageGenerationFaceReference {
+  id: string;
+  uri: string;
+  enabled: boolean;
+  createdAt: number;
+}
+
 export interface ImageGenerationConfig {
   enabled: boolean;
   baseUrl: string;
@@ -318,6 +325,7 @@ export interface ImageGenerationConfig {
   model: string;
   size: string;
   quality: string;
+  faceReferences: ImageGenerationFaceReference[];
 }
 
 export type StickerOwner = 'user' | 'assistant';
@@ -408,6 +416,25 @@ function normalizeFloatingBallConfig(config?: FloatingBallConfig): FloatingBallC
       3600,
       Math.max(1, config?.assetAutoSwitchIntervalSeconds ?? 8)
     ),
+  };
+}
+
+function normalizeImageGenerationConfig(config?: Partial<ImageGenerationConfig>): ImageGenerationConfig {
+  return {
+    enabled: config?.enabled ?? false,
+    baseUrl: config?.baseUrl || '',
+    apiKey: config?.apiKey || '',
+    model: config?.model || 'gpt-image-2',
+    size: config?.size || '1024x1024',
+    quality: config?.quality || 'auto',
+    faceReferences: (config?.faceReferences || [])
+      .filter((item) => !!item?.uri)
+      .map((item) => ({
+        id: item.id || createId('face-ref'),
+        uri: item.uri,
+        enabled: item.enabled !== false,
+        createdAt: item.createdAt || Date.now(),
+      })),
   };
 }
 
@@ -727,6 +754,7 @@ export const useSettingsStore = create<SettingsState>()(
         model: 'gpt-image-2',
         size: '1024x1024',
         quality: 'auto',
+        faceReferences: [],
       },
       imageGenerationPrompt: '高质量图片，画面清晰，主体明确，无水印，无乱码文字。',
       stickerConfig: createDefaultStickerConfig(),
@@ -821,10 +849,10 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ promptCacheConfig: { ...(state.promptCacheConfig || { enabled: false }), ...config } })),
       setImageGenerationConfig: (config) =>
         set((state) => ({
-          imageGenerationConfig: {
+          imageGenerationConfig: normalizeImageGenerationConfig({
             ...state.imageGenerationConfig,
             ...config,
-          },
+          }),
         })),
       setImageGenerationPrompt: (prompt) => set({ imageGenerationPrompt: prompt }),
       setStickerSuggestionsEnabled: (enabled) =>
@@ -1061,6 +1089,7 @@ export const useSettingsStore = create<SettingsState>()(
           _hydrated: true,
           stickerConfig: normalizeStickerConfig(state?.stickerConfig),
           floatingBallConfig: normalizeFloatingBallConfig(state?.floatingBallConfig),
+          imageGenerationConfig: normalizeImageGenerationConfig(state?.imageGenerationConfig),
         });
       },
     }
