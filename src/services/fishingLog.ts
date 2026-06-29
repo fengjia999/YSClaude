@@ -34,10 +34,30 @@ export interface FishingLogResponse {
   max_entries?: number;
 }
 
+export interface FishingInspectResponse {
+  session_id: string;
+  command: string;
+  result: string;
+  state?: FishingState | null;
+  run_id?: string;
+}
+
 export interface FishingServerConnection {
   server: McpServerConfig;
   baseUrl: string;
   authorization: string;
+}
+
+export class FishingHttpError extends Error {
+  status: number;
+  body: string;
+
+  constructor(message: string, status: number, body: string) {
+    super(message);
+    this.name = 'FishingHttpError';
+    this.status = status;
+    this.body = body;
+  }
 }
 
 export function resolveFishingServer(config?: McpToolConfig): FishingServerConnection | null {
@@ -68,13 +88,45 @@ export async function fetchFishingLog(
   const response = await fetch(url, { headers });
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`钓鱼日志读取失败：HTTP ${response.status}${text ? ` - ${text.slice(0, 160)}` : ''}`);
+    throw new FishingHttpError(
+      `钓鱼日志读取失败：HTTP ${response.status}${text ? ` - ${text.slice(0, 160)}` : ''}`,
+      response.status,
+      text
+    );
   }
   const parsed = JSON.parse(text || '{}') as FishingLogResponse;
   return {
     ...parsed,
     entries: Array.isArray(parsed.entries) ? parsed.entries : [],
   };
+}
+
+export async function inspectFishingCommand(
+  connection: FishingServerConnection,
+  sessionId: string,
+  command: string
+): Promise<FishingInspectResponse> {
+  const url = `${connection.baseUrl}/sessions/${encodeURIComponent(sessionId)}/inspect`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (connection.authorization.trim()) {
+    headers.Authorization = connection.authorization.trim();
+  }
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ command }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new FishingHttpError(
+      `钓鱼详情读取失败：HTTP ${response.status}${text ? ` - ${text.slice(0, 160)}` : ''}`,
+      response.status,
+      text
+    );
+  }
+  return JSON.parse(text || '{}') as FishingInspectResponse;
 }
 
 export function inferFishingSessionId(messages: Message[], fallback = 'default'): string {

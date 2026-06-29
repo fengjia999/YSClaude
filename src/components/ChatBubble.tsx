@@ -14,7 +14,6 @@ import { saveGeneratedImageToLibrary } from '../services/imageGeneration';
 import { openWebView } from '../services/webviewController';
 import { getToolLabel } from '../services/tools';
 import { StickerContent } from './StickerContent';
-import { FishingLogPanel } from './FishingLogPanel';
 import { buildStickerDefinitions, hasStickerToken, isStickerOnlyContent } from '../utils/stickers';
 import { formatSmartTime } from '../utils/time';
 import { getLinkCardInfo, getSingleHttpUrlMessage } from '../utils/sharedLinks';
@@ -964,7 +963,6 @@ export const ChatBubble = React.memo(function ChatBubble({
       {avatarHeader}
       {floorLabel && <Text style={styles.floorLabelLeft}>{floorLabel}</Text>}
       {isHidden && <Text style={styles.hiddenLabelLeft}>已隐藏</Text>}
-      <FishingLogPanel invocations={message.toolInvocations} />
       {/* 思维链：<thinking> 包裹的内容拆出，正文只渲染剩余部分 */}
       {thinking.length > 0 && <ThinkingBlock thinking={thinking} />}
       <Pressable
