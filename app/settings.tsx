@@ -1125,6 +1125,24 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     showToast(nextStyle === 'bubble' ? 'AI 气泡已切换为用户气泡样式' : 'AI 气泡已恢复原样式');
   }
 
+  function applyExampleGlassAppearance() {
+    setAppearanceConfig({
+      userBubbleTransparent: false,
+      userBubbleRadius: 28,
+      userBubbleBlurIntensity: 86,
+      userBubbleWidthPercent: 86,
+      assistantBubbleStyle: 'bubble',
+      assistantBubbleTransparent: false,
+      assistantBubbleRadius: 28,
+      assistantBubbleBlurIntensity: 86,
+      assistantBubbleWidthPercent: 86,
+      inputStyle: 'glass',
+      inputBlurIntensity: 86,
+      inputBorderRadius: 18,
+    });
+    showToast('已套用示例玻璃气泡和底栏');
+  }
+
   function handleSaveAppearanceTheme() {
     const name = appearanceThemeName.trim();
     if (!name) {
@@ -1571,6 +1589,11 @@ function AppearanceTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
 
       <Text style={styles.sectionTitle}>聊天气泡与文字</Text>
       <Text style={styles.hint}>颜色使用 #RRGGBB 格式；磨砂系数为 0 时关闭玻璃效果。</Text>
+      <View style={styles.actions}>
+        <Pressable style={styles.testButton} onPress={applyExampleGlassAppearance}>
+          <Text style={styles.testButtonText}>套用示例玻璃效果</Text>
+        </Pressable>
+      </View>
       <View style={styles.switchRow}>
         <View style={styles.switchText}>
           <Text style={styles.label}>隐藏 AI 回复尾部标识</Text>

@@ -45,7 +45,8 @@ function clampNumber(value: number | undefined, fallback: number, min: number, m
 }
 
 function glassBlurIntensity(value: number): number {
-  return Math.round(8 + value * 0.22);
+  if (value <= 0) return 0;
+  return Math.min(100, Math.round(20 + value * 0.7));
 }
 
 function getStickerSuggestionQuery(value: string): string {
@@ -165,7 +166,8 @@ export function ChatInput({
   const isCompactInput = inputStyle === 'compact';
   const isGlassInput = inputStyle === 'glass' || isCompactInput;
   const glassBlur = glassBlurIntensity(inputBlurIntensity);
-  const glassAlpha = isDarkTheme ? 0.10 + (inputBlurIntensity / 100) * 0.06 : 0.26 + (inputBlurIntensity / 100) * 0.10;
+  const glassTint = isDarkTheme ? 'systemUltraThinMaterialDark' : 'systemUltraThinMaterialLight';
+  const glassAlpha = isDarkTheme ? 0.06 + (inputBlurIntensity / 100) * 0.06 : 0.04 + (inputBlurIntensity / 100) * 0.08;
   const hasCustomInputSurface = isGlassInput || !!inputBackgroundImageUri || inputBackgroundTransparent;
   const inputPanelBackground = inputBackgroundTransparent
     ? 'transparent'
@@ -175,7 +177,7 @@ export function ChatInput({
   const inputOverlayBackground = inputBackgroundTransparent
     ? 'transparent'
     : isGlassInput
-      ? (isDarkTheme ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.34)')
+      ? (isDarkTheme ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.12)')
       : colors.background === '#12100D'
         ? 'rgba(18,16,13,0.08)'
         : 'rgba(255,255,255,0.08)';
@@ -446,7 +448,7 @@ export function ChatInput({
             blurMethod="dimezisBlurView"
             blurReductionFactor={1}
             intensity={glassBlur}
-            tint="light"
+            tint={glassTint}
             style={StyleSheet.absoluteFill}
           />
         )}
@@ -858,11 +860,11 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.18)',
   },
   glassContainer: {
-    borderColor: 'rgba(255,255,255,0.54)',
+    borderColor: 'rgba(255,255,255,0.38)',
     shadowColor: '#000',
-    shadowOpacity: 0.16,
+    shadowOpacity: 0.10,
     shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
+    shadowOffset: { width: 0, height: 6 },
     elevation: 8,
   },
   compactContainer: {
@@ -883,7 +885,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     right: 10,
     top: 1,
     height: 1,
-    backgroundColor: 'rgba(255,255,255,0.78)',
+    backgroundColor: 'rgba(255,255,255,0.70)',
   },
   glassInnerSheen: {
     position: 'absolute',
@@ -893,7 +895,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     height: 32,
     borderTopLeftRadius: 23,
     borderTopRightRadius: 23,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.14)',
   },
   suggestionPanel: {
     minHeight: 84,

@@ -2709,7 +2709,7 @@ export async function getApiUsageSummaryByModel(): Promise<ApiUsageGroupSummary[
         GROUP_CONCAT(DISTINCT base_url) as channels,
         ${API_USAGE_SUMMARY_SELECT}
        FROM api_usage_events
-      GROUP BY model
+      GROUP BY model, base_url
       ORDER BY total_tokens DESC, total_calls DESC`
   );
   return rows.map((row) => ({

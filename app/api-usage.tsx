@@ -142,7 +142,7 @@ export default function ApiUsageScreen() {
       </View>
 
       <GroupSection title="按功能汇总" rows={featureRows} />
-      <GroupSection title="按模型汇总" rows={modelRows} channelFormatter={(row) => formatModelChannels(row, apiConfigs)} />
+      <GroupSection title="按模型/渠道汇总" rows={modelRows} channelFormatter={(row) => formatModelChannels(row, apiConfigs)} />
       <Text style={styles.sectionTitle}>{selectedDateKey ? '日调用记录' : '最近调用'}</Text>
     </View>
   );
@@ -270,7 +270,7 @@ function GroupSection({
         {rows.map((row) => {
           const channelText = channelFormatter?.(row);
           return (
-            <View key={row.key} style={styles.groupCard}>
+            <View key={groupRowKey(row)} style={styles.groupCard}>
               <Text style={styles.groupKey} numberOfLines={1}>{formatGroupKey(row.key)}</Text>
               {!!channelText && <Text style={styles.groupChannel} numberOfLines={2}>渠道：{channelText}</Text>}
               <Text style={styles.groupValue}>{formatNumber(row.totalTokens)}</Text>
@@ -374,6 +374,10 @@ function formatModelChannels(row: ApiUsageGroupSummary, apiConfigs: NamedAPIConf
     return config?.name?.trim() || formatChannelFallback(normalizedChannel);
   });
   return [...new Set(labels)].join('、');
+}
+
+function groupRowKey(row: ApiUsageGroupSummary): string {
+  return `${row.key}:${(row.channels || []).join('|')}`;
 }
 
 function localDateKey(timestamp: number): string {

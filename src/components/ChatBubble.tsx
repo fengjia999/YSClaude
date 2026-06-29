@@ -45,7 +45,8 @@ function percentWidth(value: number): `${number}%` {
 }
 
 function glassBlurIntensity(value: number): number {
-  return Math.round(8 + value * 0.22);
+  if (value <= 0) return 0;
+  return Math.min(100, Math.round(20 + value * 0.7));
 }
 
 const markdownRules = {
@@ -215,6 +216,10 @@ export const ChatBubble = React.memo(function ChatBubble({
     () => parseAppearanceCss(appearanceConfig?.customCss),
     [appearanceConfig?.customCss]
   );
+  const isDarkTheme = colors.background === '#12100D';
+  const glassTint = isDarkTheme ? 'systemUltraThinMaterialDark' : 'systemUltraThinMaterialLight';
+  const bubbleGlassBackground = isDarkTheme ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.08)';
+  const bubbleGlassOverlay = isDarkTheme ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.12)';
   const userBubbleColor = appearanceConfig?.userBubbleColor || colors.userBubble;
   const userBubbleTransparent = !!appearanceConfig?.userBubbleTransparent;
   const userBubbleRadius = numberOrDefault(appearanceConfig?.userBubbleRadius, 20, 0, 36);
@@ -511,7 +516,7 @@ export const ChatBubble = React.memo(function ChatBubble({
         backgroundColor: userBubbleTransparent
           ? 'transparent'
           : shouldBlurUserBubble
-            ? 'rgba(255,255,255,0.28)'
+            ? bubbleGlassBackground
             : userBubbleColor,
         borderRadius: userBubbleRadius,
       },
@@ -575,13 +580,13 @@ export const ChatBubble = React.memo(function ChatBubble({
                   blurMethod="dimezisBlurView"
                   blurReductionFactor={1}
                   intensity={glassBlurIntensity(userBubbleBlurIntensity)}
-                  tint="light"
+                  tint={glassTint}
                   style={StyleSheet.absoluteFill}
                 />
               )}
               {shouldBlurUserBubble && (
                 <>
-                  <View pointerEvents="none" style={styles.glassSurfaceOverlay} />
+                  <View pointerEvents="none" style={[styles.glassSurfaceOverlay, { backgroundColor: bubbleGlassOverlay }]} />
                   <View pointerEvents="none" style={styles.glassTopHighlight} />
                   <View pointerEvents="none" style={styles.glassInnerGlow} />
                 </>
@@ -614,13 +619,13 @@ export const ChatBubble = React.memo(function ChatBubble({
                   blurMethod="dimezisBlurView"
                   blurReductionFactor={1}
                   intensity={glassBlurIntensity(userBubbleBlurIntensity)}
-                  tint="light"
+                  tint={glassTint}
                   style={StyleSheet.absoluteFill}
                 />
               )}
               {shouldBlurUserBubble && (
                 <>
-                  <View pointerEvents="none" style={styles.glassSurfaceOverlay} />
+                  <View pointerEvents="none" style={[styles.glassSurfaceOverlay, { backgroundColor: bubbleGlassOverlay }]} />
                   <View pointerEvents="none" style={styles.glassTopHighlight} />
                   <View pointerEvents="none" style={styles.glassInnerGlow} />
                 </>
@@ -775,7 +780,7 @@ export const ChatBubble = React.memo(function ChatBubble({
           backgroundColor: assistantBubbleTransparent
             ? 'transparent'
             : shouldBlurAssistantBubble
-              ? 'rgba(255,255,255,0.28)'
+              ? bubbleGlassBackground
               : assistantBubbleColor,
           borderRadius: assistantBubbleRadius,
         },
@@ -848,13 +853,13 @@ export const ChatBubble = React.memo(function ChatBubble({
             blurMethod="dimezisBlurView"
             blurReductionFactor={1}
             intensity={glassBlurIntensity(assistantBubbleBlurIntensity)}
-            tint="light"
+            tint={glassTint}
             style={StyleSheet.absoluteFill}
           />
         )}
         {shouldBlurAssistantBubble && (
           <>
-            <View pointerEvents="none" style={styles.glassSurfaceOverlay} />
+            <View pointerEvents="none" style={[styles.glassSurfaceOverlay, { backgroundColor: bubbleGlassOverlay }]} />
             <View pointerEvents="none" style={styles.glassTopHighlight} />
             <View pointerEvents="none" style={styles.glassInnerGlow} />
           </>
@@ -1244,32 +1249,31 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   userBubbleGlass: {
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.50)',
+    borderColor: 'rgba(255,255,255,0.42)',
     shadowColor: '#000',
-    shadowOpacity: 0.14,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.10,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
     elevation: 6,
   },
   glassSurfaceOverlay: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(255,255,255,0.30)',
   },
   glassTopHighlight: {
     position: 'absolute',
-    left: 10,
-    right: 10,
+    left: 8,
+    right: 8,
     top: 1,
     height: 1,
-    backgroundColor: 'rgba(255,255,255,0.82)',
+    backgroundColor: 'rgba(255,255,255,0.72)',
   },
   glassInnerGlow: {
     position: 'absolute',
     left: 1,
     right: 1,
     top: 1,
-    height: 22,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    height: 28,
+    backgroundColor: 'rgba(255,255,255,0.14)',
   },
   userBubbleWithSticker: {
     paddingVertical: 8,
