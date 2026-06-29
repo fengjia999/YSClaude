@@ -223,6 +223,31 @@ function statusForError(error: unknown): ApiUsageStatus {
   return 'error';
 }
 
+function consumeSseBuffer(
+  buffer: string,
+  flush: boolean,
+  onJson: (json: any) => void
+): string {
+  const lines = buffer.split(/\r?\n/);
+  const pending = flush ? '' : lines.pop() || '';
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+    const data = trimmed.slice(6).trim();
+    if (!data || data === '[DONE]') continue;
+
+    try {
+      onJson(JSON.parse(data));
+    } catch {
+      // skip malformed JSON
+    }
+  }
+
+  return pending;
+}
+
 async function recordApiUsage({
   request,
   streaming,
@@ -494,21 +519,10 @@ export async function streamChatCompletion(
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed === 'data: [DONE]') continue;
-        if (!trimmed.startsWith('data: ')) continue;
-
-        try {
-          handleJson(JSON.parse(trimmed.slice(6)));
-        } catch {
-          // skip malformed JSON
-        }
-      }
+      buffer = consumeSseBuffer(buffer, false, handleJson);
     }
+    buffer += decoder.decode();
+    consumeSseBuffer(buffer, true, handleJson);
 
     if (nativeThinkingOpened && !nativeThinkingClosed) {
       nativeThinkingClosed = true;
@@ -607,16 +621,7 @@ export async function streamChat(
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed === 'data: [DONE]') continue;
-        if (!trimmed.startsWith('data: ')) continue;
-
-        try {
-          const json = JSON.parse(trimmed.slice(6));
+      buffer = consumeSseBuffer(buffer, false, (json) => {
           if (json.usage) {
             rawUsage = json.usage;
           }
@@ -640,11 +645,34 @@ export async function streamChat(
             }
             onToken(delta);
           }
-        } catch {
-          // skip malformed JSON
-        }
-      }
+      });
     }
+    buffer += decoder.decode();
+    consumeSseBuffer(buffer, true, (json) => {
+      if (json.usage) {
+        rawUsage = json.usage;
+      }
+      const rawDelta = json.choices?.[0]?.delta || {};
+      const thinkingDelta =
+        returnNativeThinking
+          ? normalizeNativeThinking(rawDelta.reasoning_content) || normalizeNativeThinking(rawDelta.reasoning)
+          : '';
+      if (thinkingDelta) {
+        if (!nativeThinkingOpened) {
+          nativeThinkingOpened = true;
+          onToken('<thinking>');
+        }
+        onToken(thinkingDelta);
+      }
+      const delta = rawDelta.content;
+      if (delta) {
+        if (nativeThinkingOpened && !nativeThinkingClosed) {
+          nativeThinkingClosed = true;
+          onToken('</thinking>');
+        }
+        onToken(delta);
+      }
+    });
 
     if (nativeThinkingOpened && !nativeThinkingClosed) {
       onToken('</thinking>');

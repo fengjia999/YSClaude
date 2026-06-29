@@ -1,5 +1,5 @@
 import { randomUUID } from 'expo-crypto';
-import { chatCompletion } from './api';
+import { chatCompletion, type ChatCompletionResponse } from './api';
 import { searchNeteaseTrack } from './neteaseMusic';
 import type { MusicTrack } from '../stores/music';
 import type { APIConfig, Conversation, Message } from '../types';
@@ -134,62 +134,118 @@ function repairUnescapedQuotesInJsonStrings(jsonText: string): string {
   return repaired;
 }
 
-function extractJsonObject(text: string, stage: string): unknown {
-  const trimmed = text.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch (directError) {
-    const start = trimmed.indexOf('{');
-    const end = trimmed.lastIndexOf('}');
-    if (start < 0 || end <= start) {
-      logRadioJsonError(stage, {
-        reason: 'no-json-object-boundary',
-        directError,
-        rawLength: text.length,
-        rawContent: text,
-      });
-      throw new Error(`AI 电台没有返回可解析的 JSON（${stage}），完整响应已输出到控制台`);
+function findBalancedJsonObject(text: string): string | null {
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (start < 0) {
+      if (char === '{') {
+        start = index;
+        depth = 1;
+      }
+      continue;
     }
 
-    const jsonText = trimmed.slice(start, end + 1);
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (char === '\\') {
+        escaping = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, index + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function addJsonCandidate(candidates: string[], candidate: string | null | undefined): void {
+  const trimmed = candidate?.trim();
+  if (!trimmed || candidates.includes(trimmed)) return;
+  candidates.push(trimmed);
+}
+
+function buildJsonCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  const trimmed = text.trim();
+  addJsonCandidate(candidates, trimmed);
+
+  const fenceRegex = /```(?:json|JSON)?\s*([\s\S]*?)```/g;
+  let fenceMatch: RegExpExecArray | null;
+  while ((fenceMatch = fenceRegex.exec(trimmed))) {
+    addJsonCandidate(candidates, fenceMatch[1]);
+  }
+
+  for (const candidate of [...candidates]) {
+    addJsonCandidate(candidates, findBalancedJsonObject(candidate));
+  }
+
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    addJsonCandidate(candidates, trimmed.slice(start, end + 1));
+  }
+
+  return candidates;
+}
+
+function extractJsonObject(text: string, stage: string): unknown {
+  const candidates = buildJsonCandidates(text);
+  let lastError: unknown;
+
+  for (const jsonText of candidates) {
     try {
       return JSON.parse(jsonText);
-    } catch (slicedError) {
+    } catch (parseError) {
+      lastError = parseError;
       const repairedJson = repairUnescapedQuotesInJsonStrings(jsonText);
-      if (repairedJson !== jsonText) {
-        try {
-          const parsed = JSON.parse(repairedJson);
-          console.warn(`[AI Radio] JSON repaired at ${stage}: escaped unescaped quotes inside JSON strings.`);
-          return parsed;
-        } catch (repairError) {
-          logRadioJsonError(stage, {
-            reason: 'repaired-json-parse-failed',
-            directError,
-            slicedError,
-            repairError,
-            rawLength: text.length,
-            jsonStart: start,
-            jsonEnd: end,
-            rawContent: text,
-            slicedJson: jsonText,
-            repairedJson,
-          });
-          throw new Error(`AI 电台 JSON 解析失败（${stage}），完整响应已输出到控制台`);
-        }
-      }
+      if (repairedJson === jsonText) continue;
 
-      logRadioJsonError(stage, {
-        reason: 'sliced-json-parse-failed',
-        directError,
-        slicedError,
-        rawLength: text.length,
-        jsonStart: start,
-        jsonEnd: end,
-        rawContent: text,
-        slicedJson: jsonText,
-      });
-      throw new Error(`AI 电台 JSON 解析失败（${stage}），完整响应已输出到控制台`);
+      try {
+        const parsed = JSON.parse(repairedJson);
+        console.warn(`[AI Radio] JSON repaired at ${stage}: escaped unescaped quotes inside JSON strings.`);
+        return parsed;
+      } catch (repairError) {
+        lastError = repairError;
+      }
     }
+  }
+
+  logRadioJsonError(stage, {
+    reason: candidates.length > 0 ? 'json-candidates-parse-failed' : 'no-json-candidate',
+    error: lastError,
+    rawLength: text.length,
+    rawContent: text,
+    slicedJson: candidates[0],
+  });
+  throw new Error(`AI 电台 JSON 解析失败（${stage}），完整响应已输出到控制台`);
+}
+
+function assertRadioResponseNotTruncated(response: ChatCompletionResponse, stage: string): void {
+  const finishReason = response.choices[0]?.finish_reason;
+  if (!finishReason) return;
+
+  const normalized = String(finishReason).toLowerCase();
+  if (normalized === 'length' || normalized.includes('max_token') || normalized.includes('max_output')) {
+    throw new Error(`AI 电台输出被模型截断（${stage}，finish_reason=${finishReason}）。请重试，或在设置中换用更大输出上限的模型。`);
   }
 }
 
@@ -400,7 +456,6 @@ async function generateOpeningPlan(options: RadioGenerationOptions): Promise<Rad
     apiKey: options.apiConfig.apiKey,
     model: options.apiConfig.model,
     temperature: 0.85,
-    maxTokens: 1800,
     usageContext: {
       feature: 'radio',
       requestKind: 'opening-plan',
@@ -436,6 +491,7 @@ async function generateOpeningPlan(options: RadioGenerationOptions): Promise<Rad
     ],
   });
 
+  assertRadioResponseNotTruncated(response, 'opening-plan');
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error('AI 电台没有返回节目规划');
   return normalizePlan(extractJsonObject(content, 'opening-plan'));
@@ -450,7 +506,6 @@ async function generateContinuationPlan(options: ContinueRadioOptions): Promise<
     apiKey: options.apiConfig.apiKey,
     model: options.apiConfig.model,
     temperature: 0.85,
-    maxTokens: 1800,
     usageContext: {
       feature: 'radio',
       requestKind: 'continuation-plan',
@@ -487,6 +542,7 @@ async function generateContinuationPlan(options: ContinueRadioOptions): Promise<
     ],
   });
 
+  assertRadioResponseNotTruncated(response, 'continuation-plan');
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error('AI 电台没有返回继续规划');
   return normalizePlan(extractJsonObject(content, 'continuation-plan'));
@@ -519,7 +575,6 @@ async function generateScriptPlan({
     apiKey: apiConfig.apiKey,
     model: apiConfig.model,
     temperature: 0.8,
-    maxTokens: 2400,
     usageContext: {
       feature: 'radio',
       requestKind: `${mode}-script`,
@@ -565,6 +620,7 @@ async function generateScriptPlan({
     ],
   });
 
+  assertRadioResponseNotTruncated(response, `${mode}-script-plan`);
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error('AI 电台没有返回主持词');
   return normalizeScriptPlan(extractJsonObject(content, `${mode}-script-plan`), plan.title, plan.summary);
@@ -718,7 +774,6 @@ export async function summarizeRadioSession({
     apiKey: apiConfig.apiKey,
     model: apiConfig.model,
     temperature: 0.5,
-    maxTokens: 900,
     usageContext: {
       feature: 'radio',
       requestKind: 'session-summary',
@@ -743,5 +798,6 @@ export async function summarizeRadioSession({
     ],
   });
 
+  assertRadioResponseNotTruncated(response, 'session-summary');
   return response.choices[0]?.message?.content?.trim() || '本期 AI 电台已结束，节目记录已整理。';
 }
