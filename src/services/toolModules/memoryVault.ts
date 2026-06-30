@@ -39,18 +39,40 @@ const DIARY_QUERY_TOOL: ToolDefinition = {
   },
 };
 
+const MEMORY_KEYWORD_SEARCH_TOOL: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'keyword_search_memory_vault',
+    description:
+      '关键词搜索记忆库。用于查找明确词语、名称、标签、原文片段等需要精确包含匹配的记忆；多个关键词请用空格分隔。',
+    parameters: {
+      type: 'object',
+      properties: {
+        keywords: {
+          type: 'string',
+          description: '一个或多个关键词，多个关键词用空格分隔',
+        },
+      },
+      required: ['keywords'],
+    },
+  },
+};
+
 export const memoryVaultTool: ToolModule = {
   id: 'memory-vault',
   labels: {
     search_memory_vault: '搜索记忆库',
+    keyword_search_memory_vault: '关键词搜索记忆库',
     query_diary: '查询日记',
   },
   getDefinitions: (config) =>
-    config.memoryVault ? [MEMORY_SEARCH_TOOL, DIARY_QUERY_TOOL] : [],
+    config.memoryVault ? [MEMORY_SEARCH_TOOL, MEMORY_KEYWORD_SEARCH_TOOL, DIARY_QUERY_TOOL] : [],
   execute: async (toolName, args, context) => {
     switch (toolName) {
       case 'search_memory_vault':
         return await executeMemorySearch(args.query, context.memoryVaultConfig);
+      case 'keyword_search_memory_vault':
+        return await executeMemoryKeywordSearch(args.keywords || args.query, context.memoryVaultConfig);
       case 'query_diary':
         return await executeDiaryQuery(args.date, context.memoryVaultConfig);
       default:
@@ -79,13 +101,39 @@ async function executeMemorySearch(
     throw new Error(`记忆库搜索失败: HTTP ${resp.status}`);
   }
 
-  const data = await resp.json();
-  const items = data.items || [];
-  if (items.length === 0) {
-    return '未找到相关记忆。';
+  return formatMemorySearchResponse(await resp.json(), '相关记忆');
+}
+
+async function executeMemoryKeywordSearch(
+  keywords: string,
+  config: MemoryVaultConfig
+): Promise<string> {
+  const baseUrl = config.baseUrl.replace(/\/$/, '');
+  const params = new URLSearchParams({
+    q: keywords,
+    top_k: String(config.topK),
+    token_budget: String(config.tokenBudget),
+  });
+
+  const resp = await fetch(`${baseUrl}/api/search/keyword?${params}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!resp.ok) {
+    throw new Error(`记忆库关键词搜索失败: HTTP ${resp.status}`);
   }
 
-  const lines: string[] = [`找到 ${items.length} 条相关记忆：\n`];
+  return formatMemorySearchResponse(await resp.json(), '关键词命中记忆');
+}
+
+function formatMemorySearchResponse(data: any, resultLabel: string): string {
+  const items = data.items || [];
+  if (items.length === 0) {
+    return `未找到${resultLabel}。`;
+  }
+
+  const lines: string[] = [`找到 ${items.length} 条${resultLabel}：\n`];
   for (const item of items) {
     const date = item.date || '未知日期';
     const content = item.original || item.summary || '';

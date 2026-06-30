@@ -4960,7 +4960,7 @@ function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   ];
 
   const builtInToolCards = [
-    { key: 'memoryVault', name: '记忆库', intro: '搜索长期记忆，并按日期查询日记内容。', enabled: mvEnabled, onValueChange: setMvEnabled, meta: '2 个工具' },
+    { key: 'memoryVault', name: '记忆库', intro: '语义/关键词搜索长期记忆，并按日期查询日记内容。', enabled: mvEnabled, onValueChange: setMvEnabled, meta: '3 个工具' },
     { key: 'webSearch', name: '联网搜索', intro: '通过 Tavily 搜索互联网，补充实时信息。', enabled: wsEnabled, onValueChange: setWsEnabled, meta: '1 个工具' },
     { key: 'webPageReader', name: '网页读取', intro: '读取链接中的网页正文，可配置渲染服务兜底。', enabled: wprEnabled, onValueChange: setWprEnabled, meta: '1 个工具' },
     { key: 'hotboard', name: '热榜查询', intro: '从已选择的平台列表中查询热门话题。', enabled: hbEnabled, onValueChange: setHbEnabled, meta: hbPlatformTypes.length + ' 个平台' },
