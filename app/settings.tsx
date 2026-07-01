@@ -18,6 +18,18 @@ import { useChatStore } from '../src/stores/chat';
 import { useDiaryStore } from '../src/stores/diary';
 import { playTTS, stopTTS } from '../src/services/tts';
 import { streamChat } from '../src/services/api';
+import {
+  checkScheduledTaskServer,
+  createScheduledTask,
+  deleteScheduledTask,
+  listScheduledTaskResults,
+  listScheduledTasks,
+  runScheduledTaskNow,
+  updateScheduledTask,
+  type ScheduledTask,
+  type ScheduledTaskResult,
+  type ScheduledTaskType,
+} from '../src/services/scheduledTasks';
 import { Diary, HiddenRange, IncomingLetterOccasion } from '../src/types';
 import { getChatDiagnosticsConversation, getFavoriteDiaries, type ChatDiagnosticsMessage } from '../src/db/operations';
 import { uploadDiary } from '../src/services/tools';
@@ -51,7 +63,7 @@ import { mergeRanges } from '../src/utils/ranges';
 
 
 let colors = lightColors;
-const TABS = ['API 配置', '对话设置', 'TTS 配置', '工具设置', '日记', '来信', '悬浮球', '表情包', '欢迎页', '美化'] as const;
+const TABS = ['API 配置', '定时任务', '对话设置', 'TTS 配置', '工具设置', '日记', '来信', '悬浮球', '表情包', '欢迎页', '美化'] as const;
 type ToastFn = (message: string) => void;
 type SettingsTabProps = { showToast: ToastFn; keyboardBottomInset: number };
 const CUSTOM_TOP_BAR_ICON_MAX_BYTES = 2 * 1024 * 1024;
@@ -165,15 +177,16 @@ export default function SettingsScreen() {
       </ScrollView>
 
       {activeTab === 0 && <APIConfigTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
-      {activeTab === 1 && <ChatSettingsTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
-      {activeTab === 2 && <TTSConfigTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
-      {activeTab === 3 && <ToolConfigTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
-      {activeTab === 4 && <DiaryTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
-      {activeTab === 5 && <IncomingLetterTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
-      {activeTab === 6 && <FloatingBallTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
-      {activeTab === 7 && <StickerTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
-      {activeTab === 8 && <WelcomePageTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
-      {activeTab === 9 && <AppearanceTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 1 && <ScheduledTaskTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 2 && <ChatSettingsTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 3 && <TTSConfigTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 4 && <ToolConfigTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 5 && <DiaryTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 6 && <IncomingLetterTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 7 && <FloatingBallTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 8 && <StickerTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 9 && <WelcomePageTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
+      {activeTab === 10 && <AppearanceTab showToast={showToast} keyboardBottomInset={keyboardHeight} />}
 
       {toastMessage && (
         <View pointerEvents="none" style={styles.toast}>
@@ -2947,6 +2960,374 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
           </View>
         </Pressable>
       </Modal>
+    </ScrollView>
+  );
+}
+
+/* ==================== 定时任务 Tab ==================== */
+
+function ScheduledTaskTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
+  const { scheduledTaskBackendConfig, setScheduledTaskBackendConfig } = useSettingsStore();
+  const [baseUrl, setBaseUrl] = useState(scheduledTaskBackendConfig?.baseUrl || '');
+  const [apiToken, setApiToken] = useState(scheduledTaskBackendConfig?.apiToken || '');
+  const [title, setTitle] = useState('');
+  const [prompt, setPrompt] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
+  const [scheduleType, setScheduleType] = useState<ScheduledTaskType>('daily');
+  const [timeOfDay, setTimeOfDay] = useState('08:00');
+  const [intervalMinutes, setIntervalMinutes] = useState('60');
+  const [timezone, setTimezone] = useState('Asia/Shanghai');
+  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
+  const [results, setResults] = useState<ScheduledTaskResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [runningTaskId, setRunningTaskId] = useState<string | null>(null);
+
+  const serverConfig = useMemo(() => ({
+    baseUrl: baseUrl.trim(),
+    apiToken: apiToken.trim(),
+  }), [baseUrl, apiToken]);
+
+  useEffect(() => {
+    setBaseUrl(scheduledTaskBackendConfig?.baseUrl || '');
+    setApiToken(scheduledTaskBackendConfig?.apiToken || '');
+  }, [scheduledTaskBackendConfig]);
+
+  useEffect(() => {
+    if (!scheduledTaskBackendConfig?.baseUrl || !scheduledTaskBackendConfig?.apiToken) return;
+    refreshScheduledTaskData(scheduledTaskBackendConfig).catch(() => undefined);
+  }, [scheduledTaskBackendConfig?.baseUrl, scheduledTaskBackendConfig?.apiToken]);
+
+  function saveBackendConfig() {
+    setScheduledTaskBackendConfig({
+      baseUrl: baseUrl.trim(),
+      apiToken: apiToken.trim(),
+    });
+    showToast('定时任务后端配置已保存');
+  }
+
+  async function handleTestServer() {
+    setLoading(true);
+    try {
+      await checkScheduledTaskServer(serverConfig);
+      showToast('后端连接正常');
+    } catch (error: any) {
+      Alert.alert('连接失败', error?.message || '无法连接定时任务后端');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshScheduledTaskData(config = serverConfig) {
+    setLoading(true);
+    try {
+      const [nextTasks, nextResults] = await Promise.all([
+        listScheduledTasks(config),
+        listScheduledTaskResults(config, 50),
+      ]);
+      setTasks(nextTasks);
+      setResults(nextResults);
+    } catch (error: any) {
+      Alert.alert('刷新失败', error?.message || '无法读取定时任务');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCreateTask() {
+    const trimmedTitle = title.trim();
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedTitle || !trimmedPrompt) {
+      Alert.alert('提示', '请填写任务名称和 Prompt');
+      return;
+    }
+    if (scheduleType === 'daily' && !/^\d{1,2}:\d{2}$/.test(timeOfDay.trim())) {
+      Alert.alert('提示', '每天执行时间请使用 HH:mm 格式');
+      return;
+    }
+    const parsedInterval = parseInt(intervalMinutes, 10);
+    if (scheduleType === 'interval' && (!Number.isFinite(parsedInterval) || parsedInterval < 1)) {
+      Alert.alert('提示', '间隔分钟数必须大于 0');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await createScheduledTask(serverConfig, {
+        title: trimmedTitle,
+        prompt: trimmedPrompt,
+        systemPrompt: systemPrompt.trim(),
+        scheduleType,
+        timeOfDay: timeOfDay.trim(),
+        intervalMinutes: parsedInterval,
+        timezone: timezone.trim() || 'Asia/Shanghai',
+        enabled: true,
+      });
+      setTitle('');
+      setPrompt('');
+      setSystemPrompt('');
+      await refreshScheduledTaskData();
+      showToast('定时任务已创建');
+    } catch (error: any) {
+      Alert.alert('创建失败', error?.message || '无法创建定时任务');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleToggleTask(task: ScheduledTask, enabled: boolean) {
+    try {
+      await updateScheduledTask(serverConfig, task.id, { enabled });
+      await refreshScheduledTaskData();
+      showToast(enabled ? '任务已启用' : '任务已停用');
+    } catch (error: any) {
+      Alert.alert('更新失败', error?.message || '无法更新任务状态');
+    }
+  }
+
+  async function handleRunTaskNow(task: ScheduledTask) {
+    setRunningTaskId(task.id);
+    try {
+      await runScheduledTaskNow(serverConfig, task.id);
+      await refreshScheduledTaskData();
+      showToast('任务已执行');
+    } catch (error: any) {
+      Alert.alert('执行失败', error?.message || '无法立即执行任务');
+    } finally {
+      setRunningTaskId(null);
+    }
+  }
+
+  function handleDeleteTask(task: ScheduledTask) {
+    Alert.alert('删除定时任务', `确定删除「${task.title}」和它的结果记录？`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteScheduledTask(serverConfig, task.id);
+            await refreshScheduledTaskData();
+            showToast('任务已删除');
+          } catch (error: any) {
+            Alert.alert('删除失败', error?.message || '无法删除任务');
+          }
+        },
+      },
+    ]);
+  }
+
+  function scheduleTypeLabel(type: ScheduledTaskType) {
+    if (type === 'interval') return '间隔';
+    if (type === 'once') return '单次';
+    return '每天';
+  }
+
+  function formatServerTime(value?: string) {
+    if (!value) return '未安排';
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? formatFullTime(timestamp) : value;
+  }
+
+  return (
+    <ScrollView
+      style={styles.content}
+      contentContainerStyle={{ paddingBottom: keyboardBottomInset + 20 }}
+      keyboardShouldPersistTaps="handled"
+    >
+      <Text style={styles.sectionTitle}>后端连接</Text>
+      <Text style={styles.hint}>服务端代码位于 E:\Desktop\YSClaude-project\YSClaude-ai-tasks-server；这里填写它的访问地址和 API_TOKEN。</Text>
+      <View style={styles.field}>
+        <Text style={styles.label}>后端地址</Text>
+        <TextInput
+          style={styles.input}
+          value={baseUrl}
+          onChangeText={setBaseUrl}
+          placeholder="http://你的服务器IP:8791"
+          placeholderTextColor={colors.textTertiary}
+          autoCapitalize="none"
+        />
+      </View>
+      <View style={styles.field}>
+        <Text style={styles.label}>访问令牌</Text>
+        <TextInput
+          style={styles.input}
+          value={apiToken}
+          onChangeText={setApiToken}
+          placeholder="与后端 .env 里的 API_TOKEN 一致"
+          placeholderTextColor={colors.textTertiary}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+      </View>
+      <View style={styles.actions}>
+        <Pressable style={styles.testButton} onPress={handleTestServer} disabled={loading}>
+          {loading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.testButtonText}>测试连接</Text>}
+        </Pressable>
+        <Pressable style={styles.saveButton} onPress={saveBackendConfig}>
+          <Text style={styles.saveButtonText}>保存连接</Text>
+        </Pressable>
+      </View>
+
+      <Text style={styles.sectionTitle}>创建任务</Text>
+      <View style={styles.field}>
+        <Text style={styles.label}>任务名称</Text>
+        <TextInput
+          style={styles.input}
+          value={title}
+          onChangeText={setTitle}
+          placeholder="例如：每日复盘"
+          placeholderTextColor={colors.textTertiary}
+        />
+      </View>
+      <View style={styles.field}>
+        <Text style={styles.label}>Prompt</Text>
+        <TextInput
+          style={[styles.input, styles.multilineInput, styles.scheduledTaskPromptInput]}
+          value={prompt}
+          onChangeText={setPrompt}
+          multiline
+          textAlignVertical="top"
+          placeholder="到点后发给 AI 的内容"
+          placeholderTextColor={colors.textTertiary}
+        />
+      </View>
+      <View style={styles.field}>
+        <Text style={styles.label}>System Prompt，可选</Text>
+        <TextInput
+          style={[styles.input, styles.multilineInput]}
+          value={systemPrompt}
+          onChangeText={setSystemPrompt}
+          multiline
+          textAlignVertical="top"
+          placeholder="留空使用后端默认系统提示词"
+          placeholderTextColor={colors.textTertiary}
+        />
+      </View>
+      <View style={styles.segmentedRow}>
+        {(['daily', 'interval'] as ScheduledTaskType[]).map((type) => (
+          <Pressable
+            key={type}
+            style={[styles.segmentedButton, scheduleType === type && styles.segmentedButtonActive]}
+            onPress={() => setScheduleType(type)}
+          >
+            <Text style={[styles.segmentedText, scheduleType === type && styles.segmentedTextActive]}>
+              {scheduleTypeLabel(type)}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      {scheduleType === 'daily' ? (
+        <View style={styles.floatingBallSizeRow}>
+          <View style={styles.floatingBallSizeField}>
+            <Text style={styles.label}>每天时间</Text>
+            <TextInput
+              style={styles.input}
+              value={timeOfDay}
+              onChangeText={setTimeOfDay}
+              placeholder="08:00"
+              placeholderTextColor={colors.textTertiary}
+            />
+          </View>
+          <View style={styles.floatingBallSizeField}>
+            <Text style={styles.label}>时区</Text>
+            <TextInput
+              style={styles.input}
+              value={timezone}
+              onChangeText={setTimezone}
+              placeholder="Asia/Shanghai"
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="none"
+            />
+          </View>
+        </View>
+      ) : (
+        <View style={styles.field}>
+          <Text style={styles.label}>间隔分钟</Text>
+          <TextInput
+            style={styles.input}
+            value={intervalMinutes}
+            onChangeText={setIntervalMinutes}
+            keyboardType="number-pad"
+            placeholder="60"
+            placeholderTextColor={colors.textTertiary}
+          />
+        </View>
+      )}
+      <Pressable
+        style={[styles.importButton, saving && styles.importButtonDisabled]}
+        onPress={handleCreateTask}
+        disabled={saving}
+      >
+        {saving ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.importButtonText}>创建定时任务</Text>}
+      </Pressable>
+
+      <View style={styles.diaryHeaderRow}>
+        <Text style={styles.sectionTitle}>任务列表</Text>
+        <Pressable style={styles.diaryAddButton} onPress={() => refreshScheduledTaskData()} disabled={loading}>
+          <Text style={styles.diaryAddText}>{loading ? '刷新中' : '刷新'}</Text>
+        </Pressable>
+      </View>
+      {tasks.length === 0 ? (
+        <View style={styles.customStickerEmpty}>
+          <Text style={styles.hint}>暂无云端定时任务。</Text>
+        </View>
+      ) : (
+        <View style={styles.scheduledTaskList}>
+          {tasks.map((task) => (
+            <View key={task.id} style={styles.scheduledTaskCard}>
+              <View style={styles.scheduledTaskHeader}>
+                <View style={styles.switchText}>
+                  <Text style={styles.diaryTitle}>{task.title}</Text>
+                  <Text style={styles.hint}>
+                    {scheduleTypeLabel(task.scheduleType)} · 下次 {formatServerTime(task.nextRunAt)}
+                  </Text>
+                </View>
+                <Switch
+                  value={task.enabled}
+                  onValueChange={(value) => handleToggleTask(task, value)}
+                  trackColor={{ false: colors.border, true: colors.primary }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+              <Text style={styles.previewText} numberOfLines={3}>{task.prompt}</Text>
+              <View style={styles.scheduledTaskActions}>
+                <Pressable
+                  style={[styles.smallActionButton, runningTaskId === task.id && styles.smallActionButtonDisabled]}
+                  onPress={() => handleRunTaskNow(task)}
+                  disabled={runningTaskId === task.id}
+                >
+                  <Text style={styles.smallActionText}>{runningTaskId === task.id ? '执行中' : '立即'}</Text>
+                </Pressable>
+                <Pressable style={styles.smallActionButton} onPress={() => handleDeleteTask(task)}>
+                  <Text style={styles.smallActionText}>删除</Text>
+                </Pressable>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+
+      <Text style={styles.sectionTitle}>最近结果</Text>
+      {results.length === 0 ? (
+        <View style={styles.customStickerEmpty}>
+          <Text style={styles.hint}>暂无生成结果。可以先点任务里的「立即」测试。</Text>
+        </View>
+      ) : (
+        <View style={styles.scheduledTaskList}>
+          {results.map((result) => (
+            <View key={result.id} style={styles.scheduledTaskCard}>
+              <Text style={styles.diaryTitle}>{result.taskTitle}</Text>
+              <Text style={styles.hint}>
+                {result.status === 'success' ? '成功' : result.status === 'failed' ? '失败' : '跳过'} · {formatServerTime(result.createdAt)}
+              </Text>
+              <Text selectable style={styles.previewText}>
+                {result.status === 'success' ? result.content : result.errorMessage || '没有错误详情'}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
     </ScrollView>
   );
 }
@@ -6779,6 +7160,33 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   multilineInput: {
     minHeight: 84,
     textAlignVertical: 'top',
+  },
+  scheduledTaskPromptInput: {
+    minHeight: 120,
+  },
+  scheduledTaskList: {
+    gap: 10,
+    marginBottom: 18,
+  },
+  scheduledTaskCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  scheduledTaskHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  scheduledTaskActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 10,
   },
   customCssInput: {
     minHeight: 220,

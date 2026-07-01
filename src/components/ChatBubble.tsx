@@ -165,30 +165,41 @@ function ThinkingBlock({ thinking }: { thinking: string }) {
   );
 }
 
-// 从 AI 输出中拆出思维链与剩余正文。
-// 只处理「第一个」<thinking>，之后正文里再出现的 <thinking> 标签原样保留，
-// 避免正文中出现的标签被误当成思维链而吞掉后续文字。
+// 从 AI 输出中拆出所有思维链与剩余正文。
 function splitThinking(raw: string): { thinking: string; body: string } {
   if (!raw) return { thinking: '', body: '' };
-  const openIdx = raw.search(/<thinking>/i);
-  if (openIdx === -1) return { thinking: '', body: raw.trim() };
+  const openPattern = /<thinking>/gi;
+  const closePattern = /<\/thinking>/gi;
+  const thinkingParts: string[] = [];
+  const bodyParts: string[] = [];
+  let cursor = 0;
+  let openMatch: RegExpExecArray | null;
 
-  const afterOpen = raw.slice(openIdx).replace(/<thinking>/i, '');
-  const closeMatch = afterOpen.match(/<\/thinking>/i);
+  while ((openMatch = openPattern.exec(raw)) !== null) {
+    const openStart = openMatch.index;
+    const openEnd = openPattern.lastIndex;
+    if (openStart < cursor) continue;
 
-  let thinking: string;
-  let body: string;
-  if (closeMatch && closeMatch.index !== undefined) {
-    // 已闭合：思维链取首个标签对内部，正文为标签前 + 标签后（含其中可能的其它 <thinking>）
-    thinking = afterOpen.slice(0, closeMatch.index);
-    const tail = afterOpen.slice(closeMatch.index + closeMatch[0].length);
-    body = raw.slice(0, openIdx) + tail;
-  } else {
-    // 流式中尚未闭合：剩余全部视为思维链，正文为标签前部分
-    thinking = afterOpen;
-    body = raw.slice(0, openIdx);
+    bodyParts.push(raw.slice(cursor, openStart));
+    closePattern.lastIndex = openEnd;
+    const closeMatch = closePattern.exec(raw);
+
+    if (!closeMatch) {
+      thinkingParts.push(raw.slice(openEnd));
+      cursor = raw.length;
+      break;
+    }
+
+    thinkingParts.push(raw.slice(openEnd, closeMatch.index));
+    cursor = closePattern.lastIndex;
+    openPattern.lastIndex = cursor;
   }
-  return { thinking: thinking.trim(), body: body.trim() };
+
+  bodyParts.push(raw.slice(cursor));
+  return {
+    thinking: thinkingParts.map((part) => part.trim()).filter(Boolean).join('\n\n---\n\n'),
+    body: bodyParts.join('').trim(),
+  };
 }
 
 type AssistantFlowPart =

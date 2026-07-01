@@ -7,6 +7,9 @@ const MIN_TIMEOUT_MS = 1000;
 const MAX_TIMEOUT_MS = 3600000;
 const DEFAULT_MAX_OUTPUT_CHARS = 20000;
 const MAX_COMMAND_CHARS = 8000;
+const MAX_FILE_PATH_CHARS = 2000;
+const MAX_FILE_CONTENT_CHARS = 500000;
+const FILE_WRITE_BASE64_CHUNK_CHARS = 6000;
 
 const RemoteSshCommand = NativeModules.RemoteSshCommand as
   | {
@@ -68,6 +71,61 @@ const SSH_COMMAND_TOOL_BASE: ToolDefinition = {
   },
 };
 
+const SSH_READ_FILE_TOOL_BASE: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'ssh_read_file',
+    description:
+      '读取当前 SSH session 中远程服务器上的文本文件。编辑代码前优先使用此工具读取文件，不要用很长的 shell 命令拼 cat/sed。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: '要读取的远程文件路径。相对路径会基于当前 SSH 工作目录解析。',
+        },
+        max_chars: {
+          type: 'number',
+          description: '可选，最多返回多少字符。默认使用工具设置里的输出上限。',
+        },
+      },
+      required: ['path'],
+    },
+  },
+};
+
+const SSH_WRITE_FILE_TOOL_BASE: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'ssh_write_file',
+    description:
+      '写入当前 SSH session 中远程服务器上的文本文件。编辑代码、配置或文档时优先使用此工具；它会分块传输内容，避免 ssh_command 的命令长度限制。默认覆盖目标文件，可选择追加。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: '要写入的远程文件路径。相对路径会基于当前 SSH 工作目录解析。',
+        },
+        content: {
+          type: 'string',
+          description: '完整文件内容或要追加的文本内容。',
+        },
+        mode: {
+          type: 'string',
+          enum: ['overwrite', 'append'],
+          description: '写入模式。overwrite 覆盖文件；append 追加到文件末尾。默认 overwrite。',
+        },
+        timeout_ms: {
+          type: 'number',
+          description: '可选，单个传输步骤的超时时间，单位毫秒。',
+        },
+      },
+      required: ['path', 'content'],
+    },
+  },
+};
+
 const SSH_CLOSE_TOOL_BASE: ToolDefinition = {
   type: 'function',
   function: {
@@ -93,11 +151,22 @@ export const runCommandTool: ToolModule = {
     ssh_connect: 'SSH 连接',
     ssh_status: 'SSH 状态',
     ssh_command: 'SSH 命令',
+    ssh_read_file: 'SSH 读文件',
+    ssh_write_file: 'SSH 写文件',
     ssh_close: 'SSH 关闭',
     run_command: '远程命令',
   },
   getDefinitions: (config) =>
-    config.runCommand?.enabled ? [SSH_CONNECT_TOOL_BASE, SSH_STATUS_TOOL_BASE, SSH_COMMAND_TOOL_BASE, SSH_CLOSE_TOOL_BASE] : [],
+    config.runCommand?.enabled
+      ? [
+          SSH_CONNECT_TOOL_BASE,
+          SSH_STATUS_TOOL_BASE,
+          SSH_COMMAND_TOOL_BASE,
+          SSH_READ_FILE_TOOL_BASE,
+          SSH_WRITE_FILE_TOOL_BASE,
+          SSH_CLOSE_TOOL_BASE,
+        ]
+      : [],
   execute: async (toolName, args, context) => {
     if (toolName === 'ssh_connect') {
       return await executeSshConnect(args, context.runCommandConfig);
@@ -107,6 +176,12 @@ export const runCommandTool: ToolModule = {
     }
     if (toolName === 'ssh_command') {
       return await executeSshCommand(args, context.runCommandConfig);
+    }
+    if (toolName === 'ssh_read_file') {
+      return await executeSshReadFile(args, context.runCommandConfig);
+    }
+    if (toolName === 'ssh_write_file') {
+      return await executeSshWriteFile(args, context.runCommandConfig);
     }
     if (toolName === 'ssh_close') {
       return await executeSshClose(args, context.runCommandConfig);
@@ -160,6 +235,91 @@ async function executeSshCommand(args: Record<string, any>, config: RunCommandCo
   return formatSshResponse('SSH session 命令结果：', result, maxOutputChars);
 }
 
+async function executeSshReadFile(args: Record<string, any>, config: RunCommandConfig): Promise<string> {
+  ensureSshConfig(config);
+  const path = normalizeRemotePath(args?.path);
+  const maxOutputChars = normalizeMaxOutputChars(
+    typeof args?.max_chars === 'number' ? args.max_chars : config.maxOutputChars
+  );
+  const timeoutMs = normalizeTimeoutMs(args?.timeout_ms, config.timeoutMs);
+  const result = await runSshCommandRaw(
+    `cat -- ${shellQuote(path)}`,
+    config,
+    timeoutMs,
+    maxOutputChars
+  );
+  return formatSshResponse(`SSH 文件读取结果：${redactRemotePath(path)}`, result, maxOutputChars);
+}
+
+async function executeSshWriteFile(args: Record<string, any>, config: RunCommandConfig): Promise<string> {
+  ensureSshConfig(config);
+  const path = normalizeRemotePath(args?.path);
+  const content = normalizeFileContent(args?.content);
+  const mode = String(args?.mode || 'overwrite') === 'append' ? 'append' : 'overwrite';
+  const timeoutMs = normalizeTimeoutMs(args?.timeout_ms, config.timeoutMs);
+  const maxOutputChars = normalizeMaxOutputChars(config.maxOutputChars);
+  const base64 = encodeUtf8Base64(content);
+
+  const initScript = [
+    `TARGET=${shellQuote(path)}`,
+    'DIR=$(dirname -- "$TARGET")',
+    'mkdir -p -- "$DIR"',
+    'TMP_FILE=$(mktemp "${DIR}/.ysclaude-write.XXXXXX")',
+    'printf "%s\\n" "$TMP_FILE"',
+  ].join('\n');
+  const initResult = await runSshCommandRaw(initScript, config, timeoutMs, 4000);
+  if ((initResult?.exit_code ?? initResult?.exitCode ?? 1) !== 0) {
+    return formatSshResponse(`SSH 文件写入准备失败：${redactRemotePath(path)}`, initResult, maxOutputChars);
+  }
+
+  const tmpPath = normalizeOutput(initResult?.stdout ?? initResult?.output)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .pop();
+  if (!tmpPath) {
+    throw new Error('远程临时文件路径为空，无法写入文件');
+  }
+
+  let writtenBase64Chars = 0;
+  try {
+    for (let index = 0; index < base64.length; index += FILE_WRITE_BASE64_CHUNK_CHARS) {
+      const chunk = base64.slice(index, index + FILE_WRITE_BASE64_CHUNK_CHARS);
+      const appendScript = `printf %s ${shellQuote(chunk)} | base64 -d >> ${shellQuote(tmpPath)}`;
+      const appendResult = await runSshCommandRaw(appendScript, config, timeoutMs, 4000);
+      if ((appendResult?.exit_code ?? appendResult?.exitCode ?? 1) !== 0) {
+        await runSshCommandRaw(`rm -f -- ${shellQuote(tmpPath)}`, config, 5000, 1000).catch(() => undefined);
+        return formatSshResponse(`SSH 文件写入失败：${redactRemotePath(path)}`, appendResult, maxOutputChars);
+      }
+      writtenBase64Chars += chunk.length;
+    }
+
+    const finalizeScript = mode === 'append'
+      ? `cat -- ${shellQuote(tmpPath)} >> ${shellQuote(path)} && rm -f -- ${shellQuote(tmpPath)}`
+      : `mv -f -- ${shellQuote(tmpPath)} ${shellQuote(path)}`;
+    const finalizeResult = await runSshCommandRaw(finalizeScript, config, timeoutMs, maxOutputChars);
+    if ((finalizeResult?.exit_code ?? finalizeResult?.exitCode ?? 1) !== 0) {
+      await runSshCommandRaw(`rm -f -- ${shellQuote(tmpPath)}`, config, 5000, 1000).catch(() => undefined);
+      return formatSshResponse(`SSH 文件写入完成步骤失败：${redactRemotePath(path)}`, finalizeResult, maxOutputChars);
+    }
+
+    const lines = [
+      'SSH 文件写入结果：',
+      `path: ${redactRemotePath(path)}`,
+      `mode: ${mode}`,
+      `content_chars: ${String(content.length)}`,
+      `base64_chars: ${String(writtenBase64Chars)}`,
+      `chunks: ${String(Math.ceil(base64.length / FILE_WRITE_BASE64_CHUNK_CHARS))}`,
+      'remote: configured_ssh_server',
+      'status: ok',
+    ];
+    return truncateOutput(lines.join('\n'), maxOutputChars);
+  } catch (error) {
+    await runSshCommandRaw(`rm -f -- ${shellQuote(tmpPath)}`, config, 5000, 1000).catch(() => undefined);
+    throw error;
+  }
+}
+
 async function executeSshClose(args: Record<string, any>, config: RunCommandConfig): Promise<string> {
   ensureSshConfig(config);
   if (String(args?.confirm || '') !== 'close_current_ssh_session') {
@@ -172,6 +332,22 @@ async function executeSshClose(args: Record<string, any>, config: RunCommandConf
 async function executeLegacyRunCommand(args: Record<string, any>, config: RunCommandConfig): Promise<string> {
   await executeSshConnect({}, config);
   return await executeSshCommand(args, config);
+}
+
+async function runSshCommandRaw(
+  command: string,
+  config: RunCommandConfig,
+  timeoutMs: number,
+  maxOutputChars: number
+): Promise<Record<string, unknown>> {
+  return await ensureRemoteSshCommand().command({
+    ...buildConnectionPayload(config),
+    autoReconnect: true,
+    cwd: config.defaultCwd || undefined,
+    command,
+    timeoutMs,
+    maxOutputChars,
+  });
 }
 
 function ensureSshConfig(config: RunCommandConfig): void {
@@ -231,13 +407,61 @@ function normalizePort(input: number): number {
   return Math.min(65535, Math.max(1, Math.round(input)));
 }
 
+function normalizeRemotePath(input: unknown): string {
+  const path = String(input || '').trim();
+  if (!path) {
+    throw new Error('path 不能为空');
+  }
+  if (path.length > MAX_FILE_PATH_CHARS) {
+    throw new Error(`path 过长，最多 ${MAX_FILE_PATH_CHARS} 个字符`);
+  }
+  if (path.includes('\0')) {
+    throw new Error('path 不能包含空字符');
+  }
+  return path;
+}
+
+function normalizeFileContent(input: unknown): string {
+  const content = String(input ?? '');
+  if (content.length > MAX_FILE_CONTENT_CHARS) {
+    throw new Error(`content 过长，最多 ${MAX_FILE_CONTENT_CHARS} 个字符`);
+  }
+  return content;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function encodeUtf8Base64(value: string): string {
+  if (typeof btoa !== 'function') {
+    throw new Error('当前运行环境不支持 base64 编码');
+  }
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function redactRemotePath(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) return '[empty]';
+  const normalized = trimmed.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  const fileName = parts[parts.length - 1] || normalized;
+  if (!normalized.startsWith('/') && parts.length <= 1) return fileName;
+  return `.../${fileName}`;
+}
+
 function formatSshResponse(title: string, data: any, maxOutputChars: number): string {
   const exitCode = data?.exit_code ?? data?.exitCode ?? data?.code;
   const stdout = normalizeOutput(data?.stdout ?? data?.output);
   const stderr = normalizeOutput(data?.stderr ?? data?.error);
   const durationMs = data?.duration_ms ?? data?.durationMs;
-  const host = normalizeOutput(data?.host);
-  const username = normalizeOutput(data?.username);
+  const hasRemoteIdentity = !!normalizeOutput(data?.host);
   const status = normalizeOutput(data?.status);
   const sessionId = normalizeOutput(data?.session_id ?? data?.sessionId);
   const sessionConnected = data?.session_connected ?? data?.sessionConnected;
@@ -251,7 +475,7 @@ function formatSshResponse(title: string, data: any, maxOutputChars: number): st
     title,
     status ? `status: ${status}` : '',
     sessionId ? `session_id: ${sessionId}` : '',
-    host ? `host: ${username ? `${username}@` : ''}${host}${data?.port ? `:${data.port}` : ''}` : '',
+    hasRemoteIdentity ? 'remote: configured_ssh_server' : '',
     cwd ? `cwd: ${cwd}` : '',
     typeof sessionConnected !== 'undefined' ? `session_connected: ${String(!!sessionConnected)}` : '',
     typeof retriedAfterReconnect !== 'undefined'

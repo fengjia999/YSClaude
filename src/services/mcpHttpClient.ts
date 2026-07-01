@@ -22,6 +22,20 @@ interface McpJsonRpcResponse<T = any> {
   error?: McpJsonRpcError;
 }
 
+class McpJsonRpcRequestError extends Error {
+  code: number;
+  data?: any;
+  method: string;
+
+  constructor(method: string, error: McpJsonRpcError) {
+    super(`MCP ${method} failed: ${error.message}`);
+    this.name = 'McpJsonRpcRequestError';
+    this.code = error.code;
+    this.data = error.data;
+    this.method = method;
+  }
+}
+
 interface McpSession {
   sessionId?: string;
   nextId: number;
@@ -212,12 +226,33 @@ async function safeListMcpItems(
   try {
     return await listMcpItems(config, session, method, resultKey);
   } catch (error: any) {
-    const message = String(error?.message || error || '').toLowerCase();
-    if (message.includes('method not found') || message.includes('not found') || message.includes('unsupported')) {
+    if (isUnsupportedMcpMethodError(error)) {
       return [];
     }
     throw error;
   }
+}
+
+function isUnsupportedMcpMethodError(error: any): boolean {
+  if (error instanceof McpJsonRpcRequestError && error.code === -32601) {
+    return true;
+  }
+
+  const message = String(error?.message || error || '').toLowerCase();
+  return [
+    'method not found',
+    'method not supported',
+    'unsupported method',
+    'unsupported',
+    'unknown method',
+    'not implemented',
+    '不支持的方式',
+    '不支持的方法',
+    '方法不支持',
+    '方式不支持',
+    '未找到方法',
+    '未知方法',
+  ].some((pattern) => message.includes(pattern));
 }
 
 async function listMcpItems(
@@ -253,7 +288,7 @@ async function sendMcpRequest<T>(
   });
   const message = await readMcpJsonRpcResponse<T>(response, id);
   if (message.error) {
-    throw new Error(`MCP ${method} failed: ${message.error.message}`);
+    throw new McpJsonRpcRequestError(method, message.error);
   }
   if (message.result === undefined) {
     throw new Error(`MCP ${method} returned no result`);
