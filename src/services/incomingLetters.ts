@@ -91,6 +91,7 @@ async function generateLetterContent(
       maxTokens: settings.maxOutputTokens || undefined,
       temperature: config.temperature,
       generateThinking: config.generateThinking,
+      thinkingCompatibility: config.thinkingCompatibility,
       returnNativeThinking: config.returnNativeThinking,
       tools,
       usageContext: {

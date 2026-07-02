@@ -149,6 +149,10 @@ export interface IncomingLetter {
   toolInvocations?: ToolInvocation[];
 }
 
+export type PromptCacheTtl = '5m' | '1h';
+export type PromptCacheCompatibility = 'standard' | 'openrouter' | 'nanogpt';
+export type ThinkingCompatibility = 'standard' | 'openrouter' | 'nanogpt';
+
 export interface APIConfig {
   baseUrl: string;
   apiKey: string;
@@ -156,6 +160,8 @@ export interface APIConfig {
   temperature?: number;
   generateThinking?: boolean;
   returnNativeThinking?: boolean;
+  thinkingCompatibility?: ThinkingCompatibility;
+  promptCacheCompatibility?: PromptCacheCompatibility;
 }
 
 export type ReadingBookFormat = 'txt' | 'epub';

@@ -6,7 +6,7 @@ import { Alert } from 'react-native';
 import { ChatMessage, streamChat, streamChatCompletion } from '../services/api';
 import { deleteGeneratedImageFile, generateOpenAIImage } from '../services/imageGeneration';
 import { notifyReplyReady } from '../services/notifications';
-import { useSettingsStore, type RunCommandConfig } from './settings';
+import { useSettingsStore, type PromptCacheCompatibility, type PromptCacheTtl, type RunCommandConfig, type ThinkingCompatibility } from './settings';
 import { getToolDefinitions, executeTool, getToolLabel, ToolExecutionResult } from '../services/tools';
 import { observeActiveWebView } from '../services/webviewController';
 import { formatWebViewObservation } from '../services/toolModules/webView';
@@ -837,7 +837,13 @@ interface AttachedWebViewContext {
   apiContent: string;
 }
 
-const PROMPT_CACHE_CONTROL = { type: 'ephemeral' };
+type PromptCacheControl = { type: 'ephemeral'; ttl?: '1h' };
+
+function createPromptCacheControl(ttl: PromptCacheTtl): PromptCacheControl {
+  return ttl === '1h'
+    ? { type: 'ephemeral', ttl: '1h' }
+    : { type: 'ephemeral' };
+}
 
 function contentContainsHttpUrl(content: string | any[]): boolean {
   if (typeof content === 'string') {
@@ -887,7 +893,10 @@ function isTextOnlyContent(content: any[]): boolean {
   );
 }
 
-function markPromptCacheBreakpoint(messages: ChatMessage[]): ChatMessage[] {
+function markPromptCacheBreakpoint(
+  messages: ChatMessage[],
+  cacheControl: PromptCacheControl
+): ChatMessage[] {
   const next = messages.map((message) => ({
     ...message,
     content: cloneContent(message.content),
@@ -902,7 +911,7 @@ function markPromptCacheBreakpoint(messages: ChatMessage[]): ChatMessage[] {
           {
             type: 'text',
             text: content,
-            cache_control: PROMPT_CACHE_CONTROL,
+            cache_control: cacheControl,
           },
         ],
       };
@@ -918,7 +927,7 @@ function markPromptCacheBreakpoint(messages: ChatMessage[]): ChatMessage[] {
       const targetIndex = content.length - 1 - textIndex;
       const markedContent = content.map((part, index) =>
         index === targetIndex
-          ? { ...part, cache_control: PROMPT_CACHE_CONTROL }
+          ? { ...part, cache_control: cacheControl }
           : part
       );
       next[i] = { ...next[i], content: markedContent };
@@ -933,14 +942,15 @@ function buildRequestMessages(
   systemPrompt: string,
   historyMessages: ChatMessage[],
   suffixMessages: ChatMessage[],
-  promptCacheEnabled: boolean
+  promptCacheEnabled: boolean,
+  promptCacheTtl: PromptCacheTtl
 ): ChatMessage[] {
   const cacheablePrefix = [
     { role: 'system', content: systemPrompt },
     ...historyMessages,
   ];
   const prefix = promptCacheEnabled
-    ? markPromptCacheBreakpoint(cacheablePrefix)
+    ? markPromptCacheBreakpoint(cacheablePrefix, createPromptCacheControl(promptCacheTtl))
     : cacheablePrefix;
 
   return [
@@ -1066,7 +1076,13 @@ async function runToolLoop(
     model: string;
     temperature?: number;
     generateThinking?: boolean;
+    thinkingCompatibility?: ThinkingCompatibility;
     returnNativeThinking?: boolean;
+    promptCache?: {
+      enabled: boolean;
+      ttl: PromptCacheTtl;
+      compatibility?: PromptCacheCompatibility;
+    };
   },
   requestMessages: ChatMessage[],
   maxTokens: number | undefined,
@@ -1143,7 +1159,9 @@ async function runToolLoop(
       maxTokens,
       temperature: config.temperature,
       generateThinking: config.generateThinking,
+      thinkingCompatibility: config.thinkingCompatibility,
       returnNativeThinking: config.returnNativeThinking,
+      promptCache: config.promptCache,
       tools,
       sessionId: options?.sessionId,
       usageContext: {
@@ -1479,6 +1497,14 @@ async function streamAssistantResponse(
   }
   const fullSystemPrompt = stableSystemSections.join('\n\n---\n\n');
   const promptCacheEnabled = !!settings.promptCacheConfig?.enabled;
+  const promptCacheTtl: PromptCacheTtl = settings.promptCacheConfig?.ttl === '1h' ? '1h' : '5m';
+  const promptCacheCompatibility = config.promptCacheCompatibility || 'standard';
+  const thinkingCompatibility = config.thinkingCompatibility || 'standard';
+  const promptCacheRequest = {
+    enabled: promptCacheEnabled,
+    ttl: promptCacheTtl,
+    compatibility: promptCacheCompatibility,
+  };
   const sessionId = promptCacheEnabled ? conversationId : undefined;
 
   abortController = new AbortController();
@@ -1576,7 +1602,8 @@ async function streamAssistantResponse(
     fullSystemPrompt,
     historyApiMessages,
     suffixMessages,
-    promptCacheEnabled
+    promptCacheEnabled,
+    promptCacheTtl
   );
 
   try {
@@ -1588,7 +1615,9 @@ async function streamAssistantResponse(
         model: config.model,
         temperature: config.temperature,
         generateThinking: config.generateThinking,
+        thinkingCompatibility,
         returnNativeThinking: config.returnNativeThinking,
+        promptCache: promptCacheRequest,
       },
       outgoingMessages,
       settings.maxOutputTokens || undefined,
@@ -1615,8 +1644,10 @@ async function streamAssistantResponse(
           maxTokens: settings.maxOutputTokens || undefined,
           temperature: config.temperature,
           generateThinking: config.generateThinking,
+          thinkingCompatibility,
           returnNativeThinking: config.returnNativeThinking,
           sessionId,
+          promptCache: promptCacheRequest,
           usageContext: {
             feature: 'chat',
             requestKind: 'assistant-response',

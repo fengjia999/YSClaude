@@ -2,7 +2,7 @@ import { fetch as expoFetch } from 'expo/fetch';
 import { randomUUID } from 'expo-crypto';
 import { ToolDefinition } from './tools';
 import { insertApiUsageEvent } from '../db/operations';
-import { ApiTokenUsage, ApiUsageStatus } from '../types';
+import { ApiTokenUsage, ApiUsageStatus, type PromptCacheCompatibility, type PromptCacheTtl, type ThinkingCompatibility } from '../types';
 
 export interface ChatMessage {
   role: string;
@@ -19,8 +19,10 @@ interface ChatRequest {
   maxTokens?: number;
   temperature?: number;
   generateThinking?: boolean;
+  thinkingCompatibility?: ThinkingCompatibility;
   returnNativeThinking?: boolean;
   sessionId?: string;
+  promptCache?: PromptCacheRequestOptions;
   usageContext?: ApiUsageContext;
 }
 
@@ -73,6 +75,12 @@ interface ApiUsageContext {
   conversationId?: string;
   messageId?: string;
   metadata?: Record<string, unknown>;
+}
+
+interface PromptCacheRequestOptions {
+  enabled: boolean;
+  ttl: PromptCacheTtl;
+  compatibility?: PromptCacheCompatibility;
 }
 
 interface RawApiUsage {
@@ -196,9 +204,45 @@ function wrapNativeThinking(thinking: string, content: string): string {
   return `<thinking>${trimmedThinking}</thinking>${content}`;
 }
 
-function applyThinkingConfig(body: Record<string, any>, enabled: boolean | undefined): void {
-  if (enabled) {
-    body.thinking = { type: 'adaptive' };
+export function applyThinkingConfig(
+  body: Record<string, any>,
+  enabled: boolean | undefined,
+  compatibility: ThinkingCompatibility = 'standard'
+): void {
+  if (!enabled) return;
+
+  body.reasoning = { effort: 'high' };
+  if (compatibility === 'nanogpt') {
+    body.reasoning_effort = 'high';
+  }
+}
+
+function buildChatHeaders(apiKey: string, promptCache?: PromptCacheRequestOptions): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${apiKey.trim()}`,
+  };
+
+  if (
+    promptCache?.enabled &&
+    promptCache.ttl === '1h' &&
+    promptCache.compatibility === 'nanogpt'
+  ) {
+    headers['anthropic-beta'] = 'prompt-caching-2024-07-31,extended-cache-ttl-2025-04-11';
+  }
+
+  return headers;
+}
+
+function applyPromptCacheCompatibility(body: Record<string, any>, promptCache?: PromptCacheRequestOptions): void {
+  if (!promptCache?.enabled) return;
+
+  if (promptCache.compatibility === 'nanogpt') {
+    body.promptCaching = {
+      enabled: true,
+      ttl: promptCache.ttl,
+      explicitCacheControl: true,
+    };
   }
 }
 
@@ -300,7 +344,7 @@ async function recordApiUsage({
 export async function chatCompletion(
   request: ChatRequestWithTools
 ): Promise<ChatCompletionResponse> {
-  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, tools, sessionId } = request;
+  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, thinkingCompatibility, tools, sessionId, promptCache } = request;
   const startedAt = Date.now();
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
@@ -316,21 +360,19 @@ export async function chatCompletion(
   if (typeof temperature === 'number') {
     body.temperature = temperature;
   }
-  applyThinkingConfig(body, generateThinking);
+  applyThinkingConfig(body, generateThinking, thinkingCompatibility);
   if (tools && tools.length > 0) {
     body.tools = tools;
   }
   if (sessionId) {
     body.session_id = sessionId;
   }
+  applyPromptCacheCompatibility(body, promptCache);
 
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey.trim()}`,
-      },
+      headers: buildChatHeaders(apiKey, promptCache),
       body: JSON.stringify(body),
     });
 
@@ -379,7 +421,7 @@ export async function streamChatCompletion(
   onToken: (token: string) => void,
   signal?: AbortSignal
 ): Promise<StreamChatCompletionResult> {
-  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, returnNativeThinking, tools, sessionId } = request;
+  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, thinkingCompatibility, returnNativeThinking, tools, sessionId, promptCache } = request;
   const startedAt = Date.now();
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
@@ -396,23 +438,21 @@ export async function streamChatCompletion(
   if (typeof temperature === 'number') {
     body.temperature = temperature;
   }
-  applyThinkingConfig(body, generateThinking);
+  applyThinkingConfig(body, generateThinking, thinkingCompatibility);
   if (tools && tools.length > 0) {
     body.tools = tools;
   }
   if (sessionId) {
     body.session_id = sessionId;
   }
+  applyPromptCacheCompatibility(body, promptCache);
 
   let rawUsage: RawApiUsage | undefined;
 
   try {
     const response = await expoFetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey.trim()}`,
-      },
+      headers: buildChatHeaders(apiKey, promptCache),
       body: JSON.stringify(body),
       signal,
     });
@@ -568,7 +608,7 @@ export async function streamChat(
   onToken: (token: string) => void,
   signal?: AbortSignal
 ): Promise<ApiTokenUsage | undefined> {
-  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, returnNativeThinking, sessionId } = request;
+  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, thinkingCompatibility, returnNativeThinking, sessionId, promptCache } = request;
   const startedAt = Date.now();
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
@@ -585,20 +625,18 @@ export async function streamChat(
   if (typeof temperature === 'number') {
     body.temperature = temperature;
   }
-  applyThinkingConfig(body, generateThinking);
+  applyThinkingConfig(body, generateThinking, thinkingCompatibility);
   if (sessionId) {
     body.session_id = sessionId;
   }
+  applyPromptCacheCompatibility(body, promptCache);
 
   let rawUsage: RawApiUsage | undefined;
 
   try {
     const response = await expoFetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey.trim()}`,
-      },
+      headers: buildChatHeaders(apiKey, promptCache),
       body: JSON.stringify(body),
       signal,
     });

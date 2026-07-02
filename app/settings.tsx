@@ -11,13 +11,13 @@ import { copyAsync } from 'expo-file-system/legacy';
 import { lightColors, useThemeColors, type ThemeColors } from '../src/theme/colors';
 
 import { fonts } from '../src/theme/fonts';
-import { useSettingsStore, NamedAPIConfig, TTSConfig, MemoryVaultConfig, WebSearchConfig, type ChatInputIconKey, type ChatInputAppearanceStyle, type AssistantBubbleAppearanceStyle, type ShizukuFileRoot, type StickerOwner, type CustomSticker, type QQBotConfig, type ImageGenerationFaceReference, type DailyPaperSourceConfig } from '../src/stores/settings';
+import { useSettingsStore, NamedAPIConfig, TTSConfig, MemoryVaultConfig, WebSearchConfig, type ChatInputIconKey, type ChatInputAppearanceStyle, type AssistantBubbleAppearanceStyle, type ShizukuFileRoot, type StickerOwner, type CustomSticker, type QQBotConfig, type ImageGenerationFaceReference, type DailyPaperSourceConfig, type PromptCacheCompatibility, type PromptCacheTtl, type ThinkingCompatibility } from '../src/stores/settings';
 import { TopBarIcon, TOP_BAR_ICON_ITEMS } from '../src/components/TopBarIcon';
 import type { TopBarIconKey } from '../src/utils/topBarIconTypes';
 import { useChatStore } from '../src/stores/chat';
 import { useDiaryStore } from '../src/stores/diary';
 import { playTTS, stopTTS } from '../src/services/tts';
-import { streamChat } from '../src/services/api';
+import { applyThinkingConfig, streamChat } from '../src/services/api';
 import { Diary, HiddenRange, IncomingLetterOccasion } from '../src/types';
 import { getChatDiagnosticsConversation, getFavoriteDiaries, type ChatDiagnosticsMessage } from '../src/db/operations';
 import { uploadDiary } from '../src/services/tools';
@@ -107,6 +107,20 @@ const CUSTOM_CSS_PLACEHOLDER = `.user-message {
 }`;
 const IMAGE_SIZE_OPTIONS = ['auto', '1024x1024', '1536x1024', '1024x1536'] as const;
 const IMAGE_QUALITY_OPTIONS = ['auto', 'low', 'medium', 'high'] as const;
+const PROMPT_CACHE_TTL_OPTIONS: Array<{ value: PromptCacheTtl; label: string }> = [
+  { value: '5m', label: '5min' },
+  { value: '1h', label: '1h' },
+];
+const PROMPT_CACHE_COMPATIBILITY_OPTIONS: Array<{ value: PromptCacheCompatibility; label: string }> = [
+  { value: 'standard', label: '标准' },
+  { value: 'openrouter', label: 'OpenRouter' },
+  { value: 'nanogpt', label: 'NanoGPT' },
+];
+const THINKING_COMPATIBILITY_OPTIONS: Array<{ value: ThinkingCompatibility; label: string }> = [
+  { value: 'standard', label: '标准' },
+  { value: 'openrouter', label: 'OpenRouter' },
+  { value: 'nanogpt', label: 'NanoGPT' },
+];
 type ModelPickerTarget = 'chat' | 'image';
 type ImageOptionTarget = 'size' | 'quality';
 
@@ -2353,6 +2367,8 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const [temperature, setTemperature] = useState('');
   const [generateThinking, setGenerateThinking] = useState(false);
   const [returnNativeThinking, setReturnNativeThinking] = useState(false);
+  const [thinkingCompatibility, setThinkingCompatibility] = useState<ThinkingCompatibility>('standard');
+  const [promptCacheCompatibility, setPromptCacheCompatibility] = useState<PromptCacheCompatibility>('standard');
   const [imageEnabled, setImageEnabled] = useState(imageGenerationConfig?.enabled ?? false);
   const [imageBaseUrl, setImageBaseUrl] = useState(imageGenerationConfig?.baseUrl || '');
   const [imageApiKey, setImageApiKey] = useState(imageGenerationConfig?.apiKey || '');
@@ -2394,6 +2410,8 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       setTemperature(typeof config.temperature === 'number' ? String(config.temperature) : '');
       setGenerateThinking(!!config.generateThinking);
       setReturnNativeThinking(!!config.returnNativeThinking);
+      setThinkingCompatibility(config.thinkingCompatibility || 'standard');
+      setPromptCacheCompatibility(config.promptCacheCompatibility || 'standard');
     }
   }
 
@@ -2405,6 +2423,8 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     setTemperature('');
     setGenerateThinking(false);
     setReturnNativeThinking(false);
+    setThinkingCompatibility('standard');
+    setPromptCacheCompatibility('standard');
     setModels([]);
   }
 
@@ -2473,19 +2493,20 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         return;
       }
       const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
+      const body: Record<string, any> = {
+        model: model.trim(),
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: generateThinking ? 64 : 5,
+        ...(parsedTemperature !== undefined ? { temperature: parsedTemperature } : {}),
+      };
+      applyThinkingConfig(body, generateThinking, thinkingCompatibility);
       const resp = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey.trim()}`,
         },
-        body: JSON.stringify({
-          model: model.trim(),
-          messages: [{ role: 'user', content: 'hi' }],
-          max_tokens: generateThinking ? 64 : 5,
-          ...(parsedTemperature !== undefined ? { temperature: parsedTemperature } : {}),
-          ...(generateThinking ? { thinking: { type: 'adaptive' } } : {}),
-        }),
+        body: JSON.stringify(body),
       });
       if (!resp.ok) {
         const text = await resp.text();
@@ -2515,6 +2536,8 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       ...(parsedTemperature !== undefined ? { temperature: parsedTemperature } : {}),
       generateThinking,
       returnNativeThinking,
+      thinkingCompatibility,
+      promptCacheCompatibility,
     };
     saveAPIConfig(config);
     const newIndex = useSettingsStore.getState().apiConfigs.findIndex((c) => c.name === trimmedName);
@@ -2737,7 +2760,7 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       <View style={styles.switchRow}>
         <View style={styles.switchText}>
           <Text style={styles.label}>让 AI 生成思维链</Text>
-          <Text style={styles.hint}>开启后，请求会附加 Claude thinking: {'{'} type: 'adaptive' {'}'} 参数。</Text>
+          <Text style={styles.hint}>开启后，请求会按下方渠道附加 reasoning 参数。</Text>
         </View>
         <Switch
           value={generateThinking}
@@ -2746,6 +2769,21 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
           thumbColor="#FFFFFF"
         />
       </View>
+      <Text style={styles.label}>Thinking 渠道</Text>
+      <View style={styles.segmentedRow}>
+        {THINKING_COMPATIBILITY_OPTIONS.map((item) => (
+          <Pressable
+            key={item.value}
+            style={[styles.segmentedButton, thinkingCompatibility === item.value && styles.segmentedButtonActive]}
+            onPress={() => setThinkingCompatibility(item.value)}
+          >
+            <Text style={[styles.segmentedText, thinkingCompatibility === item.value && styles.segmentedTextActive]}>
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.hint}>标准和 OpenRouter 使用 reasoning.effort；NanoGPT 额外发送 reasoning_effort。</Text>
       <View style={styles.switchRow}>
         <View style={styles.switchText}>
           <Text style={styles.label}>返回原生思维链</Text>
@@ -2758,6 +2796,21 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
           thumbColor="#FFFFFF"
         />
       </View>
+      <Text style={styles.label}>Prompt 缓存渠道</Text>
+      <View style={styles.segmentedRow}>
+        {PROMPT_CACHE_COMPATIBILITY_OPTIONS.map((item) => (
+          <Pressable
+            key={item.value}
+            style={[styles.segmentedButton, promptCacheCompatibility === item.value && styles.segmentedButtonActive]}
+            onPress={() => setPromptCacheCompatibility(item.value)}
+          >
+            <Text style={[styles.segmentedText, promptCacheCompatibility === item.value && styles.segmentedTextActive]}>
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.hint}>OpenRouter 直接透传 inline cache_control；NanoGPT 会额外发送 promptCaching 与 1h beta header。</Text>
 
       <View style={styles.actions}>
         <Pressable style={styles.testButton} onPress={handleTest} disabled={testing}>
@@ -2994,6 +3047,7 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const [imagePromptText, setImagePromptText] = useState(imageGenerationPrompt || '');
   const [importingMyphone, setImportingMyphone] = useState(false);
   const [pickingFaceReferences, setPickingFaceReferences] = useState(false);
+  const promptCacheTtl: PromptCacheTtl = promptCacheConfig?.ttl === '1h' ? '1h' : '5m';
   const [hiddenDiagnosticMessages, setHiddenDiagnosticMessages] = useState<ChatDiagnosticsMessage[]>([]);
 
   useEffect(() => {
@@ -3512,6 +3566,24 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
           trackColor={{ true: colors.primary }}
         />
       </View>
+      <Text style={styles.label}>缓存时间</Text>
+      <View style={styles.segmentedRow}>
+        {PROMPT_CACHE_TTL_OPTIONS.map((item) => (
+          <Pressable
+            key={item.value}
+            style={[styles.segmentedButton, promptCacheTtl === item.value && styles.segmentedButtonActive]}
+            onPress={() => {
+              setPromptCacheConfig({ ttl: item.value });
+              showToast(`Prompt 缓存时间已设为 ${item.label}`);
+            }}
+          >
+            <Text style={[styles.segmentedText, promptCacheTtl === item.value && styles.segmentedTextActive]}>
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.hint}>5min 使用 Claude 默认短缓存；1h 会在 cache_control 中附加 ttl。</Text>
 
       <Text style={styles.sectionTitle}>生理信息</Text>
       <Text style={styles.hint}>开启后，仅在预计生理期前两天或经期内，把本地记录推算出的简短提醒附带给 AI。默认关闭。</Text>

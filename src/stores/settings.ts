@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { sqliteStorage } from '../db/kv-storage';
-import { APIConfig, IncomingLetterOccasion } from '../types';
+import { APIConfig, IncomingLetterOccasion, type PromptCacheTtl } from '../types';
 import { DEFAULT_HOTBOARD_PLATFORM_TYPES } from '../utils/hotboardPlatforms';
 import type { TopBarIconKey } from '../utils/topBarIconTypes';
 
@@ -69,6 +69,8 @@ export interface AppearanceTheme {
 export interface NamedAPIConfig extends APIConfig {
   name: string;
 }
+
+export type { PromptCacheCompatibility, PromptCacheTtl, ThinkingCompatibility } from '../types';
 
 // HiddenRange 已迁移到 src/types，这里 re-export 保持旧的 import 路径兼容。
 export type { HiddenRange } from '../types';
@@ -297,6 +299,7 @@ export interface PeriodConfig {
 
 export interface PromptCacheConfig {
   enabled: boolean;
+  ttl: PromptCacheTtl;
 }
 
 export interface ImageGenerationFaceReference {
@@ -462,6 +465,13 @@ function normalizeIncomingLetterConfig(config?: Partial<IncomingLetterConfig>): 
         createdAt: item.createdAt || Date.now(),
         updatedAt: item.updatedAt || item.createdAt || Date.now(),
       })),
+  };
+}
+
+function normalizePromptCacheConfig(config?: Partial<PromptCacheConfig>): PromptCacheConfig {
+  return {
+    enabled: config?.enabled ?? false,
+    ttl: config?.ttl === '1h' ? '1h' : '5m',
   };
 }
 
@@ -808,6 +818,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
       promptCacheConfig: {
         enabled: false,
+        ttl: '5m',
       },
       imageGenerationConfig: {
         enabled: false,
@@ -924,7 +935,12 @@ export const useSettingsStore = create<SettingsState>()(
       setPeriodConfig: (config) =>
         set((state) => ({ periodConfig: { ...state.periodConfig, ...config } })),
       setPromptCacheConfig: (config) =>
-        set((state) => ({ promptCacheConfig: { ...(state.promptCacheConfig || { enabled: false }), ...config } })),
+        set((state) => ({
+          promptCacheConfig: normalizePromptCacheConfig({
+            ...state.promptCacheConfig,
+            ...config,
+          }),
+        })),
       setImageGenerationConfig: (config) =>
         set((state) => ({
           imageGenerationConfig: normalizeImageGenerationConfig({
@@ -1218,6 +1234,7 @@ export const useSettingsStore = create<SettingsState>()(
           _hydrated: true,
           stickerConfig: normalizeStickerConfig(state?.stickerConfig),
           floatingBallConfig: normalizeFloatingBallConfig(state?.floatingBallConfig),
+          promptCacheConfig: normalizePromptCacheConfig(state?.promptCacheConfig),
           imageGenerationConfig: normalizeImageGenerationConfig(state?.imageGenerationConfig),
           incomingLetterConfig: normalizeIncomingLetterConfig(state?.incomingLetterConfig),
           dailyPaperConfig: normalizeDailyPaperConfig(state?.dailyPaperConfig),
