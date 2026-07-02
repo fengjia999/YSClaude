@@ -337,11 +337,6 @@ export interface DailyPaperConfig {
   customSources: DailyPaperSourceConfig[];
 }
 
-export interface ScheduledTaskBackendConfig {
-  baseUrl: string;
-  apiToken: string;
-}
-
 export type StickerOwner = 'user' | 'assistant';
 
 export interface CustomSticker {
@@ -600,7 +595,6 @@ interface SettingsState {
   imageGenerationPrompt: string;
   incomingLetterConfig: IncomingLetterConfig;
   dailyPaperConfig: DailyPaperConfig;
-  scheduledTaskBackendConfig: ScheduledTaskBackendConfig;
   stickerConfig: StickerConfig;
   appearanceConfig: AppearanceConfig;
 
@@ -632,7 +626,6 @@ interface SettingsState {
   setImageGenerationPrompt: (prompt: string) => void;
   setIncomingLetterConfig: (config: Partial<IncomingLetterConfig>) => void;
   setDailyPaperConfig: (config: Partial<DailyPaperConfig>) => void;
-  setScheduledTaskBackendConfig: (config: Partial<ScheduledTaskBackendConfig>) => void;
   addIncomingLetterOccasion: (occasion: IncomingLetterOccasion) => void;
   updateIncomingLetterOccasion: (id: string, patch: Partial<IncomingLetterOccasion>) => void;
   removeIncomingLetterOccasion: (id: string) => void;
@@ -834,10 +827,6 @@ export const useSettingsStore = create<SettingsState>()(
         useDefaultSources: true,
         customSources: [],
       },
-      scheduledTaskBackendConfig: {
-        baseUrl: '',
-        apiToken: '',
-      },
       stickerConfig: createDefaultStickerConfig(),
       appearanceConfig: DEFAULT_APPEARANCE_CONFIG,
 
@@ -957,13 +946,6 @@ export const useSettingsStore = create<SettingsState>()(
             ...state.dailyPaperConfig,
             ...config,
           }),
-        })),
-      setScheduledTaskBackendConfig: (config) =>
-        set((state) => ({
-          scheduledTaskBackendConfig: {
-            ...(state.scheduledTaskBackendConfig || { baseUrl: '', apiToken: '' }),
-            ...config,
-          },
         })),
       addIncomingLetterOccasion: (occasion) =>
         set((state) => {
@@ -1228,7 +1210,6 @@ export const useSettingsStore = create<SettingsState>()(
         imageGenerationPrompt: state.imageGenerationPrompt,
         incomingLetterConfig: state.incomingLetterConfig,
         dailyPaperConfig: state.dailyPaperConfig,
-        scheduledTaskBackendConfig: state.scheduledTaskBackendConfig,
         stickerConfig: state.stickerConfig,
         appearanceConfig: state.appearanceConfig,
       }),
