@@ -18,13 +18,16 @@ import { useChatStore } from '../src/stores/chat';
 import { useDiaryStore } from '../src/stores/diary';
 import { playTTS, stopTTS } from '../src/services/tts';
 import { streamChat } from '../src/services/api';
+import { getExpoPushToken } from '../src/services/notifications';
 import {
   checkScheduledTaskServer,
   createScheduledTask,
   deleteScheduledTask,
   listScheduledTaskResults,
   listScheduledTasks,
+  registerScheduledTaskPushDevice,
   runScheduledTaskNow,
+  sendScheduledTaskTestPush,
   updateScheduledTask,
   type ScheduledTask,
   type ScheduledTaskResult,
@@ -2982,6 +2985,9 @@ function ScheduledTaskTab({ showToast, keyboardBottomInset }: SettingsTabProps) 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [runningTaskId, setRunningTaskId] = useState<string | null>(null);
+  const [registeringPush, setRegisteringPush] = useState(false);
+  const [testingPush, setTestingPush] = useState(false);
+  const [registeredDeviceCount, setRegisteredDeviceCount] = useState<number | null>(null);
 
   const serverConfig = useMemo(() => ({
     baseUrl: baseUrl.trim(),
@@ -3015,6 +3021,43 @@ function ScheduledTaskTab({ showToast, keyboardBottomInset }: SettingsTabProps) 
       Alert.alert('连接失败', error?.message || '无法连接定时任务后端');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleRegisterPushDevice() {
+    setRegisteringPush(true);
+    try {
+      const token = await getExpoPushToken();
+      const result = await registerScheduledTaskPushDevice(serverConfig, {
+        token,
+        platform: Platform.OS,
+        label: `YSClaude ${Platform.OS}`,
+      });
+      setRegisteredDeviceCount(result.deviceCount);
+      setScheduledTaskBackendConfig({
+        baseUrl: baseUrl.trim(),
+        apiToken: apiToken.trim(),
+      });
+      showToast('本机推送已注册');
+    } catch (error: any) {
+      Alert.alert('注册推送失败', error?.message || '无法注册本机推送');
+    } finally {
+      setRegisteringPush(false);
+    }
+  }
+
+  async function handleSendTestPush() {
+    setTestingPush(true);
+    try {
+      const result = await sendScheduledTaskTestPush(serverConfig);
+      showToast(`测试推送已发送 ${result.sent} 台`);
+      if (result.failed > 0) {
+        Alert.alert('测试推送完成', `已发送 ${result.sent} 台，失败 ${result.failed} 台。`);
+      }
+    } catch (error: any) {
+      Alert.alert('测试推送失败', error?.message || '无法发送测试推送');
+    } finally {
+      setTestingPush(false);
     }
   }
 
@@ -3166,6 +3209,36 @@ function ScheduledTaskTab({ showToast, keyboardBottomInset }: SettingsTabProps) 
         </Pressable>
         <Pressable style={styles.saveButton} onPress={saveBackendConfig}>
           <Text style={styles.saveButtonText}>保存连接</Text>
+        </Pressable>
+      </View>
+
+      <Text style={styles.sectionTitle}>推送通知</Text>
+      <Text style={styles.hint}>
+        注册本机后，云端任务生成完成会通过 Expo Push Service 推送到这台手机。
+        {registeredDeviceCount !== null ? ` 当前后端已启用 ${registeredDeviceCount} 台设备。` : ''}
+      </Text>
+      <View style={styles.actions}>
+        <Pressable
+          style={[styles.testButton, registeringPush && styles.importButtonDisabled]}
+          onPress={handleRegisterPushDevice}
+          disabled={registeringPush}
+        >
+          {registeringPush ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Text style={styles.testButtonText}>注册本机推送</Text>
+          )}
+        </Pressable>
+        <Pressable
+          style={[styles.saveButton, testingPush && styles.importButtonDisabled]}
+          onPress={handleSendTestPush}
+          disabled={testingPush}
+        >
+          {testingPush ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <Text style={styles.saveButtonText}>测试推送</Text>
+          )}
         </Pressable>
       </View>
 

@@ -38,6 +38,16 @@ export interface ScheduledTaskResult {
   createdAt: string;
 }
 
+export interface ScheduledTaskPushDevice {
+  id: string;
+  token: string;
+  platform?: string;
+  label?: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface UpsertScheduledTaskInput {
   title: string;
   prompt: string;
@@ -117,6 +127,22 @@ export async function listScheduledTaskResults(
     `/api/results?limit=${encodeURIComponent(String(limit))}`
   );
   return data.results || [];
+}
+
+export async function registerScheduledTaskPushDevice(
+  config: ScheduledTaskBackendConfig,
+  input: { token: string; platform?: string; label?: string }
+): Promise<{ device: ScheduledTaskPushDevice; deviceCount: number }> {
+  return request(config, '/api/devices/register', {
+    method: 'POST',
+    body: input,
+  });
+}
+
+export async function sendScheduledTaskTestPush(
+  config: ScheduledTaskBackendConfig
+): Promise<{ ok: boolean; sent: number; failed: number }> {
+  return request(config, '/api/push/test', { method: 'POST' });
 }
 
 async function request<T>(

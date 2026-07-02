@@ -1,4 +1,6 @@
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
+import * as Device from 'expo-device';
 import { AppState, Platform, type AppStateStatus } from 'react-native';
 import { useSettingsStore } from '../stores/settings';
 import { hideFloatingBallMessage, isFloatingBallShowing, showFloatingBallMessage } from './floatingBall';
@@ -80,6 +82,26 @@ export async function ensurePermission(): Promise<boolean> {
     permissionGranted = false;
     return false;
   }
+}
+
+export async function getExpoPushToken(): Promise<string> {
+  await initNotifications();
+  if (!Device.isDevice) {
+    throw new Error('远程推送需要真机运行，模拟器/Expo Go 环境可能无法获取 token。');
+  }
+  if (!(await ensurePermission())) {
+    throw new Error('通知权限未开启');
+  }
+
+  const projectId =
+    Constants.easConfig?.projectId ||
+    Constants.expoConfig?.extra?.eas?.projectId;
+  if (!projectId) {
+    throw new Error('未找到 EAS projectId，无法获取 Expo push token。');
+  }
+
+  const token = await Notifications.getExpoPushTokenAsync({ projectId });
+  return token.data;
 }
 
 // ─── 发送通知 ─────────────────────────────────────────────────
