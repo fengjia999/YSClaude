@@ -6,7 +6,7 @@ import { Alert } from 'react-native';
 import { ChatMessage, streamChat, streamChatCompletion } from '../services/api';
 import { deleteGeneratedImageFile, generateOpenAIImage } from '../services/imageGeneration';
 import { notifyReplyReady } from '../services/notifications';
-import { useSettingsStore, type PromptCacheCompatibility, type PromptCacheTtl, type RunCommandConfig, type ThinkingCompatibility } from './settings';
+import { useSettingsStore, type PromptCacheCompatibility, type PromptCacheTtl, type RunCommandConfig, type StablePromptRole, type ThinkingCompatibility, type ThinkingEffort } from './settings';
 import { getToolDefinitions, executeTool, getToolLabel, ToolExecutionResult } from '../services/tools';
 import { observeActiveWebView } from '../services/webviewController';
 import { formatWebViewObservation } from '../services/toolModules/webView';
@@ -940,13 +940,14 @@ function markPromptCacheBreakpoint(
 
 function buildRequestMessages(
   systemPrompt: string,
+  stablePromptRole: StablePromptRole,
   historyMessages: ChatMessage[],
   suffixMessages: ChatMessage[],
   promptCacheEnabled: boolean,
   promptCacheTtl: PromptCacheTtl
 ): ChatMessage[] {
   const cacheablePrefix = [
-    { role: 'system', content: systemPrompt },
+    { role: stablePromptRole, content: systemPrompt },
     ...historyMessages,
   ];
   const prefix = promptCacheEnabled
@@ -1076,6 +1077,7 @@ async function runToolLoop(
     model: string;
     temperature?: number;
     generateThinking?: boolean;
+    thinkingEffort?: ThinkingEffort;
     thinkingCompatibility?: ThinkingCompatibility;
     returnNativeThinking?: boolean;
     promptCache?: {
@@ -1159,6 +1161,7 @@ async function runToolLoop(
       maxTokens,
       temperature: config.temperature,
       generateThinking: config.generateThinking,
+      thinkingEffort: config.thinkingEffort,
       thinkingCompatibility: config.thinkingCompatibility,
       returnNativeThinking: config.returnNativeThinking,
       promptCache: config.promptCache,
@@ -1500,6 +1503,7 @@ async function streamAssistantResponse(
   const promptCacheTtl: PromptCacheTtl = settings.promptCacheConfig?.ttl === '1h' ? '1h' : '5m';
   const promptCacheCompatibility = config.promptCacheCompatibility || 'standard';
   const thinkingCompatibility = config.thinkingCompatibility || 'standard';
+  const thinkingEffort: ThinkingEffort = config.thinkingEffort || 'high';
   const promptCacheRequest = {
     enabled: promptCacheEnabled,
     ttl: promptCacheTtl,
@@ -1597,9 +1601,10 @@ async function streamAssistantResponse(
     !message.content.trim() &&
     (!message.toolInvocations || message.toolInvocations.length === 0);
 
-  // 流式路径要发送的完整消息：稳定 system + 历史对话用于缓存，运行时上下文与最新输入放在后缀。
+  // 流式路径要发送的完整消息：稳定提示词 + 历史对话用于缓存，运行时上下文与最新输入放在后缀。
   const outgoingMessages = buildRequestMessages(
     fullSystemPrompt,
+    settings.stablePromptRole || 'system',
     historyApiMessages,
     suffixMessages,
     promptCacheEnabled,
@@ -1615,6 +1620,7 @@ async function streamAssistantResponse(
         model: config.model,
         temperature: config.temperature,
         generateThinking: config.generateThinking,
+        thinkingEffort,
         thinkingCompatibility,
         returnNativeThinking: config.returnNativeThinking,
         promptCache: promptCacheRequest,
@@ -1644,6 +1650,7 @@ async function streamAssistantResponse(
           maxTokens: settings.maxOutputTokens || undefined,
           temperature: config.temperature,
           generateThinking: config.generateThinking,
+          thinkingEffort,
           thinkingCompatibility,
           returnNativeThinking: config.returnNativeThinking,
           sessionId,

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { sqliteStorage } from '../db/kv-storage';
-import { APIConfig, IncomingLetterOccasion, type PromptCacheTtl } from '../types';
+import { APIConfig, IncomingLetterOccasion, type PromptCacheTtl, type StablePromptRole } from '../types';
 import { DEFAULT_HOTBOARD_PLATFORM_TYPES } from '../utils/hotboardPlatforms';
 import type { TopBarIconKey } from '../utils/topBarIconTypes';
 
@@ -70,7 +70,7 @@ export interface NamedAPIConfig extends APIConfig {
   name: string;
 }
 
-export type { PromptCacheCompatibility, PromptCacheTtl, ThinkingCompatibility } from '../types';
+export type { PromptCacheCompatibility, PromptCacheTtl, ThinkingCompatibility, ThinkingEffort, StablePromptRole } from '../types';
 
 // HiddenRange 已迁移到 src/types，这里 re-export 保持旧的 import 路径兼容。
 export type { HiddenRange } from '../types';
@@ -581,6 +581,7 @@ interface SettingsState {
   apiConfigs: NamedAPIConfig[];
   activeConfigIndex: number;
   systemPrompt: string;
+  stablePromptRole: StablePromptRole;
   systemPrompts: { name: string; content: string }[];
   maxOutputTokens: number | null;
   tokenWarningThreshold: number | null;
@@ -612,6 +613,7 @@ interface SettingsState {
   saveAPIConfig: (config: NamedAPIConfig) => void;
   removeAPIConfig: (index: number) => void;
   setSystemPrompt: (prompt: string) => void;
+  setStablePromptRole: (role: StablePromptRole) => void;
   setSystemPrompts: (prompts: { name: string; content: string }[]) => void;
   setMaxOutputTokens: (tokens: number | null) => void;
   setTokenWarningThreshold: (tokens: number | null) => void;
@@ -664,6 +666,7 @@ export const useSettingsStore = create<SettingsState>()(
       apiConfigs: [],
       activeConfigIndex: 0,
       systemPrompt: 'You are a helpful assistant.',
+      stablePromptRole: 'system',
       systemPrompts: [
         { name: '默认', content: 'You are a helpful assistant.' },
       ],
@@ -864,6 +867,7 @@ export const useSettingsStore = create<SettingsState>()(
         })),
 
       setSystemPrompt: (prompt) => set({ systemPrompt: prompt }),
+      setStablePromptRole: (role) => set({ stablePromptRole: role }),
       setSystemPrompts: (prompts) => set({ systemPrompts: prompts }),
 
       setMaxOutputTokens: (tokens) => set({ maxOutputTokens: tokens }),
@@ -1202,6 +1206,7 @@ export const useSettingsStore = create<SettingsState>()(
         apiConfigs: state.apiConfigs,
         activeConfigIndex: state.activeConfigIndex,
         systemPrompt: state.systemPrompt,
+        stablePromptRole: state.stablePromptRole,
         systemPrompts: state.systemPrompts,
         maxOutputTokens: state.maxOutputTokens,
         tokenWarningThreshold: state.tokenWarningThreshold,

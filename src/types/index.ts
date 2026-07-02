@@ -152,6 +152,8 @@ export interface IncomingLetter {
 export type PromptCacheTtl = '5m' | '1h';
 export type PromptCacheCompatibility = 'standard' | 'openrouter' | 'nanogpt';
 export type ThinkingCompatibility = 'standard' | 'openrouter' | 'nanogpt';
+export type ThinkingEffort = 'low' | 'medium' | 'high';
+export type StablePromptRole = 'system' | 'user' | 'assistant';
 
 export interface APIConfig {
   baseUrl: string;
@@ -159,6 +161,7 @@ export interface APIConfig {
   model: string;
   temperature?: number;
   generateThinking?: boolean;
+  thinkingEffort?: ThinkingEffort;
   returnNativeThinking?: boolean;
   thinkingCompatibility?: ThinkingCompatibility;
   promptCacheCompatibility?: PromptCacheCompatibility;

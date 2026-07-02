@@ -11,7 +11,7 @@ import { copyAsync } from 'expo-file-system/legacy';
 import { lightColors, useThemeColors, type ThemeColors } from '../src/theme/colors';
 
 import { fonts } from '../src/theme/fonts';
-import { useSettingsStore, NamedAPIConfig, TTSConfig, MemoryVaultConfig, WebSearchConfig, type ChatInputIconKey, type ChatInputAppearanceStyle, type AssistantBubbleAppearanceStyle, type ShizukuFileRoot, type StickerOwner, type CustomSticker, type QQBotConfig, type ImageGenerationFaceReference, type DailyPaperSourceConfig, type PromptCacheCompatibility, type PromptCacheTtl, type ThinkingCompatibility } from '../src/stores/settings';
+import { useSettingsStore, NamedAPIConfig, TTSConfig, MemoryVaultConfig, WebSearchConfig, type ChatInputIconKey, type ChatInputAppearanceStyle, type AssistantBubbleAppearanceStyle, type ShizukuFileRoot, type StickerOwner, type CustomSticker, type QQBotConfig, type ImageGenerationFaceReference, type DailyPaperSourceConfig, type PromptCacheCompatibility, type PromptCacheTtl, type StablePromptRole, type ThinkingCompatibility, type ThinkingEffort } from '../src/stores/settings';
 import { TopBarIcon, TOP_BAR_ICON_ITEMS } from '../src/components/TopBarIcon';
 import type { TopBarIconKey } from '../src/utils/topBarIconTypes';
 import { useChatStore } from '../src/stores/chat';
@@ -120,6 +120,16 @@ const THINKING_COMPATIBILITY_OPTIONS: Array<{ value: ThinkingCompatibility; labe
   { value: 'standard', label: '标准' },
   { value: 'openrouter', label: 'OpenRouter' },
   { value: 'nanogpt', label: 'NanoGPT' },
+];
+const THINKING_EFFORT_OPTIONS: Array<{ value: ThinkingEffort; label: string }> = [
+  { value: 'low', label: 'low' },
+  { value: 'medium', label: 'medium' },
+  { value: 'high', label: 'high' },
+];
+const STABLE_PROMPT_ROLE_OPTIONS: Array<{ value: StablePromptRole; label: string }> = [
+  { value: 'system', label: 'System' },
+  { value: 'user', label: 'User' },
+  { value: 'assistant', label: 'Assistant' },
 ];
 type ModelPickerTarget = 'chat' | 'image';
 type ImageOptionTarget = 'size' | 'quality';
@@ -2367,6 +2377,7 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
   const [temperature, setTemperature] = useState('');
   const [generateThinking, setGenerateThinking] = useState(false);
   const [returnNativeThinking, setReturnNativeThinking] = useState(false);
+  const [thinkingEffort, setThinkingEffort] = useState<ThinkingEffort>('high');
   const [thinkingCompatibility, setThinkingCompatibility] = useState<ThinkingCompatibility>('standard');
   const [promptCacheCompatibility, setPromptCacheCompatibility] = useState<PromptCacheCompatibility>('standard');
   const [imageEnabled, setImageEnabled] = useState(imageGenerationConfig?.enabled ?? false);
@@ -2410,6 +2421,7 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       setTemperature(typeof config.temperature === 'number' ? String(config.temperature) : '');
       setGenerateThinking(!!config.generateThinking);
       setReturnNativeThinking(!!config.returnNativeThinking);
+      setThinkingEffort(config.thinkingEffort || 'high');
       setThinkingCompatibility(config.thinkingCompatibility || 'standard');
       setPromptCacheCompatibility(config.promptCacheCompatibility || 'standard');
     }
@@ -2423,6 +2435,7 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     setTemperature('');
     setGenerateThinking(false);
     setReturnNativeThinking(false);
+    setThinkingEffort('high');
     setThinkingCompatibility('standard');
     setPromptCacheCompatibility('standard');
     setModels([]);
@@ -2499,7 +2512,7 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         max_tokens: generateThinking ? 64 : 5,
         ...(parsedTemperature !== undefined ? { temperature: parsedTemperature } : {}),
       };
-      applyThinkingConfig(body, generateThinking, thinkingCompatibility);
+      applyThinkingConfig(body, generateThinking, thinkingCompatibility, thinkingEffort);
       const resp = await fetch(url, {
         method: 'POST',
         headers: {
@@ -2535,6 +2548,7 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
       name: trimmedName, baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), model: model.trim(),
       ...(parsedTemperature !== undefined ? { temperature: parsedTemperature } : {}),
       generateThinking,
+      thinkingEffort,
       returnNativeThinking,
       thinkingCompatibility,
       promptCacheCompatibility,
@@ -2757,6 +2771,21 @@ function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
           placeholderTextColor={colors.textTertiary}
         />
       </View>
+      <Text style={styles.label}>Thinking 强度</Text>
+      <View style={styles.segmentedRow}>
+        {THINKING_EFFORT_OPTIONS.map((item) => (
+          <Pressable
+            key={item.value}
+            style={[styles.segmentedButton, thinkingEffort === item.value && styles.segmentedButtonActive]}
+            onPress={() => setThinkingEffort(item.value)}
+          >
+            <Text style={[styles.segmentedText, thinkingEffort === item.value && styles.segmentedTextActive]}>
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.hint}>强度越高通常思考更充分，但可能更慢、消耗更多 reasoning tokens。</Text>
       <View style={styles.switchRow}>
         <View style={styles.switchText}>
           <Text style={styles.label}>让 AI 生成思维链</Text>
@@ -3011,12 +3040,14 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
     maxOutputTokens,
     tokenWarningThreshold,
     systemPrompt,
+    stablePromptRole,
     stripThinking,
     periodConfig,
     promptCacheConfig,
     imageGenerationConfig,
     imageGenerationPrompt,
     setSystemPrompt,
+    setStablePromptRole,
     setMaxOutputTokens,
     setTokenWarningThreshold,
     setStripThinking,
@@ -3327,6 +3358,24 @@ function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabProps) {
         placeholder="You are a helpful assistant."
         placeholderTextColor={colors.textTertiary}
       />
+      <Text style={styles.label}>发送身份</Text>
+      <View style={styles.segmentedRow}>
+        {STABLE_PROMPT_ROLE_OPTIONS.map((item) => (
+          <Pressable
+            key={item.value}
+            style={[styles.segmentedButton, (stablePromptRole || 'system') === item.value && styles.segmentedButtonActive]}
+            onPress={() => {
+              setStablePromptRole(item.value);
+              showToast(`System Prompt 将以 ${item.label} 身份发送`);
+            }}
+          >
+            <Text style={[styles.segmentedText, (stablePromptRole || 'system') === item.value && styles.segmentedTextActive]}>
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.hint}>使用 Claude Code OAuth 反代且开启 cloak 时，建议选 User，避免稳定提示词和收藏日记被上游 system cloaking 清洗。</Text>
 
       <Text style={styles.sectionTitle}>生图配置</Text>
       <Text style={styles.hint}>AI 回复中的 [Pic:图片描述] 会与这里的基础提示词组合后发送给生图 API；这里不会作为真实图片发回给聊天 AI。</Text>

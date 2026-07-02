@@ -2,7 +2,7 @@ import { fetch as expoFetch } from 'expo/fetch';
 import { randomUUID } from 'expo-crypto';
 import { ToolDefinition } from './tools';
 import { insertApiUsageEvent } from '../db/operations';
-import { ApiTokenUsage, ApiUsageStatus, type PromptCacheCompatibility, type PromptCacheTtl, type ThinkingCompatibility } from '../types';
+import { ApiTokenUsage, ApiUsageStatus, type PromptCacheCompatibility, type PromptCacheTtl, type ThinkingCompatibility, type ThinkingEffort } from '../types';
 
 export interface ChatMessage {
   role: string;
@@ -19,6 +19,7 @@ interface ChatRequest {
   maxTokens?: number;
   temperature?: number;
   generateThinking?: boolean;
+  thinkingEffort?: ThinkingEffort;
   thinkingCompatibility?: ThinkingCompatibility;
   returnNativeThinking?: boolean;
   sessionId?: string;
@@ -207,13 +208,14 @@ function wrapNativeThinking(thinking: string, content: string): string {
 export function applyThinkingConfig(
   body: Record<string, any>,
   enabled: boolean | undefined,
-  compatibility: ThinkingCompatibility = 'standard'
+  compatibility: ThinkingCompatibility = 'standard',
+  effort: ThinkingEffort = 'high'
 ): void {
   if (!enabled) return;
 
-  body.reasoning = { effort: 'high' };
+  body.reasoning = { effort };
   if (compatibility === 'nanogpt') {
-    body.reasoning_effort = 'high';
+    body.reasoning_effort = effort;
   }
 }
 
@@ -344,7 +346,7 @@ async function recordApiUsage({
 export async function chatCompletion(
   request: ChatRequestWithTools
 ): Promise<ChatCompletionResponse> {
-  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, thinkingCompatibility, tools, sessionId, promptCache } = request;
+  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, thinkingEffort, thinkingCompatibility, tools, sessionId, promptCache } = request;
   const startedAt = Date.now();
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
@@ -360,7 +362,7 @@ export async function chatCompletion(
   if (typeof temperature === 'number') {
     body.temperature = temperature;
   }
-  applyThinkingConfig(body, generateThinking, thinkingCompatibility);
+  applyThinkingConfig(body, generateThinking, thinkingCompatibility, thinkingEffort);
   if (tools && tools.length > 0) {
     body.tools = tools;
   }
@@ -421,7 +423,7 @@ export async function streamChatCompletion(
   onToken: (token: string) => void,
   signal?: AbortSignal
 ): Promise<StreamChatCompletionResult> {
-  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, thinkingCompatibility, returnNativeThinking, tools, sessionId, promptCache } = request;
+  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, thinkingEffort, thinkingCompatibility, returnNativeThinking, tools, sessionId, promptCache } = request;
   const startedAt = Date.now();
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
@@ -438,7 +440,7 @@ export async function streamChatCompletion(
   if (typeof temperature === 'number') {
     body.temperature = temperature;
   }
-  applyThinkingConfig(body, generateThinking, thinkingCompatibility);
+  applyThinkingConfig(body, generateThinking, thinkingCompatibility, thinkingEffort);
   if (tools && tools.length > 0) {
     body.tools = tools;
   }
@@ -608,7 +610,7 @@ export async function streamChat(
   onToken: (token: string) => void,
   signal?: AbortSignal
 ): Promise<ApiTokenUsage | undefined> {
-  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, thinkingCompatibility, returnNativeThinking, sessionId, promptCache } = request;
+  const { baseUrl, apiKey, model, messages, maxTokens, temperature, generateThinking, thinkingEffort, thinkingCompatibility, returnNativeThinking, sessionId, promptCache } = request;
   const startedAt = Date.now();
 
   const url = `${baseUrl.trim().replace(/\/$/, '')}/chat/completions`;
@@ -625,7 +627,7 @@ export async function streamChat(
   if (typeof temperature === 'number') {
     body.temperature = temperature;
   }
-  applyThinkingConfig(body, generateThinking, thinkingCompatibility);
+  applyThinkingConfig(body, generateThinking, thinkingCompatibility, thinkingEffort);
   if (sessionId) {
     body.session_id = sessionId;
   }
