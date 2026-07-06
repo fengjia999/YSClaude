@@ -458,7 +458,6 @@ interface ChatState {
   pendingScrollMessageId: string | null;
   openToBottomRequestId: number;
   isStreaming: boolean;
-  isPromptCacheKeepaliveRunning: boolean;
   isRemoteInboxSyncing: boolean;
   remoteInboxSyncConversationId: string | null;
   error: string | null;
@@ -473,7 +472,6 @@ interface ChatState {
     preferredConversationId?: string | null;
     showLoading?: boolean;
   }) => Promise<void>;
-  keepPromptCacheAlive: () => Promise<void>;
   triggerResponse: () => Promise<void>;
   markMessagesForAutoHideAfterResponse: (ids: string[]) => void;
   stopStreaming: () => void;
@@ -1427,11 +1425,6 @@ async function buildPromptCacheKeepaliveRequest(
   };
 }
 
-function shouldRetryKeepaliveWithOneToken(error: unknown): boolean {
-  const text = String((error as any)?.message || error || '').toLowerCase();
-  return text.includes('max_tokens') || text.includes('max tokens') || text.includes('greater than 0');
-}
-
 /**
  * Tool Use 循环。
  * 返回是否已由工具流式路径处理；若没有启用任何工具则返回 false（调用方走普通流式路径）。
@@ -2069,7 +2062,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingScrollMessageId: null,
   openToBottomRequestId: 0,
   isStreaming: false,
-  isPromptCacheKeepaliveRunning: false,
   isRemoteInboxSyncing: false,
   remoteInboxSyncConversationId: null,
   error: null,
@@ -2361,49 +2353,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
             : {}
         ));
       }
-    }
-  },
-
-  keepPromptCacheAlive: async () => {
-    const { conversationId, hiddenRanges, isPromptCacheKeepaliveRunning, isStreaming } = get();
-    if (!conversationId) {
-      throw new Error('当前没有可保活的对话');
-    }
-    if (isStreaming) {
-      throw new Error('Claude 正在回复，稍后再保活');
-    }
-    if (isPromptCacheKeepaliveRunning) {
-      return;
-    }
-
-    set({ isPromptCacheKeepaliveRunning: true });
-    try {
-      const request = await buildPromptCacheKeepaliveRequest(conversationId, hiddenRanges);
-      const runKeepalive = (maxTokens: number) => streamChat(
-        {
-          ...request,
-          maxTokens,
-          usageContext: {
-            feature: 'chat',
-            requestKind: 'prompt-cache-keepalive',
-            conversationId,
-          },
-        },
-        () => undefined
-      );
-
-      try {
-        await runKeepalive(0);
-      } catch (error) {
-        if (!shouldRetryKeepaliveWithOneToken(error)) {
-          throw error;
-        }
-        await runKeepalive(1);
-      }
-
-      handlePromptCacheKeepaliveAfterSuccess(conversationId, true, request.promptCache.ttl, { request });
-    } finally {
-      set({ isPromptCacheKeepaliveRunning: false });
     }
   },
 

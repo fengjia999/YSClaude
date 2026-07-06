@@ -13,8 +13,6 @@ import {
 } from '../src/services/notifications';
 import { WebViewPanel } from '../src/components/WebViewPanel';
 import { useSettingsStore } from '../src/stores/settings';
-import { useLicenseStore } from '../src/stores/license';
-import { InviteGate } from '../src/components/InviteGate';
 import { IncomingShareHandler } from '../src/components/IncomingShareHandler';
 import {
   addFloatingBallToolActionListener,
@@ -45,8 +43,6 @@ export default function RootLayout() {
     'TiemposText-Strong': require('../assets/TiemposText-bold2.otf'),
   });
   const settingsHydrated = useSettingsStore((state) => state._hydrated);
-  const licenseHydrated = useLicenseStore((state) => state._hydrated);
-  const licenseGrant = useLicenseStore((state) => state.grant);
   const floatingBallEnabled = useSettingsStore((state) => state.floatingBallConfig.enabled);
   const floatingBallNormalImageUrisKey = useSettingsStore((state) =>
     (state.floatingBallConfig.normalImageUris || []).join('|') || state.floatingBallConfig.normalImageUri || ''
@@ -64,12 +60,7 @@ export default function RootLayout() {
   }, [fontsLoaded]);
 
   useEffect(() => {
-    if (!settingsHydrated || !licenseHydrated) return;
-
-    if (!licenseGrant) {
-      hideFloatingBall().catch(() => undefined);
-      return;
-    }
+    if (!settingsHydrated) return;
 
     if (floatingBallEnabled) {
       showFloatingBall().catch(() => undefined);
@@ -78,8 +69,6 @@ export default function RootLayout() {
     }
   }, [
     settingsHydrated,
-    licenseHydrated,
-    licenseGrant,
     floatingBallEnabled,
     floatingBallNormalImageUrisKey,
     floatingBallEdgeImageUrisKey,
@@ -147,73 +136,67 @@ export default function RootLayout() {
   return (
     <>
       <StatusBar style={statusBarStyle} />
-      <InviteGate>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="index" />
-          <Stack.Screen
-            name="history"
-            options={{ animation: 'slide_from_left', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="settings"
-            options={{ animation: 'slide_from_right', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="chat-diagnostics"
-            options={{ animation: 'slide_from_right', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="api-usage"
-            options={{ animation: 'slide_from_right', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="api-achievements"
-            options={{ animation: 'slide_from_right', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="music"
-            options={{ animation: 'slide_from_right', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="music-playlists"
-            options={{ animation: 'slide_from_right', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="focus"
-            options={{ animation: 'slide_from_right', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="daily-paper/[date]"
-            options={{ animation: 'slide_from_right', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="reading/index"
-            options={{ animation: 'slide_from_right', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="reading/[id]"
-            options={{ animation: 'slide_from_right' }}
-          />
-          <Stack.Screen
-            name="game/index"
-            options={{ animation: 'slide_from_right', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="game/[id]"
-            options={{ animation: 'slide_from_right' }}
-          />
-          <Stack.Screen
-            name="m5stack"
-            options={{ animation: 'slide_from_right', presentation: 'modal' }}
-          />
-          <Stack.Screen
-            name="chat/[id]"
-            options={{ animation: 'slide_from_right' }}
-          />
-        </Stack>
-        <WebViewPanel />
-        <IncomingShareHandler />
-      </InviteGate>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen
+          name="history"
+          options={{ animation: 'slide_from_left', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="settings"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="chat-diagnostics"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="api-usage"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="api-achievements"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="music"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="music-playlists"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="focus"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="daily-paper/[date]"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="reading/index"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="reading/[id]"
+          options={{ animation: 'slide_from_right' }}
+        />
+        <Stack.Screen
+          name="game/index"
+          options={{ animation: 'slide_from_right', presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="game/[id]"
+          options={{ animation: 'slide_from_right' }}
+        />
+        <Stack.Screen
+          name="chat/[id]"
+          options={{ animation: 'slide_from_right' }}
+        />
+      </Stack>
+      <WebViewPanel />
+      <IncomingShareHandler />
     </>
   );
 }

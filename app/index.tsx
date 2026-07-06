@@ -42,7 +42,7 @@ import { ChatInput } from '../src/components/ChatInput';
 import { ModelSelector } from '../src/components/ModelSelector';
 import { TimeDivider } from '../src/components/TimeDivider';
 import { IncomingLetter, Message } from '../src/types';
-import { TIME_GAP_THRESHOLD_MS } from '../src/utils/time';
+import { formatFullTime, TIME_GAP_THRESHOLD_MS } from '../src/utils/time';
 import { pickGreeting } from '../src/utils/greetings';
 import {
   buildPeriodDateSet,
@@ -58,6 +58,13 @@ import {
   markIncomingLetterShown,
 } from '../src/db/operations';
 import { ensureTodayIncomingLetters } from '../src/services/incomingLetters';
+import {
+  flushPromptCacheRemoteSnapshotNow,
+  getPromptCacheRemoteSnapshotStatus,
+  refreshPromptCacheRemoteServerStatus,
+  subscribePromptCacheRemoteSnapshotStatus,
+  type PromptCacheRemoteSnapshotStatus,
+} from '../src/services/promptCacheKeepalive';
 
 
 let colors = lightColors;
@@ -65,6 +72,7 @@ const INPUT_BAR_FALLBACK_HEIGHT = 128;
 const MESSAGE_BOTTOM_GAP = 16;
 const MESSAGE_TOP_GAP = 104;
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
+const CLAWD_STATUS_AUTO_CLOSE_MS = 5200;
 
 function ChatMessageEntrance({
   animate,
@@ -157,6 +165,54 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
+function formatRemoteSnapshotState(status: PromptCacheRemoteSnapshotStatus): string {
+  if (status.state === 'syncing') return '同步中';
+  if (status.state === 'pending') return '待同步';
+  if (status.state === 'failed') return '同步失败';
+  if (status.state === 'synced' && status.source === 'server') return '服务端快照';
+  if (status.state === 'synced') return '已同步';
+  return '暂无快照';
+}
+
+function formatRemoteSnapshotTime(status: PromptCacheRemoteSnapshotStatus): string {
+  if (status.nextSyncAt) return `预计同步 ${formatFullTime(status.nextSyncAt)}`;
+  if (status.syncedAt) return `最近同步 ${formatFullTime(status.syncedAt)}`;
+  if (status.lastSyncAttemptAt) return `最近尝试 ${formatFullTime(status.lastSyncAttemptAt)}`;
+  if (status.queuedAt) return `入队时间 ${formatFullTime(status.queuedAt)}`;
+  if (status.serverUpdatedAt) return `服务端更新 ${formatFullTime(status.serverUpdatedAt)}`;
+  if (status.serverStatusFetchedAt) return `服务端状态 ${formatFullTime(status.serverStatusFetchedAt)}`;
+  return '等待 1h cache 命中后的成功请求';
+}
+
+function formatRemoteServerStatus(status: PromptCacheRemoteSnapshotStatus): string | null {
+  if (!status.serverStatus) return null;
+  if (status.serverStatus === 'active') return '服务器保活中';
+  if (status.serverStatus === 'disabled') {
+    return status.serverDisabledReason
+      ? `服务器已停用：${status.serverDisabledReason}`
+      : '服务器已停用';
+  }
+  return `服务器状态：${status.serverStatus}`;
+}
+
+function formatRemoteSnapshotSourceMeta(status: PromptCacheRemoteSnapshotStatus): string {
+  const source = status.source === 'server' ? '服务端' : '本地';
+  if (status.state === 'syncing') return `${source} · 正在上传`;
+  if (status.queueCount > 0) return `${source} · 队列 ${status.queueCount}/5`;
+  return `${source} · 无待同步队列`;
+}
+
+function formatSnapshotHash(hash: string | null): string | null {
+  return hash ? hash.slice(0, 10) : null;
+}
+
+function roleLabel(role: string): string {
+  if (role === 'user') return '你';
+  if (role === 'assistant') return 'AI';
+  if (role === 'system') return '系统';
+  return '工具';
+}
+
 export default function ChatScreen() {
   colors = useThemeColors();
   styles = useMemo(() => createStyles(colors), [colors]);
@@ -220,6 +276,10 @@ export default function ChatScreen() {
   const [isInitialPositioning, setIsInitialPositioning] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [incomingLetter, setIncomingLetter] = useState<IncomingLetter | null>(null);
+  const [clawdStatusVisible, setClawdStatusVisible] = useState(false);
+  const [remoteSnapshotStatus, setRemoteSnapshotStatus] = useState(() => getPromptCacheRemoteSnapshotStatus());
+  const [refreshingRemoteServerStatus, setRefreshingRemoteServerStatus] = useState(false);
+  const [flushingRemoteSnapshot, setFlushingRemoteSnapshot] = useState(false);
   const showRemoteInboxLoading = !!conversationId
     && isRemoteInboxSyncing
     && remoteInboxSyncConversationId === conversationId;
@@ -230,6 +290,7 @@ export default function ChatScreen() {
   const scrollFollowUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialPositioningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clawdStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const newerMessagesAutoScrollResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enteringMessageTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const listHeightRef = useRef(0);
@@ -432,6 +493,9 @@ export default function ChatScreen() {
       if (toastTimerRef.current !== null) {
         clearTimeout(toastTimerRef.current);
       }
+      if (clawdStatusTimerRef.current !== null) {
+        clearTimeout(clawdStatusTimerRef.current);
+      }
       if (newerMessagesAutoScrollResetTimerRef.current !== null) {
         clearTimeout(newerMessagesAutoScrollResetTimerRef.current);
       }
@@ -449,6 +513,60 @@ export default function ChatScreen() {
       setToastMessage(null);
       toastTimerRef.current = null;
     }, 1800);
+  }, []);
+
+  const closeClawdStatus = useCallback(() => {
+    if (clawdStatusTimerRef.current !== null) {
+      clearTimeout(clawdStatusTimerRef.current);
+      clawdStatusTimerRef.current = null;
+    }
+    setClawdStatusVisible(false);
+  }, []);
+
+  const openClawdStatus = useCallback(() => {
+    if (clawdStatusTimerRef.current !== null) {
+      clearTimeout(clawdStatusTimerRef.current);
+    }
+    setRemoteSnapshotStatus(getPromptCacheRemoteSnapshotStatus());
+    setClawdStatusVisible(true);
+    clawdStatusTimerRef.current = setTimeout(() => {
+      setClawdStatusVisible(false);
+      clawdStatusTimerRef.current = null;
+    }, CLAWD_STATUS_AUTO_CLOSE_MS);
+  }, []);
+
+  const handleRefreshRemoteServerStatus = useCallback(async () => {
+    if (refreshingRemoteServerStatus) return;
+    setRefreshingRemoteServerStatus(true);
+    try {
+      const ok = await refreshPromptCacheRemoteServerStatus(conversationId);
+      showToast(ok ? '已刷新服务器快照状态' : '服务器状态读取失败');
+    } catch (error: any) {
+      showToast(error?.message || '服务器状态读取失败');
+    } finally {
+      setRemoteSnapshotStatus(getPromptCacheRemoteSnapshotStatus());
+      setRefreshingRemoteServerStatus(false);
+    }
+  }, [conversationId, refreshingRemoteServerStatus, showToast]);
+
+  const handleFlushRemoteSnapshotNow = useCallback(async () => {
+    if (flushingRemoteSnapshot || remoteSnapshotStatus.queueCount <= 0) return;
+    setFlushingRemoteSnapshot(true);
+    try {
+      const ok = await flushPromptCacheRemoteSnapshotNow();
+      showToast(ok ? '快照已同步到远程服务' : '快照同步失败');
+    } catch (error: any) {
+      showToast(error?.message || '快照同步失败');
+    } finally {
+      setRemoteSnapshotStatus(getPromptCacheRemoteSnapshotStatus());
+      setFlushingRemoteSnapshot(false);
+    }
+  }, [flushingRemoteSnapshot, remoteSnapshotStatus.queueCount, showToast]);
+
+  useEffect(() => {
+    return subscribePromptCacheRemoteSnapshotStatus(() => {
+      setRemoteSnapshotStatus(getPromptCacheRemoteSnapshotStatus());
+    });
   }, []);
 
   const clearEnteringMessageAnimations = useCallback(() => {
@@ -993,6 +1111,26 @@ export default function ChatScreen() {
       ListEmptyComponent={<EmptyState />}
     />
   );
+  const remoteServerStatusText = formatRemoteServerStatus(remoteSnapshotStatus);
+  const remoteSnapshotHash = formatSnapshotHash(remoteSnapshotStatus.serverSnapshotHash);
+  const remoteSnapshotMeta = [
+    remoteSnapshotStatus.model ? `模型 ${remoteSnapshotStatus.model}` : null,
+    remoteSnapshotStatus.messageCount > 0 ? `${remoteSnapshotStatus.messageCount} 条消息` : null,
+    remoteSnapshotHash ? `#${remoteSnapshotHash}` : null,
+  ].filter(Boolean).join(' · ');
+  const remoteSnapshotLastMessage = remoteSnapshotStatus.lastMessageTail
+    ? `${roleLabel(remoteSnapshotStatus.lastMessageRole || '')}：${remoteSnapshotStatus.lastMessageTail}`
+    : '暂无快照消息预览';
+  const remoteServerNextKeepalive = remoteSnapshotStatus.serverNextKeepaliveAt
+    ? `下次保活 ${formatFullTime(remoteSnapshotStatus.serverNextKeepaliveAt)}`
+    : null;
+  const remoteServerFetchedAt = remoteSnapshotStatus.serverStatusFetchedAt
+    ? `服务器状态 ${formatFullTime(remoteSnapshotStatus.serverStatusFetchedAt)}`
+    : null;
+  const remoteServerDetail = remoteSnapshotStatus.serverStatusError
+    || remoteSnapshotStatus.serverLastError
+    || remoteServerNextKeepalive
+    || remoteServerFetchedAt;
 
   return (
     <Animated.View
@@ -1056,13 +1194,82 @@ export default function ChatScreen() {
           </Pressable>
         </View>
         <View pointerEvents="box-none" style={styles.headerCenterSlot}>
-          <Pressable style={styles.headerCenterButton} onPress={() => router.push('/m5stack')}>
+          <Pressable style={styles.headerCenterButton} onPress={openClawdStatus}>
             {!topBarIconsHidden && (
               <Image source={require('../assets/clawd.png')} style={styles.clawdHeaderIcon} resizeMode="contain" />
             )}
           </Pressable>
         </View>
       </View>
+
+      {clawdStatusVisible && (
+        <Pressable style={styles.clawdStatusOverlay} onPress={closeClawdStatus}>
+          <View style={styles.clawdStatusPanel} onStartShouldSetResponder={() => true}>
+            <View style={styles.clawdStatusHeader}>
+              <View style={styles.clawdStatusTitleBlock}>
+                <Text style={styles.clawdStatusEyebrow}>缓存保活</Text>
+                <Text style={styles.clawdStatusTitle} numberOfLines={1}>
+                  {formatRemoteSnapshotState(remoteSnapshotStatus)}
+                </Text>
+              </View>
+              <Text style={styles.clawdStatusBadge} numberOfLines={1}>
+                {formatRemoteSnapshotSourceMeta(remoteSnapshotStatus)}
+              </Text>
+            </View>
+
+            <Text style={styles.clawdStatusLine} numberOfLines={1}>
+              {formatRemoteSnapshotTime(remoteSnapshotStatus)}
+            </Text>
+            {!!remoteSnapshotMeta && (
+              <Text style={styles.clawdStatusLine} numberOfLines={1}>
+                {remoteSnapshotMeta}
+              </Text>
+            )}
+            <Text style={styles.clawdStatusPreview} numberOfLines={2}>
+              {remoteSnapshotLastMessage}
+            </Text>
+            {!!remoteServerStatusText && (
+              <Text style={styles.clawdStatusServer} numberOfLines={1}>
+                {remoteServerStatusText}
+              </Text>
+            )}
+            {!!remoteServerDetail && (
+              <Text style={styles.clawdStatusLine} numberOfLines={1}>
+                {remoteServerDetail}
+              </Text>
+            )}
+
+            <View style={styles.clawdStatusActions}>
+              <Pressable
+                style={[styles.clawdStatusActionButton, refreshingRemoteServerStatus && styles.clawdStatusActionDisabled]}
+                onPress={handleRefreshRemoteServerStatus}
+                disabled={refreshingRemoteServerStatus}
+              >
+                {refreshingRemoteServerStatus ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <Text style={styles.clawdStatusActionText}>刷新服务器状态</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.clawdStatusActionButton,
+                  styles.clawdStatusActionPrimary,
+                  (flushingRemoteSnapshot || remoteSnapshotStatus.queueCount <= 0) && styles.clawdStatusActionDisabled,
+                ]}
+                onPress={handleFlushRemoteSnapshotNow}
+                disabled={flushingRemoteSnapshot || remoteSnapshotStatus.queueCount <= 0}
+              >
+                {flushingRemoteSnapshot ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.clawdStatusActionPrimaryText}>立即同步</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </Pressable>
+      )}
 
       {error && (
         <View style={styles.errorBanner}>
@@ -1397,6 +1604,118 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   clawdHeaderIcon: {
     width: 30,
     height: 30,
+  },
+  clawdStatusOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 30,
+    paddingTop: 92,
+    paddingHorizontal: 18,
+    alignItems: 'center',
+  },
+  clawdStatusPanel: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 12,
+    padding: 14,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    shadowColor: '#000000',
+    shadowOpacity: 0.16,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  clawdStatusHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  clawdStatusTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  clawdStatusEyebrow: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textTertiary,
+  },
+  clawdStatusTitle: {
+    marginTop: 3,
+    fontSize: 17,
+    fontWeight: '800',
+    color: colors.text,
+  },
+  clawdStatusBadge: {
+    maxWidth: 132,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '700',
+    overflow: 'hidden',
+  },
+  clawdStatusLine: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.textSecondary,
+  },
+  clawdStatusPreview: {
+    marginTop: 9,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.textSecondary,
+  },
+  clawdStatusServer: {
+    marginTop: 9,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  clawdStatusActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  clawdStatusActionButton: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
+  clawdStatusActionPrimary: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  clawdStatusActionDisabled: {
+    opacity: 0.55,
+  },
+  clawdStatusActionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  clawdStatusActionPrimaryText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   errorBanner: {
     backgroundColor: colors.dangerSurface,

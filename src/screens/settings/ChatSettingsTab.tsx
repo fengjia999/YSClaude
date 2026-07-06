@@ -15,16 +15,12 @@ import {
 import { useChatStore } from '../../stores/chat';
 import { type HiddenRange } from '../../types';
 import { getChatDiagnosticsConversation, type ChatDiagnosticsMessage } from '../../db/operations';
-import { formatFullTime } from '../../utils/time';
 import { importMyphonePrivateChatsFromPicker } from '../../services/myphoneImport';
 import {
   checkPromptCacheRemoteServer,
   disablePromptCacheRemoteKeepalive,
   enablePromptCacheRemoteKeepalive,
-  flushPromptCacheRemoteSnapshotNow,
-  getPromptCacheRemoteSnapshotStatus,
   refreshPromptCacheRemoteServerStatus,
-  subscribePromptCacheRemoteSnapshotStatus,
   pushRemotePushConfig,
   testRemoteDingTalkPush,
   testRemoteWxPusherPush,
@@ -216,9 +212,6 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
   const [testingWxPusherPush, setTestingWxPusherPush] = useState(false);
   const [checkingRemoteKeepalive, setCheckingRemoteKeepalive] = useState(false);
   const [switchingRemoteKeepalive, setSwitchingRemoteKeepalive] = useState(false);
-  const [flushingRemoteSnapshot, setFlushingRemoteSnapshot] = useState(false);
-  const [refreshingRemoteServerStatus, setRefreshingRemoteServerStatus] = useState(false);
-  const [remoteSnapshotStatus, setRemoteSnapshotStatus] = useState(() => getPromptCacheRemoteSnapshotStatus());
   const [hiddenDiagnosticMessages, setHiddenDiagnosticMessages] = useState<ChatDiagnosticsMessage[]>([]);
 
   useEffect(() => {
@@ -249,12 +242,6 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
     promptCacheConfig?.wxPusherUid,
     promptCacheConfig?.wxPusherTopicIds,
   ]);
-
-  useEffect(() => {
-    return subscribePromptCacheRemoteSnapshotStatus(() => {
-      setRemoteSnapshotStatus(getPromptCacheRemoteSnapshotStatus());
-    });
-  }, []);
 
   useEffect(() => {
     refreshPromptCacheRemoteServerStatus(conversationId).catch(() => undefined);
@@ -385,91 +372,6 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
     return '工具';
   }
 
-  function formatRemoteSnapshotState() {
-    if (remoteSnapshotStatus.state === 'syncing') return '同步中';
-    if (remoteSnapshotStatus.state === 'pending') return '待同步';
-    if (remoteSnapshotStatus.state === 'failed') return '同步失败';
-    if (remoteSnapshotStatus.state === 'synced' && remoteSnapshotStatus.source === 'server') return '服务端快照';
-    if (remoteSnapshotStatus.state === 'synced') return '已同步';
-    return '暂无快照';
-  }
-
-  function formatRemoteSnapshotTime() {
-    if (remoteSnapshotStatus.nextSyncAt) {
-      return `预计同步 ${formatFullTime(remoteSnapshotStatus.nextSyncAt)}`;
-    }
-    if (remoteSnapshotStatus.syncedAt) {
-      return `最近同步 ${formatFullTime(remoteSnapshotStatus.syncedAt)}`;
-    }
-    if (remoteSnapshotStatus.lastSyncAttemptAt) {
-      return `最近尝试 ${formatFullTime(remoteSnapshotStatus.lastSyncAttemptAt)}`;
-    }
-    if (remoteSnapshotStatus.queuedAt) {
-      return `入队时间 ${formatFullTime(remoteSnapshotStatus.queuedAt)}`;
-    }
-    if (remoteSnapshotStatus.serverUpdatedAt) {
-      return `服务端更新 ${formatFullTime(remoteSnapshotStatus.serverUpdatedAt)}`;
-    }
-    if (remoteSnapshotStatus.serverStatusFetchedAt) {
-      return `服务端状态 ${formatFullTime(remoteSnapshotStatus.serverStatusFetchedAt)}`;
-    }
-    return '等待 1h cache 命中后的成功请求';
-  }
-
-  function formatRemoteServerStatus() {
-    if (!remoteSnapshotStatus.serverStatus) return null;
-    if (remoteSnapshotStatus.serverStatus === 'active') return '服务器保活中';
-    if (remoteSnapshotStatus.serverStatus === 'disabled') {
-      return remoteSnapshotStatus.serverDisabledReason
-        ? `服务器已停用：${remoteSnapshotStatus.serverDisabledReason}`
-        : '服务器已停用';
-    }
-    return `服务器状态：${remoteSnapshotStatus.serverStatus}`;
-  }
-
-  function formatRemoteSnapshotSourceMeta() {
-    const source = remoteSnapshotStatus.source === 'server' ? '服务端' : '本地';
-    if (remoteSnapshotStatus.state === 'syncing') return `${source} · 正在上传`;
-    if (remoteSnapshotStatus.queueCount > 0) return `${source} · 队列 ${remoteSnapshotStatus.queueCount}/5`;
-    return `${source} · 无待同步队列`;
-  }
-
-  function formatSnapshotHash(hash: string | null) {
-    return hash ? hash.slice(0, 10) : null;
-  }
-
-  async function handleRefreshRemoteServerStatus() {
-    if (refreshingRemoteServerStatus) return;
-    setPromptCacheConfig({
-      remoteServerUrl: remoteServerUrlText.trim(),
-      remoteAuthToken: remoteAuthTokenText.trim(),
-    });
-    setRefreshingRemoteServerStatus(true);
-    try {
-      const ok = await refreshPromptCacheRemoteServerStatus(conversationId);
-      showToast(ok ? '已刷新服务器快照状态' : '服务器状态读取失败');
-    } catch (error: any) {
-      showToast(error?.message || '服务器状态读取失败');
-    } finally {
-      setRemoteSnapshotStatus(getPromptCacheRemoteSnapshotStatus());
-      setRefreshingRemoteServerStatus(false);
-    }
-  }
-
-  async function handleFlushRemoteSnapshotNow() {
-    if (flushingRemoteSnapshot || remoteSnapshotStatus.queueCount <= 0) return;
-    setFlushingRemoteSnapshot(true);
-    try {
-      const ok = await flushPromptCacheRemoteSnapshotNow();
-      showToast(ok ? '快照已同步到远程服务' : '快照同步失败');
-    } catch (error: any) {
-      showToast(error?.message || '快照同步失败');
-    } finally {
-      setRemoteSnapshotStatus(getPromptCacheRemoteSnapshotStatus());
-      setFlushingRemoteSnapshot(false);
-    }
-  }
-
   function snippet(text: string) {
     const t = text.replace(/\s+/g, ' ').trim();
     return t.length > 60 ? t.slice(0, 60) + '…' : t;
@@ -574,7 +476,6 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
     } catch (error: any) {
       showToast(error?.message || '远程保活开关同步失败');
     } finally {
-      setRemoteSnapshotStatus(getPromptCacheRemoteSnapshotStatus());
       setSwitchingRemoteKeepalive(false);
     }
   }
@@ -695,7 +596,6 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
     } catch (error: any) {
       showToast(error?.message || '远程保活服务连接失败');
     } finally {
-      setRemoteSnapshotStatus(getPromptCacheRemoteSnapshotStatus());
       setCheckingRemoteKeepalive(false);
     }
   }
@@ -1261,102 +1161,6 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
               }}
               trackColor={{ true: colors.primary }}
             />
-          </View>
-          <View style={styles.remoteSnapshotStatus}>
-            <View style={styles.remoteSnapshotHeader}>
-              <Text style={styles.previewHint}>当前快照</Text>
-              <Text
-                style={[
-                  styles.remoteSnapshotState,
-                  remoteSnapshotStatus.state === 'syncing' && styles.remoteSnapshotStatePending,
-                  remoteSnapshotStatus.state === 'pending' && styles.remoteSnapshotStatePending,
-                  remoteSnapshotStatus.state === 'synced' && styles.remoteSnapshotStateSynced,
-                  remoteSnapshotStatus.state === 'failed' && styles.remoteSnapshotStateFailed,
-                ]}
-              >
-                {formatRemoteSnapshotState()}
-              </Text>
-            </View>
-            <Text style={styles.remoteSnapshotMeta}>
-              {formatRemoteSnapshotSourceMeta()}
-              {remoteSnapshotStatus.model ? ` · ${remoteSnapshotStatus.model}` : ''}
-              {remoteSnapshotStatus.messageCount > 0 ? ` · ${remoteSnapshotStatus.messageCount} 条消息` : ''}
-            </Text>
-            {formatRemoteServerStatus() ? (
-              <Text style={styles.remoteSnapshotMeta}>
-                {formatRemoteServerStatus()}
-                {formatSnapshotHash(remoteSnapshotStatus.serverSnapshotHash) ? ` · #${formatSnapshotHash(remoteSnapshotStatus.serverSnapshotHash)}` : ''}
-                {remoteSnapshotStatus.serverConversationCount > 1 ? ` · 共 ${remoteSnapshotStatus.serverConversationCount} 个会话` : ''}
-              </Text>
-            ) : null}
-            {remoteSnapshotStatus.lastMessageTail ? (
-              <Text style={styles.remoteSnapshotText} numberOfLines={3}>
-                {remoteSnapshotStatus.lastMessageRole ? `${roleLabel(remoteSnapshotStatus.lastMessageRole)}：` : ''}
-                {remoteSnapshotStatus.lastMessageTail}
-              </Text>
-            ) : (
-              <Text style={styles.remoteSnapshotText}>暂无待展示的消息片段</Text>
-            )}
-            <Text style={styles.hint}>{formatRemoteSnapshotTime()}</Text>
-            {remoteSnapshotStatus.serverNextKeepaliveAt ? (
-              <Text style={styles.hint}>服务端下次保活 {formatFullTime(remoteSnapshotStatus.serverNextKeepaliveAt)}</Text>
-            ) : null}
-            {remoteSnapshotStatus.serverLastTouchedAt ? (
-              <Text style={styles.hint}>服务端最近保活 {formatFullTime(remoteSnapshotStatus.serverLastTouchedAt)}</Text>
-            ) : null}
-            {remoteSnapshotStatus.serverPendingMessageCount > 0 || remoteSnapshotStatus.serverActivityCount > 0 ? (
-              <Text style={styles.hint}>
-                待收件 {remoteSnapshotStatus.serverPendingMessageCount} · 自主活动 {remoteSnapshotStatus.serverActivityCount}
-              </Text>
-            ) : null}
-            {remoteSnapshotStatus.lastSyncError ? (
-              <Text style={styles.remoteSnapshotError} numberOfLines={3}>
-                {remoteSnapshotStatus.lastSyncError}
-              </Text>
-            ) : null}
-            {remoteSnapshotStatus.serverLastError ? (
-              <Text style={styles.remoteSnapshotError} numberOfLines={3}>
-                服务端保活失败：{remoteSnapshotStatus.serverLastError}
-              </Text>
-            ) : null}
-            {remoteSnapshotStatus.serverStatusError ? (
-              <Text style={styles.remoteSnapshotError} numberOfLines={3}>
-                状态读取失败：{remoteSnapshotStatus.serverStatusError}
-              </Text>
-            ) : null}
-            <View style={styles.remoteSnapshotActions}>
-              <Pressable
-                style={[
-                  styles.smallActionButton,
-                  styles.remoteSnapshotFlushButton,
-                  refreshingRemoteServerStatus && styles.smallActionButtonDisabled,
-                ]}
-                onPress={handleRefreshRemoteServerStatus}
-                disabled={refreshingRemoteServerStatus}
-              >
-                <Text style={[styles.smallActionText, refreshingRemoteServerStatus && styles.smallActionTextDisabled]}>
-                  {refreshingRemoteServerStatus ? '刷新中' : '刷新服务器状态'}
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[
-                  styles.smallActionButton,
-                  styles.remoteSnapshotFlushButton,
-                  (flushingRemoteSnapshot || remoteSnapshotStatus.queueCount <= 0) && styles.smallActionButtonDisabled,
-                ]}
-                onPress={handleFlushRemoteSnapshotNow}
-                disabled={flushingRemoteSnapshot || remoteSnapshotStatus.queueCount <= 0}
-              >
-                <Text
-                  style={[
-                    styles.smallActionText,
-                    (flushingRemoteSnapshot || remoteSnapshotStatus.queueCount <= 0) && styles.smallActionTextDisabled,
-                  ]}
-                >
-                  {flushingRemoteSnapshot || remoteSnapshotStatus.state === 'syncing' ? '同步中' : '立即同步快照'}
-                </Text>
-              </Pressable>
-            </View>
           </View>
         </View>
 

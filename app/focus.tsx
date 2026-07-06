@@ -23,7 +23,7 @@ import { useKeyboardHeight } from '../src/hooks/useKeyboardHeight';
 
 let colors = lightColors;
 
-const TABS = ['今日任务', '专注统计', '预留'] as const;
+const TABS = ['今日任务', '专注统计'] as const;
 const MACARON = {
   mint: '#DDF4E7',
   mintText: '#237257',
@@ -294,12 +294,7 @@ export default function FocusScreen() {
           onToday={() => loadDate(localDateKeyForFocus())}
           onOpenDateJump={() => setDateJumpVisible(true)}
         />
-      ) : (
-        <View style={styles.emptyPage}>
-          <Text style={styles.emptyTitle}>暂时留空</Text>
-          <Text style={styles.emptyText}>这里先等你下一步想法。</Text>
-        </View>
-      )}
+      ) : null}
 
       <CreateTaskModal
         visible={createVisible}

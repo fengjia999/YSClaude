@@ -938,58 +938,6 @@ export const createSettingsStyles = (colors: ThemeColors) => StyleSheet.create({
     marginBottom: 14,
     gap: 8,
   },
-  remoteSnapshotStatus: {
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: 12,
-    marginTop: 2,
-    gap: 6,
-  },
-  remoteSnapshotHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 10,
-  },
-  remoteSnapshotState: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.textTertiary,
-  },
-  remoteSnapshotStatePending: {
-    color: colors.primary,
-  },
-  remoteSnapshotStateSynced: {
-    color: colors.success,
-  },
-  remoteSnapshotStateFailed: {
-    color: colors.danger,
-  },
-  remoteSnapshotMeta: {
-    fontSize: 12,
-    color: colors.textSecondary,
-  },
-  remoteSnapshotText: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: colors.text,
-  },
-  remoteSnapshotError: {
-    fontSize: 12,
-    lineHeight: 17,
-    color: colors.danger,
-  },
-  remoteSnapshotActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 2,
-  },
-  remoteSnapshotFlushButton: {
-    alignSelf: 'flex-start',
-    minWidth: 118,
-    paddingHorizontal: 12,
-  },
   importButton: {
     minHeight: 46,
     backgroundColor: colors.primary,
