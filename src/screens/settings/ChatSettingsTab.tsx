@@ -15,7 +15,6 @@ import {
 import { useChatStore } from '../../stores/chat';
 import { type HiddenRange } from '../../types';
 import { getChatDiagnosticsConversation, type ChatDiagnosticsMessage } from '../../db/operations';
-import { importMyphonePrivateChatsFromPicker } from '../../services/myphoneImport';
 import {
   checkPromptCacheRemoteServer,
   disablePromptCacheRemoteKeepalive,
@@ -185,7 +184,6 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
     addHiddenRange,
     restoreHiddenRange,
     setMessageHidden,
-    loadConversation,
   } = useChatStore();
   const [fromStr, setFromStr] = useState('');
   const [toStr, setToStr] = useState('');
@@ -195,7 +193,6 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
   );
   const [promptText, setPromptText] = useState(systemPrompt);
   const [imagePromptText, setImagePromptText] = useState(imageGenerationPrompt || '');
-  const [importingMyphone, setImportingMyphone] = useState(false);
   const [pickingFaceReferences, setPickingFaceReferences] = useState(false);
   const promptCacheTtl: PromptCacheTtl = promptCacheConfig?.ttl === '1h' ? '1h' : '5m';
   const [quietStartText, setQuietStartText] = useState(formatClockMinutes(promptCacheConfig?.quietStartMinutes ?? 23 * 60));
@@ -600,28 +597,6 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
     }
   }
 
-  async function handleImportMyphone() {
-    if (importingMyphone) return;
-    setImportingMyphone(true);
-    try {
-      const result = await importMyphonePrivateChatsFromPicker();
-      if (result.cancelled) return;
-      if (result.firstConversationId) {
-        await loadConversation(result.firstConversationId);
-      }
-      showToast(`已导入 ${result.importedMessages} 条消息`);
-      Alert.alert(
-        '导入完成',
-        `已导入 ${result.importedConversations} 个单聊，共 ${result.importedMessages} 条消息。` +
-          (result.skippedCharacters > 0 ? `\n跳过 ${result.skippedCharacters} 个空角色。` : '')
-      );
-    } catch (error: any) {
-      Alert.alert('导入失败', error?.message || '无法读取 ephone 单聊备份');
-    } finally {
-      setImportingMyphone(false);
-    }
-  }
-
   async function handlePickFaceReferences() {
     if (pickingFaceReferences) return;
     setPickingFaceReferences(true);
@@ -806,20 +781,6 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
           {messageCount > 0 ? `${loadedFloorFrom}-${loadedFloorTo}` : '0'} 条
         </Text>
       </View>
-
-      <Text style={styles.sectionTitle}>ephone 导入</Text>
-      <Text style={styles.hint}>选择 ephone 导出的 .ee 或 JSON 单聊备份；只导入角色单聊，群聊会被跳过。</Text>
-      <Pressable
-        style={[styles.importButton, importingMyphone && styles.importButtonDisabled]}
-        onPress={handleImportMyphone}
-        disabled={importingMyphone}
-      >
-        {importingMyphone ? (
-          <ActivityIndicator size="small" color="#FFFFFF" />
-        ) : (
-          <Text style={styles.importButtonText}>导入 ephone 单聊</Text>
-        )}
-      </Pressable>
 
       {/* 隐藏消息 */}
       <Text style={styles.sectionTitle}>隐藏消息</Text>

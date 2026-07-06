@@ -11,6 +11,7 @@ import { buildStickerDefinitions, getStickerByName, type StickerDefinition } fro
 
 
 let colors = lightColors;
+const STICKER_RENDER_SIZE = 112;
 interface Props {
   content: string;
   variant: 'user' | 'assistant';
@@ -150,7 +151,7 @@ export function StickerContent({
             <Image
               key={`sticker-${index}-${chunk.sticker.name}`}
               source={chunk.sticker.image}
-              style={isUser ? styles.userSticker : styles.assistantSticker}
+              style={styles.sticker}
               resizeMode="contain"
               accessibilityLabel={`表情包：${chunk.sticker.name}`}
             />
@@ -230,13 +231,9 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: 22,
     fontFamily: fonts.serifBold,
   },
-  userSticker: {
-    width: 112,
-    height: 112,
-  },
-  assistantSticker: {
-    width: 104,
-    height: 104,
+  sticker: {
+    width: STICKER_RENDER_SIZE,
+    height: STICKER_RENDER_SIZE,
   },
   pictureShell: {
     width: 240,

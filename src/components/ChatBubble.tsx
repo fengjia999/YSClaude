@@ -402,10 +402,14 @@ function isRemoteActivityMessage(message: Message): boolean {
   return message.role === 'assistant' && message.id.startsWith('remote-activity-');
 }
 
-function parseRemoteActivityContent(content: string): { title: string; eyebrow: string; summary: string } {
+function parseRemoteActivityContent(
+  content: string,
+  assistantName: string
+): { title: string; eyebrow: string; summary: string } {
   const trimmed = content.trim();
   const isNoop = trimmed.startsWith('[远程自主判断]');
   const isActivity = trimmed.startsWith('[远程自主活动记录]');
+  const displayName = assistantName.trim() || 'AI';
   const withoutMarker = trimmed
     .replace(/^\[远程自主判断\]\s*/, '')
     .replace(/^\[远程自主活动记录\]\s*/, '');
@@ -414,14 +418,14 @@ function parseRemoteActivityContent(content: string): { title: string; eyebrow: 
 
   if (isNoop) {
     return {
-      title: 'AI 没有打扰你',
+      title: `${displayName} 没有打扰你`,
       eyebrow: '远程判断',
       summary,
     };
   }
 
   return {
-    title: isActivity ? 'AI 记录了一次活动' : 'AI 远程活动',
+    title: isActivity ? `${displayName} 记录了一次活动` : `${displayName} 远程活动`,
     eyebrow: '后台同步',
     summary,
   };
@@ -429,14 +433,16 @@ function parseRemoteActivityContent(content: string): { title: string; eyebrow: 
 
 function RemoteActivityCard({
   message,
+  assistantName,
   onPress,
   onLongPress,
 }: {
   message: Message;
+  assistantName: string;
   onPress?: () => void;
   onLongPress: (event: any) => void;
 }) {
-  const card = parseRemoteActivityContent(message.content);
+  const card = parseRemoteActivityContent(message.content, assistantName);
   const tools = message.toolInvocations || [];
 
   return (
@@ -582,6 +588,25 @@ export const ChatBubble = React.memo(function ChatBubble({
       customCssStyles.assistantText,
     ]
   );
+  const assistantBubbleMarkdownStyles = useMemo(
+    () => createMarkdownStyles(
+      colors,
+      assistantFontSize,
+      assistantTextColor,
+      assistantTextStrokeColor,
+      assistantTextStrokeWidth,
+      customCssStyles.assistantText,
+      true
+    ),
+    [
+      assistantFontSize,
+      assistantTextColor,
+      assistantTextStrokeColor,
+      assistantTextStrokeWidth,
+      colors,
+      customCssStyles.assistantText,
+    ]
+  );
 
   const isUser = message.role === 'user';
   const messageStickers = useMemo(
@@ -629,7 +654,9 @@ export const ChatBubble = React.memo(function ChatBubble({
   const canToggleFloorHidden = floorNumber !== undefined;
   const hiddenToggleText = isHidden ? '恢复' : '隐藏';
   const avatarMetaText = [floorText, formatSmartTime(message.createdAt)].filter(Boolean).join(' · ');
-  const floorLabel = !messageAvatarsVisible && showFloorNumber && floorText ? floorText : null;
+  const floorLabel = !messageAvatarsVisible && showFloorNumber && floorText
+    ? `${floorText} · ${formatSmartTime(message.createdAt)}`
+    : null;
   const avatarNode = messageAvatarsVisible ? (
     avatarImageUri ? (
       <Image
@@ -825,8 +852,8 @@ export const ChatBubble = React.memo(function ChatBubble({
         borderRadius: userBubbleRadius,
       },
       messageHasSticker && styles.userBubbleWithSticker,
-      messageIsStickerOnly && styles.userStickerOnlyBubble,
       customCssStyles.userBubble,
+      messageIsStickerOnly && styles.userStickerOnlyBubble,
     ];
 
     return (
@@ -1121,6 +1148,7 @@ export const ChatBubble = React.memo(function ChatBubble({
       {remoteActivityCardVisible ? (
         <RemoteActivityCard
           message={message}
+          assistantName={assistantDisplayName}
           onPress={onBubblePress}
           onLongPress={handleAssistantBubbleLongPress}
         />
@@ -1142,7 +1170,7 @@ export const ChatBubble = React.memo(function ChatBubble({
                 <StickerContent
                   content={part.content}
                   variant="assistant"
-                  markdownStyle={markdownStyles}
+                  markdownStyle={assistantBubbleMarkdownStyles}
                   markdownRules={markdownRules}
                   stickers={messageStickers}
                   generatedPics={normalizeGeneratedPicsForSegment(message.generatedPics, part.pictureOffset, pictureCount)}
@@ -1160,7 +1188,7 @@ export const ChatBubble = React.memo(function ChatBubble({
               <StickerContent
                 content=" "
                 variant="assistant"
-                markdownStyle={markdownStyles}
+                markdownStyle={assistantBubbleMarkdownStyles}
                 markdownRules={markdownRules}
                 stickers={messageStickers}
                 generatedPics={message.generatedPics}
@@ -1711,8 +1739,10 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   userStickerOnlyBubble: {
     backgroundColor: 'transparent',
+    borderRadius: 0,
     paddingVertical: 0,
     paddingHorizontal: 0,
+    overflow: 'visible',
   },
   userImage: {
     width: IMAGE_MAX_WIDTH,
@@ -1778,7 +1808,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   assistantBubbleStack: {
     alignItems: 'flex-start',
-    gap: 8,
+    gap: 6,
     maxWidth: '100%',
   },
   remoteActivityCard: {
@@ -2102,7 +2132,8 @@ const createMarkdownStyles = (
   textColor = colors.text,
   strokeColor = colors.background,
   strokeWidth = 0,
-  customTextStyle?: TextStyle
+  customTextStyle?: TextStyle,
+  compactBubble = false
 ) => {
   const customTextStyleWithoutFontWeight = withoutFontWeight(customTextStyle);
   const strokeStyle = strokeWidth > 0
@@ -2114,7 +2145,17 @@ const createMarkdownStyles = (
     : {};
 
   return StyleSheet.create({
-  body: { width: '100%', fontSize, color: textColor, lineHeight: Math.round(fontSize * 1.5), fontFamily: fonts.serifBold, fontWeight: 'normal', ...strokeStyle, ...customTextStyleWithoutFontWeight },
+  body: {
+    width: '100%',
+    fontSize,
+    color: textColor,
+    lineHeight: Math.round(fontSize * (compactBubble ? 1.38 : 1.5)),
+    fontFamily: fonts.serifBold,
+    fontWeight: 'normal',
+    ...strokeStyle,
+    ...customTextStyleWithoutFontWeight,
+  },
+  paragraph: compactBubble ? { marginTop: 0, marginBottom: 0 } : {},
   code_inline: {
     backgroundColor: colors.surface, color: colors.primary,
     paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, fontSize: 14, fontFamily: 'monospace',
@@ -2128,7 +2169,9 @@ const createMarkdownStyles = (
   blockquote: {
     borderLeftWidth: 3, borderLeftColor: colors.primary, paddingLeft: 12, marginVertical: 8, opacity: 0.8,
   },
-  list_item: { marginVertical: 2, ...strokeStyle },
+  bullet_list: compactBubble ? { marginVertical: 0 } : {},
+  ordered_list: compactBubble ? { marginVertical: 0 } : {},
+  list_item: { marginVertical: compactBubble ? 1 : 2, ...strokeStyle },
   link: { color: colors.primary },
   markdownTableViewport: { alignSelf: 'stretch', width: '100%', maxWidth: '100%', minWidth: 0, overflow: 'hidden', marginVertical: 10, paddingVertical: 4 },
   markdownTableScroll: { alignSelf: 'stretch', width: '100%', maxWidth: '100%', minWidth: 0, minHeight: 44, flexShrink: 1 },
