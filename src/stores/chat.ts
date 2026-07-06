@@ -1521,7 +1521,6 @@ async function runToolLoop(
         !!settings.nativeToolConfig?.accessibilityControlEnabled ||
         androidAccessibilityControlEnabled,
     },
-    shizukuFile: settings.shizukuFileConfig,
     mcpTools: settings.mcpToolConfig,
   });
   if (tools.length === 0) {
@@ -1533,7 +1532,6 @@ async function runToolLoop(
     1,
     settings.memoryVaultConfig.maxToolCalls || 3,
     webInteractionEnabled ? settings.webInteractionConfig?.maxToolCalls || 8 : 0,
-    settings.shizukuFileConfig?.enabled ? settings.shizukuFileConfig.maxToolCalls || 6 : 0,
     settings.mcpToolConfig?.enabled ? settings.mcpToolConfig.maxToolCalls || 6 : 0,
     runCommandEnabled ? settings.runCommandConfig.maxToolCalls || 20 : 0,
     webCruiseEnabled ? 10 : 0,
@@ -1629,7 +1627,6 @@ async function runToolLoop(
         hotboardConfig: settings.hotboardConfig,
         runCommandConfig: settings.runCommandConfig,
         nativeToolConfig: settings.nativeToolConfig,
-        shizukuFileConfig: settings.shizukuFileConfig,
         mcpToolConfig: settings.mcpToolConfig,
         webCruiseEnabled,
       });

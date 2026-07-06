@@ -4,7 +4,6 @@ import {
   MemoryVaultConfig,
   NativeToolConfig,
   RunCommandConfig,
-  ShizukuFileConfig,
   WebInteractionConfig,
   WebPageReaderConfig,
   WebSearchConfig,
@@ -31,7 +30,6 @@ export interface ToolDefinitionConfig {
   hotboard?: boolean;
   runCommand?: RunCommandConfig;
   nativeTools?: NativeToolConfig;
-  shizukuFile?: ShizukuFileConfig;
   mcpTools?: McpToolConfig;
 }
 
@@ -43,7 +41,6 @@ export interface ToolExecutionContext {
   hotboardConfig: HotboardConfig;
   runCommandConfig: RunCommandConfig;
   nativeToolConfig: NativeToolConfig;
-  shizukuFileConfig: ShizukuFileConfig;
   mcpToolConfig: McpToolConfig;
   webCruiseEnabled?: boolean;
 }

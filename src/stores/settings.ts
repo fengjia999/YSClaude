@@ -116,8 +116,7 @@ export interface HotboardConfig {
   platforms: string;
 }
 
-export interface RunCommandConfig {
-  enabled: boolean;
+export interface RunCommandProfileConfig {
   sshHost: string;
   sshPort: number;
   sshUsername: string;
@@ -131,6 +130,19 @@ export interface RunCommandConfig {
   timeoutMs: number;
   maxOutputChars: number;
   maxToolCalls: number;
+}
+
+export interface RunCommandProfile {
+  id: string;
+  name: string;
+  updatedAt: number;
+  config: RunCommandProfileConfig;
+}
+
+export interface RunCommandConfig extends RunCommandProfileConfig {
+  enabled: boolean;
+  profiles?: RunCommandProfile[];
+  activeProfileId?: string;
 }
 
 export interface QQBotConfig {
@@ -187,19 +199,6 @@ export interface NativeToolConfig {
   appUsageStatsEnabled: boolean;
   calendarEnabled: boolean;
   accessibilityControlEnabled?: boolean;
-}
-
-export interface ShizukuFileRoot {
-  id: string;
-  name: string;
-  path: string;
-  addedAt: number;
-}
-
-export interface ShizukuFileConfig {
-  enabled: boolean;
-  roots: ShizukuFileRoot[];
-  maxToolCalls: number;
 }
 
 export interface McpToolSnapshot {
@@ -640,7 +639,6 @@ interface SettingsState {
   runCommandConfig: RunCommandConfig;
   qqBotConfig: QQBotConfig;
   nativeToolConfig: NativeToolConfig;
-  shizukuFileConfig: ShizukuFileConfig;
   mcpToolConfig: McpToolConfig;
   toolSettingsUiConfig: ToolSettingsUiConfig;
   readingConfig: ReadingConfig;
@@ -672,7 +670,6 @@ interface SettingsState {
   setRunCommandConfig: (config: Partial<RunCommandConfig>) => void;
   setQqBotConfig: (config: Partial<QQBotConfig>) => void;
   setNativeToolConfig: (config: Partial<NativeToolConfig>) => void;
-  setShizukuFileConfig: (config: Partial<ShizukuFileConfig>) => void;
   setMcpToolConfig: (config: Partial<McpToolConfig>) => void;
   setToolSettingsUiConfig: (config: Partial<ToolSettingsUiConfig>) => void;
   setReadingConfig: (config: Partial<ReadingConfig>) => void;
@@ -823,11 +820,6 @@ export const useSettingsStore = create<SettingsState>()(
         calendarEnabled: false,
         accessibilityControlEnabled: false,
       },
-      shizukuFileConfig: {
-        enabled: false,
-        roots: [],
-        maxToolCalls: 6,
-      },
       mcpToolConfig: {
         enabled: false,
         servers: [],
@@ -974,13 +966,6 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ qqBotConfig: { ...state.qqBotConfig, ...config } })),
       setNativeToolConfig: (config) =>
         set((state) => ({ nativeToolConfig: { ...state.nativeToolConfig, ...config } })),
-      setShizukuFileConfig: (config) =>
-        set((state) => ({
-          shizukuFileConfig: {
-            ...(state.shizukuFileConfig || { enabled: false, roots: [], maxToolCalls: 6 }),
-            ...config,
-          },
-        })),
       setMcpToolConfig: (config) =>
         set((state) => ({
           mcpToolConfig: {
@@ -1283,7 +1268,6 @@ export const useSettingsStore = create<SettingsState>()(
         runCommandConfig: state.runCommandConfig,
         qqBotConfig: state.qqBotConfig,
         nativeToolConfig: state.nativeToolConfig,
-        shizukuFileConfig: state.shizukuFileConfig,
         mcpToolConfig: state.mcpToolConfig,
         toolSettingsUiConfig: state.toolSettingsUiConfig,
         readingConfig: state.readingConfig,

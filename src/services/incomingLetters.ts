@@ -147,7 +147,6 @@ async function generateLetterContent(
         hotboardConfig: settings.hotboardConfig,
         runCommandConfig: settings.runCommandConfig,
         nativeToolConfig: settings.nativeToolConfig,
-        shizukuFileConfig: settings.shizukuFileConfig,
         mcpToolConfig: settings.mcpToolConfig,
       });
 
