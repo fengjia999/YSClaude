@@ -142,7 +142,6 @@ async function generateLetterContent(
       const result = await executeTool(tc.function.name, args, {
         memoryVaultConfig: settings.memoryVaultConfig,
         webSearchConfig: settings.webSearchConfig,
-        webPageReaderConfig: settings.webPageReaderConfig,
         webInteractionConfig: settings.webInteractionConfig,
         hotboardConfig: settings.hotboardConfig,
         runCommandConfig: settings.runCommandConfig,

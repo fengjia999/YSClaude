@@ -3,7 +3,6 @@ import { mcpRemoteTool } from './toolModules/mcpRemote';
 import { memoryVaultTool, uploadDiary } from './toolModules/memoryVault';
 import { nativeDeviceTool } from './toolModules/nativeDevice';
 import { runCommandTool } from './toolModules/runCommand';
-import { webPageReaderTool } from './toolModules/webPageReader';
 import { webSearchTool } from './toolModules/webSearch';
 import { webViewTool } from './toolModules/webView';
 import {
@@ -20,7 +19,6 @@ export { uploadDiary };
 const TOOL_MODULES: ToolModule[] = [
   memoryVaultTool,
   webSearchTool,
-  webPageReaderTool,
   hotboardTool,
   runCommandTool,
   mcpRemoteTool,

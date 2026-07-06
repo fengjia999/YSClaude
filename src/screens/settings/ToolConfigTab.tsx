@@ -62,7 +62,6 @@ export function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabPro
     stickerConfig,
     memoryVaultConfig,
     webSearchConfig,
-    webPageReaderConfig,
     webInteractionConfig,
     hotboardConfig,
     dailyPaperConfig,
@@ -73,7 +72,6 @@ export function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabPro
     toolSettingsUiConfig,
     setMemoryVaultConfig,
     setWebSearchConfig,
-    setWebPageReaderConfig,
     setWebInteractionConfig,
     setHotboardConfig,
     setDailyPaperConfig,
@@ -98,10 +96,6 @@ export function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabPro
   const [wsEnabled, setWsEnabled] = useState(webSearchConfig.enabled);
   const [wsApiKey, setWsApiKey] = useState(webSearchConfig.tavilyApiKey);
   const [wsMaxResults, setWsMaxResults] = useState(String(webSearchConfig.maxResults));
-
-  // 网页读取本地 state
-  const [wprEnabled, setWprEnabled] = useState(!!webPageReaderConfig?.enabled);
-  const [wprRenderServiceUrl, setWprRenderServiceUrl] = useState(webPageReaderConfig?.renderServiceUrl || '');
 
   // 网页交互本地 state
   const [wiEnabled, setWiEnabled] = useState(!!webInteractionConfig?.enabled);
@@ -307,19 +301,6 @@ export function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabPro
       maxResults: isNaN(maxResults) || maxResults <= 0 ? 5 : maxResults,
     });
     showToast('联网搜索配置已保存');
-  }
-
-  function handleSaveWebPageReader() {
-    const trimmedUrl = wprRenderServiceUrl.trim();
-    if (trimmedUrl && !/^https?:\/\//i.test(trimmedUrl)) {
-      Alert.alert('提示', '渲染读取服务地址必须以 http:// 或 https:// 开头');
-      return;
-    }
-    setWebPageReaderConfig({
-      enabled: wprEnabled,
-      renderServiceUrl: trimmedUrl,
-    });
-    showToast(wprEnabled ? '网页读取配置已保存' : '网页读取已关闭');
   }
 
   function handleSaveWebInteraction() {
@@ -1473,7 +1454,6 @@ export function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabPro
   const builtInToolCards = [
     { key: 'memoryVault', name: '记忆库', intro: '语义/关键词搜索长期记忆，并按日期查询日记内容。', enabled: mvEnabled, onValueChange: setMvEnabled, meta: '3 个工具' },
     { key: 'webSearch', name: '联网搜索', intro: '通过 Tavily 搜索互联网，补充实时信息。', enabled: wsEnabled, onValueChange: setWsEnabled, meta: '1 个工具' },
-    { key: 'webPageReader', name: '网页读取', intro: '读取链接中的网页正文，可配置渲染服务兜底。', enabled: wprEnabled, onValueChange: setWprEnabled, meta: '1 个工具' },
     { key: 'hotboard', name: '热榜查询', intro: '从已选择的平台列表中查询热门话题。', enabled: hbEnabled, onValueChange: setHbEnabled, meta: hbPlatformTypes.length + ' 个平台' },
     { key: 'dailyPaperSources', name: '日报来源', intro: '配置每日日报生成时读取的 RSS 新闻来源。', enabled: dailyUseDefaultSources || dailyCustomSources.some((source) => source.enabled), onValueChange: setDailyUseDefaultSources, meta: (dailyUseDefaultSources ? 6 : 0) + dailyCustomSources.filter((source) => source.enabled).length + ' 个来源' },
     { key: 'runCommand', name: '远程命令', intro: '通过 SSH 连接专用 AI 服务器执行 shell 命令。', enabled: rcEnabled, onValueChange: setRcEnabled, meta: '最多 ' + (rcMaxCalls || '20') + ' 次' },
@@ -1590,9 +1570,6 @@ export function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabPro
       case 'webSearch':
         handleSaveWebSearch();
         break;
-      case 'webPageReader':
-        handleSaveWebPageReader();
-        break;
       case 'hotboard':
         handleSaveHotboard();
         break;
@@ -1627,10 +1604,6 @@ export function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabPro
             case 'webSearch':
               setWsEnabled(false);
               setWebSearchConfig({ enabled: false });
-              break;
-            case 'webPageReader':
-              setWprEnabled(false);
-              setWebPageReaderConfig({ enabled: false });
               break;
             case 'hotboard':
               setHbEnabled(false);
@@ -1708,8 +1681,6 @@ export function ToolConfigTab({ showToast, keyboardBottomInset }: SettingsTabPro
         );
       case 'webSearch':
         return (<><Text style={styles.toolModalDescription}>AI 可以通过 Tavily 搜索互联网获取实时信息。</Text><View style={styles.switchRow}><Text style={styles.label}>启用联网搜索</Text><Switch value={wsEnabled} onValueChange={setWsEnabled} trackColor={{ true: colors.primary }} /></View><View style={styles.field}><Text style={styles.label}>Tavily 密钥</Text><TextInput style={styles.input} value={wsApiKey} onChangeText={setWsApiKey} placeholder="tvly-..." placeholderTextColor={colors.textTertiary} secureTextEntry autoCapitalize="none" /></View><View style={styles.field}><Text style={styles.label}>搜索结果数量</Text><TextInput style={styles.input} value={wsMaxResults} onChangeText={setWsMaxResults} keyboardType="number-pad" placeholder="5" placeholderTextColor={colors.textTertiary} /></View></>);
-      case 'webPageReader':
-        return (<><Text style={styles.toolModalDescription}>AI 可以读取链接中的网页正文。</Text><View style={styles.switchRow}><Text style={styles.label}>启用网页读取</Text><Switch value={wprEnabled} onValueChange={setWprEnabled} trackColor={{ true: colors.primary }} /></View><View style={styles.field}><Text style={styles.label}>渲染读取服务地址</Text><TextInput style={styles.input} value={wprRenderServiceUrl} onChangeText={setWprRenderServiceUrl} placeholder="http://localhost:8787/read" placeholderTextColor={colors.textTertiary} autoCapitalize="none" /></View></>);
       case 'hotboard':
         return (<><Text style={styles.toolModalDescription}>AI 可以从已选择的平台类型中查询热榜。</Text><View style={styles.switchRow}><Text style={styles.label}>启用热榜查询</Text><Switch value={hbEnabled} onValueChange={setHbEnabled} trackColor={{ true: colors.primary }} /></View><View style={styles.field}><Text style={styles.label}>UAPI 密钥</Text><TextInput style={styles.input} value={hbApiKey} onChangeText={setHbApiKey} placeholder="Bearer 令牌" placeholderTextColor={colors.textTertiary} secureTextEntry autoCapitalize="none" /></View><View style={styles.platformActions}><Pressable style={styles.platformActionButton} onPress={selectDefaultHotboardPlatforms}><Text style={styles.platformActionText}>默认</Text></Pressable><Pressable style={styles.platformActionButton} onPress={selectAllHotboardPlatforms}><Text style={styles.platformActionText}>全选</Text></Pressable><Pressable style={styles.platformActionButton} onPress={clearHotboardPlatforms}><Text style={styles.platformActionText}>清空</Text></Pressable></View><View style={styles.platformGrid}>{HOTBOARD_PLATFORMS.map((platform) => { const selected = hbPlatformTypes.includes(platform.type); return (<Pressable key={platform.type} style={[styles.platformChip, selected && styles.platformChipSelected]} onPress={() => toggleHotboardPlatform(platform.type)}><Text style={[styles.platformChipLabel, selected && styles.platformChipLabelSelected]}>{platform.label}</Text><Text style={[styles.platformChipType, selected && styles.platformChipTypeSelected]}>{platform.type}</Text></Pressable>); })}</View></>);
       case 'dailyPaperSources':

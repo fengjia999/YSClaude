@@ -259,7 +259,7 @@ src/
 ├── db/                      # SQLite 初始化、迁移、CRUD、KV storage
 ├── hooks/                   # 键盘高度等通用 hook
 ├── services/                # API、TTS、工具、WebView、音乐、导入、备份、通知等服务
-├── services/toolModules/    # Memory Vault、Web Search、网页读取、WebView、Native Tool、Hotboard
+├── services/toolModules/    # Memory Vault、Web Search、WebView、Native Tool、Hotboard
 ├── stores/                  # chat/settings/diary/focus/music/netease/radio/game/period
 ├── theme/                   # 颜色与字体
 ├── types/                   # 全局 TypeScript 类型

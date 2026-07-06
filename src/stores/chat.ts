@@ -848,7 +848,6 @@ async function hideAutoHideMessagesAfterResponse(
   await updateHiddenRanges(conversationId, merged);
 }
 
-const HTTP_URL_RE = /https?:\/\/[^\s<>"'`，。！？、）)\]}]+/i;
 const WEBVIEW_NOTICE_MAX_LENGTH = 120;
 
 interface AttachedWebViewContext {
@@ -862,24 +861,6 @@ function createPromptCacheControl(ttl: PromptCacheTtl): PromptCacheControl {
   return ttl === '1h'
     ? { type: 'ephemeral', ttl: '1h' }
     : { type: 'ephemeral' };
-}
-
-function contentContainsHttpUrl(content: string | any[]): boolean {
-  if (typeof content === 'string') {
-    return HTTP_URL_RE.test(content);
-  }
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some((part) => {
-    if (typeof part === 'string') return HTTP_URL_RE.test(part);
-    if (part && typeof part.text === 'string') return HTTP_URL_RE.test(part.text);
-    return false;
-  });
-}
-
-function messagesContainHttpUrl(messages: { role: string; content: string | any[] }[]): boolean {
-  return messages.some((message) => contentContainsHttpUrl(message.content));
 }
 
 function contentContainsText(content: string | any[], needle: string): boolean {
@@ -1495,8 +1476,6 @@ async function runToolLoop(
   const webCruiseEnabled = !!options?.webCruiseEnabled;
   const memoryEnabled = settings.memoryVaultConfig.enabled && !!settings.memoryVaultConfig.baseUrl;
   const webEnabled = settings.webSearchConfig.enabled && !!settings.webSearchConfig.tavilyApiKey;
-  const webPageReaderEnabled =
-    !!settings.webPageReaderConfig?.enabled && messagesContainHttpUrl(requestMessages);
   const webInteractionEnabled =
     webCruiseEnabled ||
     !!settings.webInteractionConfig?.enabled;
@@ -1511,7 +1490,6 @@ async function runToolLoop(
   const tools = getToolDefinitions({
     memoryVault: memoryEnabled,
     webSearch: webEnabled,
-    webPageReader: webPageReaderEnabled,
     webInteraction: webInteractionEnabled,
     hotboard: webCruiseEnabled,
     runCommand: runCommandEnabled ? settings.runCommandConfig : undefined,
@@ -1619,7 +1597,6 @@ async function runToolLoop(
       const result = await executeTool(tc.function.name, args, {
         memoryVaultConfig: settings.memoryVaultConfig,
         webSearchConfig: settings.webSearchConfig,
-        webPageReaderConfig: settings.webPageReaderConfig,
         webInteractionConfig: {
           ...settings.webInteractionConfig,
           enabled: webInteractionEnabled,

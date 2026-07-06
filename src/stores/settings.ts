@@ -100,11 +100,6 @@ export interface WebSearchConfig {
   maxResults: number;
 }
 
-export interface WebPageReaderConfig {
-  enabled: boolean;
-  renderServiceUrl: string;
-}
-
 export interface WebInteractionConfig {
   enabled: boolean;
   maxToolCalls: number;
@@ -633,7 +628,6 @@ interface SettingsState {
   ttsConfig: TTSConfig;
   memoryVaultConfig: MemoryVaultConfig;
   webSearchConfig: WebSearchConfig;
-  webPageReaderConfig: WebPageReaderConfig;
   webInteractionConfig: WebInteractionConfig;
   hotboardConfig: HotboardConfig;
   runCommandConfig: RunCommandConfig;
@@ -664,7 +658,6 @@ interface SettingsState {
   setTTSConfig: (config: Partial<TTSConfig>) => void;
   setMemoryVaultConfig: (config: Partial<MemoryVaultConfig>) => void;
   setWebSearchConfig: (config: Partial<WebSearchConfig>) => void;
-  setWebPageReaderConfig: (config: Partial<WebPageReaderConfig>) => void;
   setWebInteractionConfig: (config: Partial<WebInteractionConfig>) => void;
   setHotboardConfig: (config: Partial<HotboardConfig>) => void;
   setRunCommandConfig: (config: Partial<RunCommandConfig>) => void;
@@ -736,10 +729,6 @@ export const useSettingsStore = create<SettingsState>()(
         enabled: false,
         tavilyApiKey: '',
         maxResults: 5,
-      },
-      webPageReaderConfig: {
-        enabled: false,
-        renderServiceUrl: '',
       },
       webInteractionConfig: {
         enabled: false,
@@ -934,8 +923,6 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ memoryVaultConfig: { ...state.memoryVaultConfig, ...config } })),
       setWebSearchConfig: (config) =>
         set((state) => ({ webSearchConfig: { ...state.webSearchConfig, ...config } })),
-      setWebPageReaderConfig: (config) =>
-        set((state) => ({ webPageReaderConfig: { ...state.webPageReaderConfig, ...config } })),
       setWebInteractionConfig: (config) =>
         set((state) => ({ webInteractionConfig: { ...state.webInteractionConfig, ...config } })),
       setHotboardConfig: (config) =>
@@ -1262,7 +1249,6 @@ export const useSettingsStore = create<SettingsState>()(
         ttsConfig: state.ttsConfig,
         memoryVaultConfig: state.memoryVaultConfig,
         webSearchConfig: state.webSearchConfig,
-        webPageReaderConfig: state.webPageReaderConfig,
         webInteractionConfig: state.webInteractionConfig,
         hotboardConfig: state.hotboardConfig,
         runCommandConfig: state.runCommandConfig,

@@ -5,7 +5,6 @@ import {
   NativeToolConfig,
   RunCommandConfig,
   WebInteractionConfig,
-  WebPageReaderConfig,
   WebSearchConfig,
 } from '../../stores/settings';
 
@@ -25,7 +24,6 @@ export interface ToolDefinition {
 export interface ToolDefinitionConfig {
   memoryVault: boolean;
   webSearch: boolean;
-  webPageReader?: boolean;
   webInteraction?: boolean;
   hotboard?: boolean;
   runCommand?: RunCommandConfig;
@@ -36,7 +34,6 @@ export interface ToolDefinitionConfig {
 export interface ToolExecutionContext {
   memoryVaultConfig: MemoryVaultConfig;
   webSearchConfig: WebSearchConfig;
-  webPageReaderConfig: WebPageReaderConfig;
   webInteractionConfig: WebInteractionConfig;
   hotboardConfig: HotboardConfig;
   runCommandConfig: RunCommandConfig;
