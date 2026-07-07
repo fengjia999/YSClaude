@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { settingsPageColors, useSettingsPageColors } from '../src/theme/colors';
 import { createSettingsStyles } from '../src/screens/settings/styles';
 import { WelcomePageTab } from '../src/screens/settings/WelcomePageTab';
@@ -26,6 +27,7 @@ export default function SettingsScreen() {
   styles = useMemo(() => createSettingsStyles(colors), [colors]);
 
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const keyboardHeight = useKeyboardHeight();
   const [activeTab, setActiveTab] = useState(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -52,11 +54,14 @@ export default function SettingsScreen() {
 
   return (
     <View style={[styles.container, { paddingBottom: keyboardHeight }]}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
         <Pressable style={styles.backButton} onPress={() => router.back()}>
-          <Text style={styles.backIcon}>←</Text>
+          <Text style={styles.backIcon}>‹</Text>
         </Pressable>
-        <Text style={styles.title}>设置</Text>
+        <View style={styles.headerTitleBlock}>
+          <Text style={styles.title}>设置</Text>
+          <Text style={styles.subtitle}>偏好、工具和外观</Text>
+        </View>
         <View style={styles.backButton} />
       </View>
 

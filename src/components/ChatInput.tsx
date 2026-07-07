@@ -22,7 +22,7 @@ import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 
 import { useSettingsStore } from '../stores/settings';
 import { buildStickerDefinitions, normalizeStickerName, type StickerDefinition } from '../utils/stickers';
-import { getAppearanceCssStyle, parseAppearanceCss } from '../utils/appearanceCss';
+import { getAppearanceCssStyle, getAppearancePlaceholderTextColor, parseAppearanceCss } from '../utils/appearanceCss';
 import {
   formatMcpPromptResult,
   formatMcpResourceResult,
@@ -137,6 +137,8 @@ export function ChatInput({
     [appearanceConfig?.customCss]
   );
   const cssStyle = (...selectors: string[]) => getAppearanceCssStyle(customCssStyles, ...selectors);
+  const inputPlaceholderStyle = cssStyle('.input-placeholder', '.chat-input-placeholder');
+  const inputPlaceholderTextColor = getAppearancePlaceholderTextColor(inputPlaceholderStyle, colors.textTertiary);
   const current = apiConfigs[activeConfigIndex];
   const currentModel = current?.name || current?.model || '未配置';
   const mcpServers = mcpToolConfig?.servers || [];
@@ -533,7 +535,7 @@ export function ChatInput({
               onChangeText={handleChangeText}
               onSubmitEditing={() => void handleSend(text)}
               placeholder="Reply to Claude..."
-              placeholderTextColor={colors.textTertiary}
+              placeholderTextColor={inputPlaceholderTextColor}
               multiline={false}
               submitBehavior="submit"
               returnKeyType="send"
@@ -572,7 +574,7 @@ export function ChatInput({
               onChangeText={handleChangeText}
               onSubmitEditing={() => void handleSend(text)}
               placeholder="Reply to Claude..."
-              placeholderTextColor={colors.textTertiary}
+              placeholderTextColor={inputPlaceholderTextColor}
               multiline
               submitBehavior="submit"
               returnKeyType="send"

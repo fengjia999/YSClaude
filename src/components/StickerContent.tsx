@@ -1,6 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import type { StyleProp, TextStyle } from 'react-native';
+import type { ImageSourcePropType, StyleProp, TextStyle } from 'react-native';
 import Markdown from '@ronradtke/react-native-markdown-display';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 
@@ -30,6 +30,83 @@ type ContentChunk =
   | { type: 'picture'; picture: GeneratedPicture; prompt: string };
 
 const RICH_TOKEN_PATTERN = /\[(Sticker|Pic):([^\]\r\n]+)\]/g;
+
+function getContainedSize(width: number, height: number): { width: number; height: number } {
+  if (width <= 0 || height <= 0) {
+    return { width: STICKER_RENDER_SIZE, height: STICKER_RENDER_SIZE };
+  }
+
+  const scale = Math.min(STICKER_RENDER_SIZE / width, STICKER_RENDER_SIZE / height);
+  return {
+    width: Math.round(width * scale),
+    height: Math.round(height * scale),
+  };
+}
+
+function StickerImage({
+  source,
+  name,
+  isUser,
+}: {
+  source: ImageSourcePropType;
+  name: string;
+  isUser: boolean;
+}) {
+  const [sourceSize, setSourceSize] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSourceSize(null);
+
+    const resolved = Image.resolveAssetSource(source);
+    if (resolved?.width && resolved?.height) {
+      setSourceSize({ width: resolved.width, height: resolved.height });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (resolved?.uri) {
+      Image.getSize(
+        resolved.uri,
+        (width, height) => {
+          if (!cancelled) setSourceSize({ width, height });
+        },
+        () => undefined
+      );
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [source]);
+
+  if (!isUser) {
+    return (
+      <Image
+        source={source}
+        style={styles.sticker}
+        resizeMode="contain"
+        accessibilityLabel={`表情包：${name}`}
+      />
+    );
+  }
+
+  const userStickerSize = sourceSize
+    ? getContainedSize(sourceSize.width, sourceSize.height)
+    : { width: STICKER_RENDER_SIZE, height: STICKER_RENDER_SIZE };
+
+  return (
+    <View style={styles.userStickerFrame}>
+      <Image
+        source={source}
+        style={[styles.userStickerImage, userStickerSize]}
+        resizeMode="stretch"
+        accessibilityLabel={`表情包：${name}`}
+      />
+    </View>
+  );
+}
 
 function hasMarkdownSyntax(text: string): boolean {
   return (
@@ -159,12 +236,11 @@ export function StickerContent({
       {chunks.map((chunk, index) => {
         if (chunk.type === 'sticker') {
           return (
-            <Image
+            <StickerImage
               key={`sticker-${index}-${chunk.sticker.name}`}
               source={chunk.sticker.image}
-              style={styles.sticker}
-              resizeMode="contain"
-              accessibilityLabel={`表情包：${chunk.sticker.name}`}
+              name={chunk.sticker.name}
+              isUser={isUser}
             />
           );
         }
@@ -253,6 +329,15 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   sticker: {
     width: STICKER_RENDER_SIZE,
     height: STICKER_RENDER_SIZE,
+  },
+  userStickerFrame: {
+    width: STICKER_RENDER_SIZE,
+    height: STICKER_RENDER_SIZE,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+  },
+  userStickerImage: {
+    flexShrink: 0,
   },
   pictureShell: {
     width: 240,

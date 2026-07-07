@@ -46,16 +46,12 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
-function shouldExpandMarkdownListBubble(text: string): boolean {
+function shouldExpandMarkdownBlockBubble(text: string): boolean {
   const listLinePattern = /^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)(.+)$/;
-  return text.split(/\r?\n/).some((line) => {
-    const match = listLinePattern.exec(line);
-    if (!match) return false;
-
-    const content = match[1].trim();
-    const cjkCount = (content.match(/[\u3400-\u9fff]/g) || []).length;
-    return content.length >= 20 || cjkCount >= 8;
-  });
+  const dividerLinePattern = /^\s{0,3}(?:[-*_][ \t]*){3,}$/;
+  return text.split(/\r?\n/).some((line) =>
+    listLinePattern.test(line) || dividerLinePattern.test(line)
+  );
 }
 
 function createMarkdownDividerStyle(textColor: string, compact = false) {
@@ -979,12 +975,12 @@ export const ChatBubble = React.memo(function ChatBubble({
     const menuLeft = Math.max(8, menuAnchor.x + menuAnchor.width - MENU_WIDTH);
     const menuTop = Math.max(8, menuAnchor.y - MENU_HEIGHT - 8);
     const userBubbleMaxWidth = Math.round(messageAvailableWidth * (userBubbleWidthPercent / 100));
-    const expandUserMarkdownListBubble = shouldExpandMarkdownListBubble(message.content);
+    const expandUserMarkdownBlockBubble = shouldExpandMarkdownBlockBubble(message.content);
     const userBubbleBaseStyle = [
       styles.userBubble,
       {
         maxWidth: '100%' as const,
-        ...(expandUserMarkdownListBubble ? { width: userBubbleMaxWidth } : null),
+        ...(expandUserMarkdownBlockBubble ? { width: userBubbleMaxWidth } : null),
         backgroundColor: userBubbleGlass.enabled
           ? 'rgba(255,255,255,0.28)'
           : userBubbleTransparent ? 'transparent' : userBubbleColor,
@@ -1320,7 +1316,7 @@ export const ChatBubble = React.memo(function ChatBubble({
 
     return [
       ...assistantBubbleBaseStyle,
-      shouldExpandMarkdownListBubble(content) && { width: assistantBubbleMaxWidth },
+      shouldExpandMarkdownBlockBubble(content) && { width: assistantBubbleMaxWidth },
       hasStickerToken(content, messageStickers) && styles.userBubbleWithSticker,
     ];
   }

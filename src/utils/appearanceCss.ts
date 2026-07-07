@@ -1,4 +1,4 @@
-import type { TextStyle, ViewStyle } from 'react-native';
+import type { ColorValue, TextStyle, ViewStyle } from 'react-native';
 
 export type AppearanceCssTarget =
   | 'userMessage'
@@ -8,7 +8,8 @@ export type AppearanceCssTarget =
   | 'userText'
   | 'assistantText'
   | 'inputBar'
-  | 'inputText';
+  | 'inputText'
+  | 'inputPlaceholder';
 
 export type AppearanceBlurTint =
   | 'light'
@@ -52,6 +53,8 @@ const SELECTOR_TARGETS: Record<string, AppearanceCssTarget> = {
   '.input-bar': 'inputBar',
   '.input-container': 'inputBar',
   '.input-text': 'inputText',
+  '.input-placeholder': 'inputPlaceholder',
+  '.chat-input-placeholder': 'inputPlaceholder',
 };
 
 function normalizeSelector(selector: string): string {
@@ -79,6 +82,58 @@ export function withoutAppearanceGlassProps(style?: AppearanceCssRuleStyle): App
   if (!style) return undefined;
   const { backdropFilter, blurIntensity, blurTint, ...viewStyle } = style;
   return Object.keys(viewStyle).length > 0 ? viewStyle : undefined;
+}
+
+function normalizeHexPair(pair: string): string {
+  return pair.length === 1 ? `${pair}${pair}` : pair;
+}
+
+function hexToRgb(color: string): { r: number; g: number; b: number; a: number } | undefined {
+  const hex = color.trim().replace(/^#/, '');
+  if (![3, 4, 6, 8].includes(hex.length) || !/^[0-9a-f]+$/i.test(hex)) return undefined;
+
+  const parts = hex.length <= 4
+    ? hex.split('').map(normalizeHexPair)
+    : hex.match(/.{2}/g);
+  if (!parts || parts.length < 3) return undefined;
+
+  const [r, g, b, a = 'ff'] = parts;
+  return {
+    r: Number.parseInt(r, 16),
+    g: Number.parseInt(g, 16),
+    b: Number.parseInt(b, 16),
+    a: Number.parseInt(a, 16) / 255,
+  };
+}
+
+function parseRgbColor(color: string): { r: number; g: number; b: number; a: number } | undefined {
+  const match = color.trim().match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(0|1|0?\.\d+))?\s*\)$/i);
+  if (!match) return undefined;
+
+  const r = Number(match[1]);
+  const g = Number(match[2]);
+  const b = Number(match[3]);
+  const a = match[4] === undefined ? 1 : Number(match[4]);
+  if ([r, g, b].some((part) => part < 0 || part > 255) || a < 0 || a > 1) return undefined;
+  return { r, g, b, a };
+}
+
+function withColorOpacity(color: string, opacity: number): string {
+  if (color === 'transparent') return color;
+  const rgba = color.startsWith('#') ? hexToRgb(color) : parseRgbColor(color);
+  if (!rgba) return color;
+  const nextAlpha = Math.min(1, Math.max(0, rgba.a * opacity));
+  return `rgba(${rgba.r},${rgba.g},${rgba.b},${Number(nextAlpha.toFixed(3))})`;
+}
+
+export function getAppearancePlaceholderTextColor(
+  style: AppearanceCssRuleStyle | undefined,
+  fallback: ColorValue,
+): ColorValue {
+  const color = typeof style?.color === 'string' ? style.color : fallback;
+  const opacity = typeof style?.opacity === 'number' ? style.opacity : undefined;
+  if (opacity === undefined || typeof color !== 'string') return color;
+  return withColorOpacity(color, opacity);
 }
 
 export function getAppearanceGlassConfig(style?: AppearanceCssRuleStyle): {

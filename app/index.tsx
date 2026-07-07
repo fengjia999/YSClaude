@@ -18,6 +18,7 @@ import {
   type ListRenderItem,
   type AppStateStatus,
   type ImageStyle,
+  type ViewStyle,
 } from 'react-native';
 import Animated, {
   Easing,
@@ -187,8 +188,16 @@ function withAlpha(color: string, alpha: number): string {
   return boundedAlpha === 0 ? 'rgba(0, 0, 0, 0)' : normalized;
 }
 
-function getNumericHeight(value: unknown, fallback: number): number {
+function getNumericStyleValue(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function getTopBarCssBottom(style?: ViewStyle): number {
+  const hasCustomHeight = typeof style?.height === 'number' && Number.isFinite(style.height);
+  const top = getNumericStyleValue(style?.top, 0);
+  const height = getNumericStyleValue(style?.height, MESSAGE_TOP_GAP);
+  const minHeight = getNumericStyleValue(style?.minHeight, 0);
+  return Math.max(0, top + Math.max(hasCustomHeight ? height : MESSAGE_TOP_GAP, minHeight));
 }
 
 function formatRemoteSnapshotState(status: PromptCacheRemoteSnapshotStatus): string {
@@ -269,10 +278,15 @@ export default function ChatScreen() {
   const topBarCssStyle = cssStyle('.top-bar', '.chat-top-bar');
   const topBarBackgroundCssStyle = imageCssStyle('.top-bar-background', '.chat-top-bar-background');
   const topBarFadeCssStyle = cssStyle('.top-bar-fade', '.chat-top-bar-fade');
-  const topBarHeight = getNumericHeight(topBarCssStyle?.height, MESSAGE_TOP_GAP);
+  const topBarCssBottom = useMemo(
+    () => getTopBarCssBottom(topBarCssStyle),
+    [topBarCssStyle]
+  );
+  const [topBarMeasuredBottom, setTopBarMeasuredBottom] = useState(0);
+  const messageTopInset = Math.max(topBarCssBottom, topBarMeasuredBottom);
   const messageTopFadeStyle = useMemo(
-    () => ({ height: topBarHeight }),
-    [topBarHeight]
+    () => ({ height: messageTopInset }),
+    [messageTopInset]
   );
   const topBarFadeColor = typeof topBarFadeCssStyle?.backgroundColor === 'string'
     ? topBarFadeCssStyle.backgroundColor
@@ -1023,6 +1037,14 @@ export default function ChatScreen() {
     }
   }, []);
 
+  const handleTopBarLayout = useCallback((event: LayoutChangeEvent) => {
+    const { y, height } = event.nativeEvent.layout;
+    const nextBottom = Math.ceil(Math.max(0, y + height));
+    setTopBarMeasuredBottom((current) =>
+      Math.abs(current - nextBottom) > 1 ? nextBottom : current
+    );
+  }, []);
+
   const handleListLayout = useCallback((event: LayoutChangeEvent) => {
     const nextHeight = Math.ceil(event.nativeEvent.layout.height);
     if (nextHeight > 0 && Math.abs(listHeightRef.current - nextHeight) > 1) {
@@ -1083,10 +1105,10 @@ export default function ChatScreen() {
   const messageContentStyle = useMemo(
     () => [
       styles.messageContent,
-      { paddingTop: topBarHeight },
+      { paddingTop: messageTopInset },
       { paddingBottom: inputBarHeight + MESSAGE_BOTTOM_GAP },
     ],
-    [inputBarHeight, topBarHeight]
+    [inputBarHeight, messageTopInset]
   );
 
   const floorMap = useMemo(() => {
@@ -1346,7 +1368,7 @@ export default function ChatScreen() {
           </>
         )}
       </View>
-      <View style={[styles.header, topBarCssStyle]}>
+      <View style={[styles.header, topBarCssStyle]} onLayout={handleTopBarLayout}>
         {topBarBackgroundImageUri && (
           <Image
             source={{ uri: topBarBackgroundImageUri }}

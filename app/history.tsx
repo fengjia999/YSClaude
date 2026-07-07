@@ -1,9 +1,9 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, Pressable, FlatList, Alert, TextInput, Modal, ActivityIndicator, Image, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Pressable, FlatList, Alert, TextInput, Modal, ActivityIndicator, Image, useWindowDimensions } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { settingsPageColors, useSettingsPageColors, type ThemeColors } from '../src/theme/colors';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { lightColors, useThemeColors, type ThemeColors } from '../src/theme/colors';
 
-import { fonts } from '../src/theme/fonts';
 import { Conversation, IncomingLetter } from '../src/types';
 import {
   getAllConversations,
@@ -21,16 +21,24 @@ import { useChatStore } from '../src/stores/chat';
 import { deleteGeneratedImageFile } from '../src/services/imageGeneration';
 
 
-let colors = settingsPageColors;
+let colors = lightColors;
 type SearchScope = 'current' | 'global';
 type HistoryViewMode = 'chats' | 'gallery' | 'letters';
 const GALLERY_COLUMNS = 3;
 const GALLERY_GAP = 8;
-const GALLERY_ITEM_SIZE = Math.floor((Dimensions.get('window').width - 32 - GALLERY_GAP * (GALLERY_COLUMNS - 1)) / GALLERY_COLUMNS);
 
 export default function HistoryScreen() {
-  colors = useSettingsPageColors();
-  styles = useMemo(() => createStyles(colors), [colors]);
+  colors = useThemeColors();
+  const insets = useSafeAreaInsets();
+  const window = useWindowDimensions();
+  const galleryItemSize = useMemo(
+    () => Math.floor((window.width - 32 - GALLERY_GAP * (GALLERY_COLUMNS - 1)) / GALLERY_COLUMNS),
+    [window.width]
+  );
+  styles = useMemo(
+    () => createStyles(colors, galleryItemSize, window.height),
+    [colors, galleryItemSize, window.height]
+  );
 
   const router = useRouter();
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -265,13 +273,16 @@ export default function HistoryScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
         <Pressable style={styles.backButton} onPress={() => router.back()}>
-          <Text style={styles.backIcon}>←</Text>
+          <Text style={styles.backIcon}>‹</Text>
         </Pressable>
-        <Text style={styles.title}>对话历史</Text>
+        <View style={styles.headerTitleBlock}>
+          <Text style={styles.title}>对话历史</Text>
+          <Text style={styles.subtitle}>聊天、图片和来信</Text>
+        </View>
         <Pressable style={styles.newButton} onPress={handleNewChat}>
-          <Text style={styles.newIcon}>✎</Text>
+          <Text style={styles.newIcon}>＋</Text>
         </Pressable>
       </View>
 
@@ -566,51 +577,54 @@ export default function HistoryScreen() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => StyleSheet.create({
+const createStyles = (colors: ThemeColors, galleryItemSize: number, windowHeight: number) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 54,
     paddingHorizontal: 16,
-    paddingBottom: 18,
+    paddingBottom: 14,
   },
   backButton: {
-    width: 38,
-    height: 38,
+    width: 40,
+    height: 40,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 19,
+    borderRadius: 8,
   },
-  backIcon: { fontSize: 24, color: colors.background === '#12100D' ? '#F7F2EA' : colors.text },
-  title: { flex: 1, fontSize: 28, fontWeight: '800', color: colors.background === '#12100D' ? '#F7F2EA' : colors.text, textAlign: 'center' },
+  backIcon: { fontSize: 34, lineHeight: 36, color: colors.text },
+  headerTitleBlock: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  title: { fontSize: 19, fontWeight: '700', color: colors.text, textAlign: 'center' },
+  subtitle: { marginTop: 2, fontSize: 12, color: colors.textTertiary, textAlign: 'center' },
   newButton: {
-    width: 38,
-    height: 38,
+    width: 40,
+    height: 40,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 19,
+    borderRadius: 8,
   },
-  newIcon: { fontSize: 20, color: colors.background === '#12100D' ? '#F7F2EA' : colors.text },
+  newIcon: { fontSize: 27, lineHeight: 30, color: colors.text },
   modeTabs: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 4,
     paddingHorizontal: 16,
+    paddingTop: 4,
     paddingBottom: 12,
+    backgroundColor: colors.background,
   },
   modeTab: {
     flex: 1,
-    minHeight: 36,
-    borderRadius: 18,
+    minHeight: 38,
+    borderRadius: 8,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
     justifyContent: 'center',
     alignItems: 'center',
   },
   modeTabActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
   },
   modeTabText: {
     fontSize: 14,
@@ -618,15 +632,17 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
   },
   modeTabTextActive: {
-    color: '#FFFFFF',
+    color: colors.primary,
   },
   searchPanel: {
     marginHorizontal: 16,
     marginBottom: 10,
     paddingHorizontal: 14,
     paddingVertical: 14,
-    borderRadius: 18,
+    borderRadius: 8,
     backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   searchInputRow: {
     minHeight: 42,
@@ -636,7 +652,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.inputBackground,
     borderWidth: 1,
     borderColor: colors.inputBorder,
-    borderRadius: 14,
+    borderRadius: 8,
     paddingHorizontal: 12,
   },
   searchInput: {
@@ -653,13 +669,16 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   scopeButton: {
     minHeight: 32,
     paddingHorizontal: 13,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: colors.inputBackground,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
     justifyContent: 'center',
     alignItems: 'center',
   },
   scopeButtonActive: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.primaryLight,
+    borderColor: colors.primary,
   },
   scopeButtonText: {
     fontSize: 13,
@@ -667,7 +686,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
   },
   scopeButtonTextActive: {
-    color: '#FFFFFF',
+    color: colors.primary,
   },
   list: { paddingHorizontal: 16, paddingTop: 2, paddingBottom: 24 },
   galleryList: {
@@ -680,15 +699,17 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     marginBottom: GALLERY_GAP,
   },
   galleryItem: {
-    width: GALLERY_ITEM_SIZE,
-    height: GALLERY_ITEM_SIZE,
+    width: galleryItemSize,
+    height: galleryItemSize,
     borderRadius: 8,
     overflow: 'hidden',
     backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   galleryImage: {
-    width: GALLERY_ITEM_SIZE,
-    height: GALLERY_ITEM_SIZE,
+    width: galleryItemSize,
+    height: galleryItemSize,
   },
   galleryCaption: {
     position: 'absolute',
@@ -712,12 +733,13 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingRight: 12,
     paddingVertical: 15,
     marginBottom: 10,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   itemActive: {
     backgroundColor: colors.primaryLight,
-    borderWidth: 1,
     borderColor: colors.primary,
   },
   itemContent: { flex: 1, gap: 4 },
@@ -741,15 +763,19 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     marginBottom: 10,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   letterItem: {
     paddingHorizontal: 16,
     paddingVertical: 14,
     marginBottom: 10,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   searchResultHeader: {
     flexDirection: 'row',
@@ -796,15 +822,19 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   emptyText: { fontSize: 15, color: colors.textTertiary },
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    backgroundColor: 'rgba(20,20,19,0.32)',
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 22,
   },
   modal: {
-    backgroundColor: colors.surface,
-    borderRadius: 18,
+    backgroundColor: colors.background,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
     padding: 24,
-    width: '80%',
+    width: '100%',
+    maxWidth: 360,
   },
   modalTitle: {
     fontSize: 17,
@@ -816,7 +846,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.inputBackground,
     borderWidth: 1,
     borderColor: colors.inputBorder,
-    borderRadius: 10,
+    borderRadius: 8,
     padding: 12,
     fontSize: 15,
     color: colors.text,
@@ -864,17 +894,21 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   previewPanel: {
     width: '100%',
     maxWidth: 520,
-    borderRadius: 18,
+    borderRadius: 8,
     overflow: 'hidden',
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   letterPreviewPanel: {
     width: '100%',
     maxWidth: 540,
     maxHeight: '82%',
-    borderRadius: 18,
+    borderRadius: 8,
     overflow: 'hidden',
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   letterPreviewBody: {
     paddingHorizontal: 16,
@@ -888,7 +922,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   previewImage: {
     width: '100%',
-    height: Math.min(520, Dimensions.get('window').height * 0.58),
+    height: Math.min(520, windowHeight * 0.58),
     backgroundColor: '#000000',
   },
   previewTitle: {
@@ -956,4 +990,4 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   },
 });
 
-let styles = createStyles(colors);
+let styles = createStyles(colors, 100, 720);
