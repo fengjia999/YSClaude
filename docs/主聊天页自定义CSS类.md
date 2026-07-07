@@ -55,6 +55,8 @@
 | `.chat-user-column` | 用户消息列容器别名 |
 | `.user-bubble` | 用户消息气泡 |
 | `.chat-user-bubble` | 用户消息气泡别名 |
+| `.user-bubble-tail` | 用户消息气泡尾巴，默认隐藏 |
+| `.chat-user-bubble-tail` | 用户气泡尾巴别名 |
 | `.user-text` | 用户消息文字/Markdown 正文 |
 | `.chat-user-text` | 用户消息文字/Markdown 正文别名 |
 | `.user-image` | 用户发送图片 |
@@ -66,6 +68,8 @@
 | `.chat-assistant-row` | AI 消息整行容器别名 |
 | `.assistant-bubble` | AI 气泡模式下的消息气泡 |
 | `.chat-assistant-bubble` | AI 气泡别名 |
+| `.assistant-bubble-tail` | AI 气泡模式下的气泡尾巴，默认隐藏 |
+| `.chat-assistant-bubble-tail` | AI 气泡尾巴别名 |
 | `.assistant-content` | AI 非气泡模式正文区域 |
 | `.chat-assistant-content` | AI 正文区域别名 |
 | `.assistant-text` | AI 消息文字/Markdown 正文 |
@@ -246,6 +250,58 @@ text-align
 
 .send-button {
   opacity: 0.86;
+}
+```
+
+## 气泡尾巴
+
+`.user-bubble-tail` 和 `.assistant-bubble-tail` 默认是隐藏的三角形节点；写 `display: flex` 后会显示。尾巴位于气泡内部，通常需要把气泡的 `overflow` 设为 `visible`，尤其是 AI 气泡默认会裁剪内容。
+
+模拟微信样式可以这样写：
+
+```css
+.user-bubble {
+  background-color: #95ec69;
+  border-radius: 7px;
+  border-top-right-radius: 2px;
+  padding: 9px 11px;
+  overflow: visible;
+}
+
+.assistant-bubble {
+  background-color: #ffffff;
+  border-radius: 7px;
+  border-top-left-radius: 2px;
+  padding: 9px 11px;
+  overflow: visible;
+}
+
+.user-bubble-tail {
+  display: flex;
+  right: -6px;
+  top: 9px;
+  width: 0px;
+  height: 0px;
+  border-top-width: 5px;
+  border-bottom-width: 5px;
+  border-left-width: 7px;
+  border-top-color: transparent;
+  border-bottom-color: transparent;
+  border-left-color: #95ec69;
+}
+
+.assistant-bubble-tail {
+  display: flex;
+  left: -6px;
+  top: 9px;
+  width: 0px;
+  height: 0px;
+  border-top-width: 5px;
+  border-bottom-width: 5px;
+  border-right-width: 7px;
+  border-top-color: transparent;
+  border-bottom-color: transparent;
+  border-right-color: #ffffff;
 }
 ```
 

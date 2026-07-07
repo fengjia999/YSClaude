@@ -600,11 +600,19 @@ export const ChatBubble = React.memo(function ChatBubble({
     }),
     [customCssStyles]
   );
+  const userBubbleTailCssStyle = useMemo(
+    () => withoutAppearanceGlassProps(cssStyle('.user-bubble-tail', '.chat-user-bubble-tail')),
+    [customCssStyles]
+  );
   const assistantBubbleCssStyle = useMemo(
     () => ({
       ...(customCssStyles.assistantBubble || {}),
       ...(getAppearanceCssStyle(customCssStyles, '.assistant-bubble', '.chat-assistant-bubble') || {}),
     }),
+    [customCssStyles]
+  );
+  const assistantBubbleTailCssStyle = useMemo(
+    () => withoutAppearanceGlassProps(cssStyle('.assistant-bubble-tail', '.chat-assistant-bubble-tail')),
     [customCssStyles]
   );
   const userBubbleGlass = useMemo(() => getAppearanceGlassConfig(userBubbleCssStyle), [userBubbleCssStyle]);
@@ -990,6 +998,12 @@ export const ChatBubble = React.memo(function ChatBubble({
       withoutAppearanceGlassProps(userBubbleCssStyle),
       messageIsStickerOnly && styles.userStickerOnlyBubble,
     ];
+    const userBubbleTailStyle = [
+      styles.bubbleTail,
+      styles.userBubbleTail,
+      { borderLeftColor: userBubbleTransparent ? 'transparent' : userBubbleColor },
+      userBubbleTailCssStyle,
+    ];
 
     const userColumnNode = (
       <View
@@ -1047,6 +1061,7 @@ export const ChatBubble = React.memo(function ChatBubble({
                   style={StyleSheet.absoluteFill}
                 />
               )}
+              <View pointerEvents="none" style={userBubbleTailStyle} />
               {dailyPaperCard ? (
                 <DailyPaperForwardCard paper={dailyPaperCard} />
               ) : sharedLinkUrl ? (
@@ -1077,6 +1092,7 @@ export const ChatBubble = React.memo(function ChatBubble({
                   style={StyleSheet.absoluteFill}
                 />
               )}
+              <View pointerEvents="none" style={userBubbleTailStyle} />
               <Text style={[styles.userText, userTextStyle]}>{message.content}</Text>
             </Pressable>
           )}
@@ -1292,6 +1308,12 @@ export const ChatBubble = React.memo(function ChatBubble({
     },
     withoutAppearanceGlassProps(assistantBubbleCssStyle),
   ];
+  const assistantBubbleTailStyle = [
+    styles.bubbleTail,
+    styles.assistantBubbleTail,
+    { borderRightColor: assistantBubbleTransparent ? 'transparent' : assistantBubbleColor },
+    assistantBubbleTailCssStyle,
+  ];
   const assistantContentStyle = [
     styles.assistantContent,
     sideAvatarsVisible && styles.assistantSideContent,
@@ -1385,6 +1407,7 @@ export const ChatBubble = React.memo(function ChatBubble({
                     style={StyleSheet.absoluteFill}
                   />
                 )}
+                <View pointerEvents="none" style={assistantBubbleTailStyle} />
                 <StickerContent
                   content={part.content}
                   variant="assistant"
@@ -1414,6 +1437,7 @@ export const ChatBubble = React.memo(function ChatBubble({
                     style={StyleSheet.absoluteFill}
                   />
                 )}
+                <View pointerEvents="none" style={assistantBubbleTailStyle} />
                 <StickerContent
                   content=" "
                   variant="assistant"
@@ -1878,6 +1902,33 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   userBubbleWithSticker: {
     paddingVertical: 8,
     paddingHorizontal: 10,
+  },
+  bubbleTail: {
+    display: 'none',
+    position: 'absolute',
+    width: 0,
+    height: 0,
+    zIndex: 1,
+  },
+  userBubbleTail: {
+    right: -6,
+    top: 9,
+    borderTopWidth: 5,
+    borderBottomWidth: 5,
+    borderLeftWidth: 7,
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
+    borderLeftColor: colors.userBubble,
+  },
+  assistantBubbleTail: {
+    left: -6,
+    top: 9,
+    borderTopWidth: 5,
+    borderBottomWidth: 5,
+    borderRightWidth: 7,
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
+    borderRightColor: colors.userBubble,
   },
   sharedLinkCard: {
     width: Math.min(300, LINK_CARD_MAX_WIDTH),
