@@ -1,6 +1,5 @@
 import { randomUUID } from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
-import { copyAsync } from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -37,6 +36,7 @@ import {
 } from '../src/stores/api-achievements';
 import { lightColors, useThemeColors, type ThemeColors } from '../src/theme/colors';
 import type { ApiUsageDailySummary, ApiUsageSummary } from '../src/types';
+import { copyFileFromUri } from '../src/utils/fileSystem';
 
 let colors = lightColors;
 
@@ -95,7 +95,7 @@ async function copyBadgeImage(asset: ImagePicker.ImagePickerAsset, badgeId: stri
   dir.create({ intermediates: true, idempotent: true });
   const safeBadgeId = badgeId.replace(/[^a-zA-Z0-9-]/g, '-');
   const destination = new File(dir, `${safeBadgeId}-${randomUUID()}${badgeImageExtension(asset)}`);
-  await copyAsync({ from: asset.uri, to: destination.uri });
+  await copyFileFromUri(asset.uri, destination);
   return destination.uri;
 }
 

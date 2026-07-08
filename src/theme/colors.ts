@@ -23,7 +23,7 @@ export const lightColors = {
   disclaimer: '#787773',
 };
 
-export const darkColors = {
+const darkColors = {
   background: '#12100D',
   surface: '#211C17',
   surfaceHover: '#2B241D',
@@ -48,13 +48,13 @@ export const darkColors = {
 
 export type ThemeColors = typeof lightColors;
 
-export function createSettingsPageColors(base: ThemeColors): ThemeColors {
+function createSettingsPageColors(base: ThemeColors): ThemeColors {
   return base;
 }
 
 export const settingsPageColors: ThemeColors = createSettingsPageColors(lightColors);
 
-export function getThemeColors(colorScheme: ColorSchemeName | null | undefined): ThemeColors {
+function getThemeColors(colorScheme: ColorSchemeName | null | undefined): ThemeColors {
   return colorScheme === 'dark' ? darkColors : lightColors;
 }
 

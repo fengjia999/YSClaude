@@ -58,7 +58,7 @@ export interface AppearanceThemeSnapshot {
   inputIconUris?: Partial<Record<ChatInputIconKey, string>>;
 }
 
-export interface AppearanceTheme {
+interface AppearanceTheme {
   id: string;
   name: string;
   updatedAt: number;
@@ -267,12 +267,12 @@ export interface McpToolConfig {
   resourceToolsEnabled?: boolean;
 }
 
-export interface ToolSettingsUiConfig {
+interface ToolSettingsUiConfig {
   builtInToolsExpanded: boolean;
   customMcpExpanded: boolean;
 }
 
-export interface ReadingConfig {
+interface ReadingConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -296,7 +296,7 @@ export interface FloatingBallConfig {
   assetAutoSwitchIntervalSeconds?: number;
 }
 
-export interface PeriodConfig {
+interface PeriodConfig {
   sendToAI: boolean;
 }
 
@@ -319,9 +319,6 @@ export interface PromptCacheConfig {
   dingTalkWebhook: string;
   dingTalkSecret: string;
   dingTalkAtMobiles: string;
-  upEndpoint: string;
-  upP256dh: string;
-  upAuth: string;
 }
 
 export interface ImageGenerationFaceReference {
@@ -519,13 +516,10 @@ function normalizePromptCacheConfig(config?: Partial<PromptCacheConfig>): Prompt
     dingTalkWebhook: config?.dingTalkWebhook || '',
     dingTalkSecret: config?.dingTalkSecret || '',
     dingTalkAtMobiles: config?.dingTalkAtMobiles || '',
-    upEndpoint: config?.upEndpoint || '',
-    upP256dh: config?.upP256dh || '',
-    upAuth: config?.upAuth || '',
   };
 }
 
-export function normalizeDailyPaperConfig(config?: Partial<DailyPaperConfig>): DailyPaperConfig {
+function normalizeDailyPaperConfig(config?: Partial<DailyPaperConfig>): DailyPaperConfig {
   return {
     useDefaultSources: config?.useDefaultSources ?? true,
     customSources: (config?.customSources || [])
@@ -885,9 +879,6 @@ export const useSettingsStore = create<SettingsState>()(
         dingTalkWebhook: '',
         dingTalkSecret: '',
         dingTalkAtMobiles: '',
-        upEndpoint: '',
-        upP256dh: '',
-        upAuth: '',
       },
       imageGenerationConfig: {
         enabled: false,

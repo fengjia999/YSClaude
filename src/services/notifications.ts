@@ -20,7 +20,7 @@ export function startAppStateListener(): () => void {
 }
 
 /** 应用是否处于后台（非 active）。 */
-export function isAppBackgrounded(): boolean {
+function isAppBackgrounded(): boolean {
   currentAppState = AppState.currentState;
   return currentAppState !== 'active';
 }

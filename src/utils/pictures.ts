@@ -8,7 +8,7 @@ export interface PictureToken {
 
 const PICTURE_PATTERN = /\[Pic:([^\]\r\n]+)\]/g;
 
-export function normalizePicturePrompt(prompt: string): string {
+function normalizePicturePrompt(prompt: string): string {
   return prompt.trim().replace(/\s+/g, ' ');
 }
 

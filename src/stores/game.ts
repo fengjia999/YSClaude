@@ -4,8 +4,8 @@ import { randomUUID } from 'expo-crypto';
 import { sqliteStorage } from '../db/kv-storage';
 import { streamChat } from '../services/api';
 
-export type GameActorType = 'narrator' | 'summary' | 'character';
-export type GameSenderType = 'user' | GameActorType;
+type GameActorType = 'narrator' | 'summary' | 'character';
+type GameSenderType = 'user' | GameActorType;
 
 export const GAME_MACARON_SWATCHES = [
   { name: '薄荷', bg: '#DDF4E7', text: '#237257' },

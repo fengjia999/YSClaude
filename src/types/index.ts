@@ -16,7 +16,7 @@ export interface Message {
   createdAt: number;
 }
 
-export type GeneratedPictureStatus = 'pending' | 'done' | 'failed' | 'deleted';
+type GeneratedPictureStatus = 'pending' | 'done' | 'failed' | 'deleted';
 
 export interface GeneratedPicture {
   tokenIndex: number;
@@ -126,7 +126,7 @@ export interface DailyPaperSource {
   category: string;
 }
 
-export interface DailyPaperSection {
+interface DailyPaperSection {
   title: string;
   items: string[];
 }

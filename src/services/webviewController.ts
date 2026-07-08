@@ -119,10 +119,6 @@ export function showWebViewPanel(): void {
   getHostActions().show();
 }
 
-export function isWebViewOpen(): boolean {
-  return getHostActions().isOpen();
-}
-
 export async function observeActiveWebView(): Promise<WebViewObservation | null> {
   return getHostActions().observeIfOpen();
 }

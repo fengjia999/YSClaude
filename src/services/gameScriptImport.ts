@@ -1,7 +1,7 @@
 import { File } from 'expo-file-system';
 import type { GameScriptEntry } from '../stores/game';
 
-export interface ImportedGameScript {
+interface ImportedGameScript {
   title: string;
   description: string;
   entries: Array<Omit<GameScriptEntry, 'id'>>;
@@ -31,7 +31,7 @@ export async function importGameScriptFromPicker(): Promise<GameScriptImportResu
   };
 }
 
-export function parseGameScriptJson(jsonText: string, fallbackName = '导入剧本'): ImportedGameScript {
+function parseGameScriptJson(jsonText: string, fallbackName = '导入剧本'): ImportedGameScript {
   const parsed = JSON.parse(stripBom(jsonText));
   const worldBook = unwrapWorldBook(parsed);
   const rawEntries = collectEntries(worldBook);

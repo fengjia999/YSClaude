@@ -89,6 +89,7 @@ const FLOATING_STREAM_SOFT_BOUNDARIES = '，,、';
 const FLOATING_STREAM_MIN_SOFT_SEGMENT_CHARS = 18;
 const FLOATING_STREAM_MAX_SEGMENT_CHARS = 72;
 const FLOATING_VISUAL_SEGMENT_INTERVAL_MS = 2000;
+const STREAM_UI_FLUSH_INTERVAL_MS = 48;
 const MAX_IMAGE_GENERATION_REFERENCE_IMAGES = 16;
 const MAX_RUN_COMMAND_PROMPT_CHARS = 4000;
 
@@ -1885,20 +1886,52 @@ async function streamAssistantResponse(
   abortController = new AbortController();
   const floatingStream = createFloatingStreamBridge();
   floatingStream.start();
+  let pendingStreamContent = '';
+  let streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const onToken = (token: string) => {
-    floatingStream.append(token);
+  const flushStreamContent = () => {
+    if (streamFlushTimer !== null) {
+      clearTimeout(streamFlushTimer);
+      streamFlushTimer = null;
+    }
+    if (!pendingStreamContent) return;
+
+    const content = pendingStreamContent;
+    pendingStreamContent = '';
+    const target = get().messages.find((message) => message.id === assistantMessage.id);
+    if (target?.role !== 'assistant') return;
+
     set((state) => {
-      const msgs = [...state.messages];
-      const last = msgs[msgs.length - 1];
-      if (last && last.role === 'assistant') {
-        msgs[msgs.length - 1] = { ...last, content: last.content + token };
-      }
-      return { messages: msgs };
+      const index = state.messages.findIndex((message) => message.id === assistantMessage.id);
+      if (index < 0) return state;
+      const current = state.messages[index];
+      if (current.role !== 'assistant') return state;
+      const messages = [...state.messages];
+      messages[index] = { ...current, content: current.content + content };
+      return { messages };
     });
   };
 
+  const scheduleStreamContentFlush = () => {
+    if (streamFlushTimer !== null) return;
+    streamFlushTimer = setTimeout(() => {
+      streamFlushTimer = null;
+      flushStreamContent();
+    }, STREAM_UI_FLUSH_INTERVAL_MS);
+  };
+
+  const onToken = (token: string) => {
+    floatingStream.append(token);
+    pendingStreamContent += token;
+    scheduleStreamContentFlush();
+  };
+
   const setAssistantContent = (content: string) => {
+    pendingStreamContent = '';
+    if (streamFlushTimer !== null) {
+      clearTimeout(streamFlushTimer);
+      streamFlushTimer = null;
+    }
     set((state) => {
       const msgs = [...state.messages];
       const last = msgs[msgs.length - 1];
@@ -1911,6 +1944,7 @@ async function streamAssistantResponse(
 
   // 每发生一次工具调用，就把记录追加到当前 assistant 消息上，实时反映到 UI
   const appendToolInvocation = (inv: ToolInvocation) => {
+    flushStreamContent();
     if (inv.status === 'running' || inv.status === 'done') {
       floatingStream.tool(inv.name, inv.status);
     }
@@ -2038,6 +2072,7 @@ async function streamAssistantResponse(
       );
       responseTotalTokens = usage?.totalTokens;
     }
+    flushStreamContent();
     const finalMessages = get().messages;
     const lastMsg = finalMessages[finalMessages.length - 1];
     if (isEmptyAssistantMessage(lastMsg)) {
@@ -2069,6 +2104,7 @@ async function streamAssistantResponse(
   } catch (err: any) {
     if (isAbortError(err)) {
       floatingStream.cancel();
+      flushStreamContent();
       set({ error: null });
       const finalMessages = get().messages;
       const lastMsg = finalMessages[finalMessages.length - 1];
@@ -2081,10 +2117,16 @@ async function streamAssistantResponse(
       }
     } else {
       floatingStream.error(err.message || '请求失败');
+      if (streamFlushTimer !== null) {
+        clearTimeout(streamFlushTimer);
+        streamFlushTimer = null;
+      }
+      pendingStreamContent = '';
       set({ error: err.message || '请求失败' });
       await deleteTransientResponseMessages();
     }
   } finally {
+    flushStreamContent();
     floatingStream.close();
     set({ isStreaming: false });
     abortController = null;
@@ -2155,8 +2197,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     if ((await getPendingResponseBoundaryMessageId(conversationId)) === undefined) {
-      const existingMessages = await getMessagesByConversation(conversationId);
-      const boundaryMessage = [...existingMessages]
+      const inMemoryBoundaryMessage = [...get().messages]
+        .reverse()
+        .find((message) => message.role === 'user' || message.role === 'assistant');
+      const boundaryMessage = inMemoryBoundaryMessage ?? [...await getMessagesByConversation(conversationId)]
         .reverse()
         .find((message) => message.role === 'user' || message.role === 'assistant');
       await setPendingResponseBoundaryMessageId(conversationId, boundaryMessage?.id ?? null);
@@ -2220,8 +2264,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!artifact) return null;
 
     if ((await getPendingResponseBoundaryMessageId(conversationId)) === undefined) {
-      const existingMessages = await getMessagesByConversation(conversationId);
-      const boundaryMessage = [...existingMessages]
+      const inMemoryBoundaryMessage = [...get().messages]
+        .reverse()
+        .find((message) => message.role === 'user' || message.role === 'assistant');
+      const boundaryMessage = inMemoryBoundaryMessage ?? [...await getMessagesByConversation(conversationId)]
         .reverse()
         .find((message) => message.role === 'user' || message.role === 'assistant');
       await setPendingResponseBoundaryMessageId(conversationId, boundaryMessage?.id ?? null);

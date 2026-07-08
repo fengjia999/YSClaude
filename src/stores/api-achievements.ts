@@ -3,7 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { sqliteStorage } from '../db/kv-storage';
 
 export type ApiAchievementMetric = 'activeDays' | 'totalTokens';
-export type ApiAchievementFeatureScope = 'all' | 'chat' | 'reading' | 'radio' | 'game' | 'unknown';
+type ApiAchievementFeatureScope = 'all' | 'chat' | 'reading' | 'radio' | 'game' | 'unknown';
 export type ApiAchievementCategory = 'companionDays' | 'totalTokens' | 'season' | 'anniversary';
 export type ApiAchievementSeason = 'spring' | 'summer' | 'autumn' | 'winter';
 export type ApiAchievementBadgePattern =
@@ -183,7 +183,7 @@ function uniqueAnniversaryYears(years: number[]): number[] {
     .sort((a, b) => a - b);
 }
 
-export function getDefaultApiAchievements(years: number[] = [new Date().getFullYear()]): ApiAchievementDefinition[] {
+function getDefaultApiAchievements(years: number[] = [new Date().getFullYear()]): ApiAchievementDefinition[] {
   const currentYear = new Date().getFullYear();
   const seasonYears = uniqueAchievementYears(years).filter((year) => year <= Math.max(2026, currentYear));
   const anniversaryYears = uniqueAnniversaryYears(years).filter((year) => year <= Math.max(2027, currentYear));
@@ -247,7 +247,7 @@ export function getDefaultApiAchievements(years: number[] = [new Date().getFullY
   return [...stageAchievements, ...anniversaryAchievements, ...seasonAchievements];
 }
 
-export const DEFAULT_API_ACHIEVEMENTS: ApiAchievementDefinition[] = getDefaultApiAchievements();
+const DEFAULT_API_ACHIEVEMENTS: ApiAchievementDefinition[] = getDefaultApiAchievements();
 
 export function getApiAchievementDefinitions(
   customizations: ApiAchievementDefinition[],

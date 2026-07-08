@@ -1,6 +1,6 @@
 import type { ColorValue, TextStyle, ViewStyle } from 'react-native';
 
-export type AppearanceCssTarget =
+type AppearanceCssTarget =
   | 'userMessage'
   | 'assistantMessage'
   | 'userBubble'

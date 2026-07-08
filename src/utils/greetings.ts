@@ -1,4 +1,4 @@
-export const DEFAULT_GREETING = 'What shall we think through?';
+const DEFAULT_GREETING = 'What shall we think through?';
 
 const DEFAULT_COMMON_GREETINGS = [
   'Welcome,user',
@@ -36,7 +36,7 @@ const WEEKDAYS = [
   'Saturday',
 ];
 
-export function normalizeCustomGreetings(value?: string): string[] {
+function normalizeCustomGreetings(value?: string): string[] {
   return (value || '')
     .split(/\r?\n/)
     .map((line) => line.trim())

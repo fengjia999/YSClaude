@@ -1,15 +1,17 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
   useWindowDimensions,
   type TextStyle,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import { Check, Copy } from 'lucide-react-native';
+import { NativeViewGestureHandler, ScrollView as GestureScrollView } from 'react-native-gesture-handler';
 import { WebView } from 'react-native-webview';
 import { fonts } from '../theme/fonts';
 import { useThemeColors, type ThemeColors } from '../theme/colors';
@@ -31,6 +33,15 @@ function getLanguageLabel(language?: string): string {
 function isHtmlLanguage(language?: string): boolean {
   const label = getLanguageLabel(language);
   return label === 'html' || label === 'htm' || label === 'xhtml';
+}
+
+function withAlpha(hex: string, alpha: number): string {
+  const normalized = hex.replace('#', '');
+  if (normalized.length !== 6) return hex;
+  const red = parseInt(normalized.slice(0, 2), 16);
+  const green = parseInt(normalized.slice(2, 4), 16);
+  const blue = parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
 function lineCountOf(content: string): number {
@@ -68,6 +79,24 @@ ${rawHtml}
 </html>`;
 }
 
+function getCodeTextInheritedStyle(style?: TextStyle): TextStyle | undefined {
+  const flatStyle = StyleSheet.flatten(style);
+  if (!flatStyle) return undefined;
+
+  const {
+    alignSelf: _alignSelf,
+    flex: _flex,
+    flexGrow: _flexGrow,
+    flexShrink: _flexShrink,
+    maxWidth: _maxWidth,
+    minWidth: _minWidth,
+    width: _width,
+    ...textStyle
+  } = flatStyle;
+
+  return textStyle;
+}
+
 interface Props {
   content: string;
   language?: string;
@@ -92,8 +121,10 @@ export function MarkdownCodeBlock({
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [expanded, setExpanded] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const code = trimTrailingFenceNewline(content);
+  const inheritedTextStyle = useMemo(() => getCodeTextInheritedStyle(inheritedStyle), [inheritedStyle]);
   const languageLabel = getLanguageLabel(language);
   const htmlBlock = isHtmlLanguage(language);
   const lineCount = lineCountOf(code);
@@ -106,6 +137,21 @@ export function MarkdownCodeBlock({
       height: Math.min(dimensions.height - 48, 760),
     },
   ];
+
+  useEffect(() => {
+    if (!copied) return undefined;
+    const timer = setTimeout(() => setCopied(false), 1400);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  const handleCopy = async () => {
+    try {
+      await Clipboard.setStringAsync(code);
+      setCopied(true);
+    } catch (err: any) {
+      Alert.alert('复制失败', err?.message || '无法复制代码内容');
+    }
+  };
 
   const handleRenderHtml = async () => {
     if (!messageId || htmlBlockIndex === undefined) {
@@ -132,6 +178,21 @@ export function MarkdownCodeBlock({
           {languageLabel}
         </Text>
         <View style={styles.headerActions}>
+          <Pressable
+            style={[styles.headerButton, copied && styles.copiedButton]}
+            onPress={handleCopy}
+            accessibilityRole="button"
+            accessibilityLabel="复制代码"
+          >
+            {copied ? (
+              <Check size={14} color={colors.primary} strokeWidth={2.2} />
+            ) : (
+              <Copy size={14} color={colors.textSecondary} strokeWidth={2.2} />
+            )}
+            <Text style={[styles.headerButtonText, copied && styles.copiedButtonText]}>
+              {copied ? '已复制' : '复制'}
+            </Text>
+          </Pressable>
           {longCode && (
             <Pressable style={styles.headerButton} onPress={() => setExpanded((value) => !value)}>
               <Text style={styles.headerButtonText}>{expanded ? '收起' : '展开'}</Text>
@@ -145,22 +206,28 @@ export function MarkdownCodeBlock({
         </View>
       </View>
 
-      <ScrollView
-        horizontal
-        nestedScrollEnabled
-        showsHorizontalScrollIndicator
-        style={styles.codeScroll}
-        contentContainerStyle={styles.codeScrollContent}
-        onTouchStart={(event) => event.stopPropagation()}
-      >
-        <Text
-          selectable
-          numberOfLines={!expanded && longCode ? COLLAPSED_LINE_COUNT : undefined}
-          style={[inheritedStyle, styles.codeText, codeStyle]}
+      <NativeViewGestureHandler shouldActivateOnStart disallowInterruption>
+        <GestureScrollView
+          horizontal
+          nestedScrollEnabled
+          showsHorizontalScrollIndicator
+          directionalLockEnabled
+          disallowInterruption
+          keyboardShouldPersistTaps="handled"
+          scrollEventThrottle={16}
+          style={styles.codeScroll}
+          contentContainerStyle={styles.codeScrollContent}
+          onTouchStart={(event) => event.stopPropagation()}
         >
-          {code}
-        </Text>
-      </ScrollView>
+          <Text
+            selectable
+            numberOfLines={!expanded && longCode ? COLLAPSED_LINE_COUNT : undefined}
+            style={[inheritedTextStyle, styles.codeText, codeStyle]}
+          >
+            {code}
+          </Text>
+        </GestureScrollView>
+      </NativeViewGestureHandler>
 
       {longCode && !expanded && (
         <View style={styles.fadeHint}>
@@ -237,6 +304,9 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   headerButton: {
     minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
     justifyContent: 'center',
     paddingHorizontal: 9,
     borderRadius: 7,
@@ -248,10 +318,17 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
+  copiedButton: {
+    backgroundColor: withAlpha(colors.primary, 0.1),
+    borderColor: withAlpha(colors.primary, 0.32),
+  },
   headerButtonText: {
     color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '600',
+  },
+  copiedButtonText: {
+    color: colors.primary,
   },
   renderButtonText: {
     color: '#FFFFFF',
@@ -261,10 +338,12 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     maxWidth: '100%',
   },
   codeScrollContent: {
+    minWidth: '100%',
     paddingHorizontal: 12,
     paddingVertical: 12,
   },
   codeText: {
+    flexShrink: 0,
     color: colors.codeText,
     fontSize: 13,
     lineHeight: 19,

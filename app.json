@@ -40,18 +40,6 @@
       "expo-splash-screen",
       "expo-sqlite",
       [
-        "expo-font",
-        {
-          "fonts": [
-            "./assets/Sohne-Buch.otf",
-            "./assets/Sohne-Halbfett.otf",
-            "./assets/SohneMono-Buch.otf",
-            "./assets/TiemposText.otf",
-            "./assets/TiemposText-bold.otf"
-          ]
-        }
-      ],
-      [
         "expo-notifications",
         {
           "color": "#ffffff",

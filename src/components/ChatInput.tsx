@@ -12,23 +12,34 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { randomUUID } from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
-import { copyAsync } from 'expo-file-system/legacy';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
+import { fonts } from '../theme/fonts';
 
 import { useSettingsStore } from '../stores/settings';
+import { useChatStore } from '../stores/chat';
+import type { ConversationArtifact, ConversationArtifactVersion } from '../types';
 import { buildStickerDefinitions, normalizeStickerName, type StickerDefinition } from '../utils/stickers';
 import { getAppearanceCssStyle, getAppearancePlaceholderTextColor, parseAppearanceCss } from '../utils/appearanceCss';
+import {
+  deleteConversationArtifactFile,
+  listConversationArtifacts,
+  readConversationArtifact,
+  replaceConversationArtifactContent,
+} from '../services/conversationArtifacts';
 import {
   formatMcpPromptResult,
   formatMcpResourceResult,
   getMcpPrompt,
   readMcpResource,
 } from '../services/mcpHttpClient';
+import { copyFileFromUri } from '../utils/fileSystem';
 
 
 let colors = lightColors;
@@ -50,6 +61,35 @@ const CUSTOM_CSS_PLACEHOLDER = `.user-bubble {
   height: 112px;
 }`;
 type McpPanelTab = 'tools' | 'resources' | 'prompts';
+
+function formatArtifactKind(kind?: ConversationArtifact['kind']): string {
+  switch (kind) {
+    case 'markdown':
+      return 'Markdown';
+    case 'html':
+      return 'HTML';
+    case 'css':
+      return 'CSS';
+    case 'javascript':
+      return 'JavaScript';
+    case 'typescript':
+      return 'TypeScript';
+    case 'json':
+      return 'JSON';
+    case 'csv':
+      return 'CSV';
+    default:
+      return 'Text';
+  }
+}
+
+function formatArtifactSize(size?: number): string {
+  if (!Number.isFinite(size)) return '';
+  const value = size || 0;
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 102.4) / 10} KB`;
+  return `${Math.round(value / 1024 / 102.4) / 10} MB`;
+}
 
 function clampNumber(value: number | undefined, fallback: number, min: number, max: number) {
   if (!Number.isFinite(value)) return fallback;
@@ -79,7 +119,7 @@ async function copyImageGenerationReference(asset: ImagePicker.ImagePickerAsset)
   const dir = new Directory(Paths.document, 'image-generation-references');
   dir.create({ intermediates: true, idempotent: true });
   const destination = new File(dir, `ref-${Date.now().toString(36)}-${randomUUID()}${extensionFromPickedImage(asset)}`);
-  await copyAsync({ from: asset.uri, to: destination.uri });
+  await copyFileFromUri(asset.uri, destination);
   return destination.uri;
 }
 
@@ -105,7 +145,11 @@ export function ChatInput({
   onModelPress,
 }: Props) {
   colors = useThemeColors();
-  styles = useMemo(() => createStyles(colors), [colors]);
+  const windowDimensions = useWindowDimensions();
+  styles = useMemo(
+    () => createStyles(colors, windowDimensions.width, windowDimensions.height),
+    [colors, windowDimensions.height, windowDimensions.width]
+  );
   const isDarkTheme = colors.background === '#12100D';
 
   const [text, setText] = useState('');
@@ -116,6 +160,15 @@ export function ChatInput({
   const [optionsMenuVisible, setOptionsMenuVisible] = useState(false);
   const [cssEditorVisible, setCssEditorVisible] = useState(false);
   const [cssDraft, setCssDraft] = useState('');
+  const [fileManagerVisible, setFileManagerVisible] = useState(false);
+  const [fileManagerLoading, setFileManagerLoading] = useState(false);
+  const [fileManagerSaving, setFileManagerSaving] = useState(false);
+  const [fileManagerDeleting, setFileManagerDeleting] = useState(false);
+  const [conversationFiles, setConversationFiles] = useState<ConversationArtifact[]>([]);
+  const [selectedFile, setSelectedFile] = useState<ConversationArtifact | null>(null);
+  const [selectedFileVersion, setSelectedFileVersion] = useState<ConversationArtifactVersion | null>(null);
+  const [fileDraft, setFileDraft] = useState('');
+  const [fileDirty, setFileDirty] = useState(false);
   const [mcpPanelVisible, setMcpPanelVisible] = useState(false);
   const [mcpSelectedServerId, setMcpSelectedServerId] = useState<string | null>(null);
   const [mcpTab, setMcpTab] = useState<McpPanelTab>('resources');
@@ -125,6 +178,7 @@ export function ChatInput({
   const responseTouchStartedRef = useRef(false);
   const sendInFlightRef = useRef(false);
   const insets = useSafeAreaInsets();
+  const conversationId = useChatStore((state) => state.conversationId);
   const {
     apiConfigs,
     activeConfigIndex,
@@ -244,6 +298,136 @@ export function ChatInput({
     } catch (error: any) {
       Alert.alert('上传文件失败', error?.message || '无法读取所选文件');
     }
+  };
+
+  const refreshConversationFiles = async () => {
+    if (!conversationId) {
+      setConversationFiles([]);
+      setSelectedFile(null);
+      setSelectedFileVersion(null);
+      setFileDraft('');
+      setFileDirty(false);
+      return;
+    }
+    setFileManagerLoading(true);
+    try {
+      const files = await listConversationArtifacts(conversationId);
+      setConversationFiles(files);
+      if (selectedFile && !files.some((file) => file.id === selectedFile.id)) {
+        setSelectedFile(null);
+        setSelectedFileVersion(null);
+        setFileDraft('');
+        setFileDirty(false);
+      }
+    } catch (error: any) {
+      Alert.alert('读取文件失败', error?.message || '无法读取当前对话文件');
+    } finally {
+      setFileManagerLoading(false);
+    }
+  };
+
+  const openFileManager = async () => {
+    setOptionsMenuVisible(false);
+    setFileManagerVisible(true);
+    await refreshConversationFiles();
+  };
+
+  const closeFileManager = () => {
+    if (fileDirty) {
+      Alert.alert('关闭文件管理', '当前文件有未保存修改，确定关闭吗？', [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '关闭',
+          style: 'destructive',
+          onPress: () => setFileManagerVisible(false),
+        },
+      ]);
+      return;
+    }
+    setFileManagerVisible(false);
+  };
+
+  const selectConversationFile = async (file: ConversationArtifact) => {
+    const load = async () => {
+      if (!conversationId) return;
+      setFileManagerLoading(true);
+      try {
+        const result = await readConversationArtifact(conversationId, file.id);
+        setSelectedFile(result.artifact);
+        setSelectedFileVersion(result.version);
+        setFileDraft(result.version.content);
+        setFileDirty(false);
+      } catch (error: any) {
+        Alert.alert('打开文件失败', error?.message || '无法读取文件内容');
+      } finally {
+        setFileManagerLoading(false);
+      }
+    };
+
+    if (fileDirty) {
+      Alert.alert('切换文件', '当前文件有未保存修改，切换会丢弃这些修改。', [
+        { text: '取消', style: 'cancel' },
+        { text: '切换', style: 'destructive', onPress: () => void load() },
+      ]);
+      return;
+    }
+
+    await load();
+  };
+
+  const updateFileDraft = (value: string) => {
+    setFileDraft(value);
+    setFileDirty(value !== (selectedFileVersion?.content || ''));
+  };
+
+  const saveSelectedFile = async () => {
+    if (!conversationId || !selectedFile) return;
+    setFileManagerSaving(true);
+    try {
+      const version = await replaceConversationArtifactContent({
+        conversationId,
+        artifactId: selectedFile.id,
+        content: fileDraft,
+        createdBy: 'user',
+      });
+      const latest = await readConversationArtifact(conversationId, selectedFile.id);
+      setSelectedFile(latest.artifact);
+      setSelectedFileVersion(version);
+      setFileDraft(version.content);
+      setFileDirty(false);
+      await refreshConversationFiles();
+    } catch (error: any) {
+      Alert.alert('保存失败', error?.message || '无法保存文件');
+    } finally {
+      setFileManagerSaving(false);
+    }
+  };
+
+  const deleteSelectedFile = () => {
+    if (!conversationId || !selectedFile) return;
+    const target = selectedFile;
+    Alert.alert('删除文件', `确定删除 ${target.name} 及其所有版本吗？`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: async () => {
+          setFileManagerDeleting(true);
+          try {
+            await deleteConversationArtifactFile(conversationId, target.id);
+            setSelectedFile(null);
+            setSelectedFileVersion(null);
+            setFileDraft('');
+            setFileDirty(false);
+            await refreshConversationFiles();
+          } catch (error: any) {
+            Alert.alert('删除失败', error?.message || '无法删除文件');
+          } finally {
+            setFileManagerDeleting(false);
+          }
+        },
+      },
+    ]);
   };
 
   const handleOpenMcpPanel = () => {
@@ -689,11 +873,115 @@ export function ChatInput({
               <Text style={styles.optionText}>文件</Text>
             </Pressable>
             <View style={styles.optionDivider} />
+            <Pressable style={styles.optionItem} onPress={() => void openFileManager()}>
+              <Text style={styles.optionText}>文件管理</Text>
+            </Pressable>
+            <View style={styles.optionDivider} />
             <Pressable style={styles.optionItem} onPress={handleOpenCssEditor}>
               <Text style={styles.optionText}>自定义 CSS</Text>
             </Pressable>
           </View>
         </Pressable>
+      </Modal>
+
+      <Modal transparent visible={fileManagerVisible} animationType="fade" onRequestClose={closeFileManager}>
+        <KeyboardAvoidingView
+          style={styles.fileManagerKeyboardAvoider}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Math.max(insets.bottom, 12)}
+        >
+          <View style={styles.fileManagerOverlay}>
+            <Pressable style={styles.fileManagerBackdrop} onPress={closeFileManager} />
+            <View style={styles.fileManagerPanel} onStartShouldSetResponder={() => true}>
+              <View style={styles.fileManagerHeader}>
+                <View style={styles.fileManagerTitleBlock}>
+                  <Text style={styles.fileManagerTitle}>文件管理</Text>
+                  <Text style={styles.fileManagerHint}>
+                    {conversationId ? `${conversationFiles.length} 个当前对话文件` : '当前还没有对话窗口'}
+                  </Text>
+                </View>
+                {fileManagerLoading && <ActivityIndicator size="small" color={colors.primary} />}
+                <Pressable style={styles.fileManagerHeaderButton} onPress={() => void refreshConversationFiles()}>
+                  <Text style={styles.fileManagerHeaderButtonText}>刷新</Text>
+                </Pressable>
+                <Pressable style={styles.fileManagerHeaderButton} onPress={closeFileManager}>
+                  <Text style={styles.fileManagerHeaderButtonText}>关闭</Text>
+                </Pressable>
+              </View>
+              <View style={styles.fileManagerBody}>
+                <View style={styles.fileManagerList}>
+                  <ScrollView keyboardShouldPersistTaps="handled">
+                    {!conversationId ? (
+                      <Text style={styles.fileManagerEmpty}>打开或创建一个对话后，这里会显示当前对话绑定的文件。</Text>
+                    ) : conversationFiles.length === 0 ? (
+                      <Text style={styles.fileManagerEmpty}>当前对话还没有文件。</Text>
+                    ) : (
+                      conversationFiles.map((file) => {
+                        const selected = selectedFile?.id === file.id;
+                        return (
+                          <Pressable
+                            key={file.id}
+                            style={[styles.fileManagerItem, selected && styles.fileManagerItemSelected]}
+                            onPress={() => void selectConversationFile(file)}
+                          >
+                            <Text style={[styles.fileManagerItemName, selected && styles.fileManagerItemNameSelected]} numberOfLines={1}>
+                              {file.name}
+                            </Text>
+                            <Text style={styles.fileManagerItemMeta} numberOfLines={1}>
+                              {formatArtifactKind(file.kind)} · {formatArtifactSize(file.size)}
+                            </Text>
+                          </Pressable>
+                        );
+                      })
+                    )}
+                  </ScrollView>
+                </View>
+                <View style={styles.fileManagerEditor}>
+                  {selectedFile ? (
+                    <>
+                      <View style={styles.fileManagerEditorHeader}>
+                        <View style={styles.fileManagerEditorTitleBlock}>
+                          <Text style={styles.fileManagerEditorTitle} numberOfLines={1}>{selectedFile.name}</Text>
+                          <Text style={styles.fileManagerEditorMeta} numberOfLines={1}>
+                            {formatArtifactKind(selectedFile.kind)} · v{selectedFileVersion?.version || '?'} · {formatArtifactSize(selectedFile.size)}{fileDirty ? ' · 未保存' : ''}
+                          </Text>
+                        </View>
+                        <Pressable
+                          style={[styles.fileManagerActionButton, (!fileDirty || fileManagerSaving) && styles.fileManagerActionButtonDisabled]}
+                          onPress={() => void saveSelectedFile()}
+                          disabled={!fileDirty || fileManagerSaving}
+                        >
+                          <Text style={styles.fileManagerActionText}>{fileManagerSaving ? '保存中' : '保存'}</Text>
+                        </Pressable>
+                        <Pressable
+                          style={styles.fileManagerDangerButton}
+                          onPress={deleteSelectedFile}
+                          disabled={fileManagerDeleting}
+                        >
+                          <Text style={styles.fileManagerDangerText}>{fileManagerDeleting ? '删除中' : '删除'}</Text>
+                        </Pressable>
+                      </View>
+                      <TextInput
+                        style={styles.fileManagerInput}
+                        value={fileDraft}
+                        onChangeText={updateFileDraft}
+                        multiline
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        textAlignVertical="top"
+                      />
+                    </>
+                  ) : (
+                    <View style={styles.fileManagerPlaceholder}>
+                      <Text style={styles.fileManagerPlaceholderTitle}>选择一个文件</Text>
+                      <Text style={styles.fileManagerPlaceholderText}>可以查看、编辑并直接保存为新版本。</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal transparent visible={cssEditorVisible} animationType="fade" onRequestClose={() => setCssEditorVisible(false)}>
@@ -912,7 +1200,14 @@ export function ChatInput({
   );
 }
 
-const createStyles = (colors: ThemeColors) => StyleSheet.create({
+const createStyles = (
+  colors: ThemeColors,
+  viewportWidth = Dimensions.get('window').width,
+  viewportHeight = Dimensions.get('window').height
+) => {
+  const fileManagerWide = viewportWidth >= 680;
+
+  return StyleSheet.create({
   wrapper: {
     paddingHorizontal: 12,
     paddingBottom: 12,
@@ -1031,7 +1326,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   input: {
     fontSize: 16,
     color: colors.text,
-    fontFamily: 'Sohne',
+    fontFamily: fonts.regular,
     maxHeight: 120,
     minHeight: 28,
     paddingVertical: 0,
@@ -1259,6 +1554,195 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.inputBorder,
     marginHorizontal: 10,
   },
+  fileManagerKeyboardAvoider: {
+    flex: 1,
+  },
+  fileManagerOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  fileManagerBackdrop: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  fileManagerPanel: {
+    marginHorizontal: 12,
+    marginBottom: 96,
+    height: Math.min(620, viewportHeight * 0.78),
+    backgroundColor: colors.inputBackground,
+    borderRadius: 18,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 10,
+  },
+  fileManagerHeader: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.inputBorder,
+  },
+  fileManagerTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  fileManagerTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: colors.text,
+  },
+  fileManagerHint: {
+    marginTop: 3,
+    fontSize: 12,
+    color: colors.textTertiary,
+  },
+  fileManagerHeaderButton: {
+    minHeight: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: colors.surfaceHover,
+  },
+  fileManagerHeaderButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  fileManagerBody: {
+    flex: 1,
+    flexDirection: fileManagerWide ? 'row' : 'column',
+  },
+  fileManagerList: {
+    width: fileManagerWide ? 260 : '100%',
+    maxHeight: fileManagerWide ? undefined : 180,
+    borderRightWidth: fileManagerWide ? StyleSheet.hairlineWidth : 0,
+    borderBottomWidth: fileManagerWide ? 0 : StyleSheet.hairlineWidth,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.surface,
+  },
+  fileManagerEmpty: {
+    padding: 14,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textTertiary,
+  },
+  fileManagerItem: {
+    minHeight: 58,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.inputBorder,
+  },
+  fileManagerItemSelected: {
+    backgroundColor: colors.surfaceHover,
+  },
+  fileManagerItemName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  fileManagerItemNameSelected: {
+    color: colors.primary,
+  },
+  fileManagerItemMeta: {
+    marginTop: 4,
+    fontSize: 11,
+    color: colors.textTertiary,
+  },
+  fileManagerEditor: {
+    flex: 1,
+    minHeight: 0,
+  },
+  fileManagerEditorHeader: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.inputBorder,
+  },
+  fileManagerEditorTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  fileManagerEditorTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: colors.text,
+  },
+  fileManagerEditorMeta: {
+    marginTop: 3,
+    fontSize: 11,
+    color: colors.textTertiary,
+  },
+  fileManagerActionButton: {
+    minHeight: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: colors.primary,
+  },
+  fileManagerActionButtonDisabled: {
+    opacity: 0.45,
+  },
+  fileManagerActionText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  fileManagerDangerButton: {
+    minHeight: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: colors.dangerSurface,
+  },
+  fileManagerDangerText: {
+    color: colors.danger,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  fileManagerInput: {
+    flex: 1,
+    minHeight: 180,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: colors.text,
+    backgroundColor: colors.background,
+    fontSize: 13,
+    lineHeight: 19,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+  fileManagerPlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  fileManagerPlaceholderTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: colors.text,
+  },
+  fileManagerPlaceholderText: {
+    marginTop: 6,
+    fontSize: 13,
+    color: colors.textTertiary,
+    textAlign: 'center',
+  },
   cssEditorKeyboardAvoider: {
     flex: 1,
   },
@@ -1277,7 +1761,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   cssEditorPanel: {
     marginHorizontal: 12,
     marginBottom: 96,
-    maxHeight: Math.min(560, Dimensions.get('window').height * 0.72),
+    maxHeight: Math.min(560, viewportHeight * 0.72),
     backgroundColor: colors.inputBackground,
     borderRadius: 18,
     padding: 14,
@@ -1610,6 +2094,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: 13,
     color: colors.textTertiary,
   },
-});
+  });
+};
 
 let styles = createStyles(colors);

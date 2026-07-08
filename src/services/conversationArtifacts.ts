@@ -14,7 +14,7 @@ import type {
   ConversationArtifactVersion,
 } from '../types';
 
-export const FILE_TOKEN_PATTERN = /\[File:([^\]\r\n]+)\]/g;
+const FILE_TOKEN_PATTERN = /\[File:([^\]\r\n]+)\]/g;
 const MAX_TEXT_FILE_BYTES = 512 * 1024;
 
 const KIND_EXTENSIONS: Record<ConversationArtifactKind, string[]> = {
@@ -61,7 +61,7 @@ export function inferArtifactKind(name: string, mimeType?: string): Conversation
   return 'text';
 }
 
-export function isSupportedConversationArtifact(name: string, mimeType?: string): boolean {
+function isSupportedConversationArtifact(name: string, mimeType?: string): boolean {
   const ext = extensionOf(name);
   if (Object.values(KIND_EXTENSIONS).some((extensions) => extensions.includes(ext))) return true;
   const mime = (mimeType || '').toLowerCase();

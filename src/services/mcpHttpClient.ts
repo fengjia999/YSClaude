@@ -46,7 +46,7 @@ export interface McpServerConnectionConfig {
   authorization?: string;
 }
 
-export interface McpCallResultContent {
+interface McpCallResultContent {
   type: string;
   text?: string;
   data?: string;

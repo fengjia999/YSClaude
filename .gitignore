@@ -11,12 +11,21 @@ expo-env.d.ts
 
 # Native
 .kotlin/
+android/app/release/
 *.orig.*
 *.jks
 *.p8
 *.p12
 *.key
 *.mobileprovision
+
+# Fonts
+*.otf
+*.ttf
+*.ttc
+*.woff
+*.woff2
+*.eot
 
 # Metro
 .metro-health-check*

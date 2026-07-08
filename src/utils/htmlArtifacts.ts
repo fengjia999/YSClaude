@@ -1,6 +1,6 @@
 const HTML_FENCE_PATTERN = /(^|\n)([ \t]*)(`{3,}|~{3,})([^\r\n]*)\r?\n([\s\S]*?)(?:\r?\n\2\3[ \t]*(?=\r?\n|$)|$)/g;
 
-export interface HtmlCodeBlockMatch {
+interface HtmlCodeBlockMatch {
   blockIndex: number;
   content: string;
   language: string;
@@ -10,7 +10,7 @@ function getFenceLanguage(info: string): string {
   return info.trim().split(/\s+/)[0]?.toLowerCase() || '';
 }
 
-export function isHtmlFenceLanguage(language: string): boolean {
+function isHtmlFenceLanguage(language: string): boolean {
   return language === 'html' || language === 'htm' || language === 'xhtml';
 }
 

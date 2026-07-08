@@ -1,6 +1,6 @@
 ﻿import { Pressable, Switch, Text, TextInput, View } from 'react-native';
 
-export type BuiltInToolCard = {
+type BuiltInToolCard = {
   key: string;
   name: string;
   intro: string;

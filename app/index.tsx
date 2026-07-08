@@ -76,6 +76,7 @@ const MESSAGE_BOTTOM_GAP = 16;
 const MESSAGE_TOP_GAP = 104;
 const LOAD_MORE_EDGE_THRESHOLD = 96;
 const PROGRAMMATIC_JUMP_SUPPRESS_MS = 1200;
+const AUTO_SCROLL_THROTTLE_MS = 72;
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
 const CLAWD_STATUS_AUTO_CLOSE_MS = 5200;
 
@@ -421,6 +422,7 @@ export default function ChatScreen() {
   const enteringMessageTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const listHeightRef = useRef(0);
   const contentHeightRef = useRef(0);
+  const lastAutoScrollAtRef = useRef(0);
   const shouldStickToBottomRef = useRef(true);
   const suppressNextContentAutoScrollRef = useRef(false);
   const suppressEndReachedUntilRef = useRef(0);
@@ -583,7 +585,16 @@ export default function ChatScreen() {
     });
   }, []);
 
-  const scheduleScrollToEnd = useCallback((delay = 24, followUp = false) => {
+  const scheduleScrollToEnd = useCallback((delay = 24, followUp = false, throttled = false) => {
+    if (throttled) {
+      const now = Date.now();
+      const elapsed = now - lastAutoScrollAtRef.current;
+      if (elapsed < AUTO_SCROLL_THROTTLE_MS) {
+        delay = Math.max(delay, AUTO_SCROLL_THROTTLE_MS - elapsed);
+      }
+      lastAutoScrollAtRef.current = now + delay;
+    }
+
     if (scrollSettleTimerRef.current !== null) {
       clearTimeout(scrollSettleTimerRef.current);
     }
@@ -1077,7 +1088,7 @@ export default function ChatScreen() {
     }
 
     if (heightChanged && shouldStickToBottomRef.current) {
-      scheduleScrollToEnd(24);
+      scheduleScrollToEnd(24, false, true);
     }
   }, [finishInitialPositioning, scheduleScrollToEnd]);
 
@@ -1200,9 +1211,7 @@ export default function ChatScreen() {
               showFloorNumber={visibleFloorMessageId === item.id && floor !== undefined}
               showAvatarHeader={showAvatarHeader}
               showBubbleTail={!isFollowedBySameRole}
-              onBubblePress={
-                floor !== undefined ? () => handleBubblePress(item.id) : undefined
-              }
+              onBubblePress={floor !== undefined ? handleBubblePress : undefined}
               isLastAssistant={
                 item.role === 'assistant' &&
                 index === messages.length - 1
@@ -1318,7 +1327,12 @@ export default function ChatScreen() {
       scrollEventThrottle={16}
       onEndReached={handleEndReached}
       onEndReachedThreshold={0.2}
-      removeClippedSubviews={false}
+      showsVerticalScrollIndicator={false}
+      initialNumToRender={12}
+      maxToRenderPerBatch={8}
+      updateCellsBatchingPeriod={32}
+      windowSize={9}
+      removeClippedSubviews
       maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       onScrollToIndexFailed={({ index, averageItemLength }) => {
         if (!pendingScrollMessageIdRef.current) return;

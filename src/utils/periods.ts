@@ -11,7 +11,7 @@ type CompletedPeriodRecord = PeriodRecord & { endDate: string };
 
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-export function parseLocalDateKey(value: string): Date | null {
+function parseLocalDateKey(value: string): Date | null {
   const match = value.match(DATE_RE);
   if (!match) return null;
   const year = Number(match[1]);
@@ -28,7 +28,7 @@ export function parseLocalDateKey(value: string): Date | null {
   return date;
 }
 
-export function localDateKeyFromDate(date: Date): string {
+function localDateKeyFromDate(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
@@ -42,18 +42,18 @@ export function addDaysToDateKey(key: string, days: number): string {
   return localDateKeyFromDate(date);
 }
 
-export function daysBetweenDateKeys(startKey: string, endKey: string): number {
+function daysBetweenDateKeys(startKey: string, endKey: string): number {
   const start = parseLocalDateKey(startKey);
   const end = parseLocalDateKey(endKey);
   if (!start || !end) return 0;
   return Math.round((end.getTime() - start.getTime()) / 86400000);
 }
 
-export function inclusiveDaysBetweenDateKeys(startKey: string, endKey: string): number {
+function inclusiveDaysBetweenDateKeys(startKey: string, endKey: string): number {
   return daysBetweenDateKeys(startKey, endKey) + 1;
 }
 
-export function isDateKeyInRange(key: string, startKey: string, endKey: string): boolean {
+function isDateKeyInRange(key: string, startKey: string, endKey: string): boolean {
   return key >= startKey && key <= endKey;
 }
 

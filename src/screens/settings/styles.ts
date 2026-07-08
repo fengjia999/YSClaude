@@ -1019,9 +1019,6 @@ export const createSettingsStyles = (colors: ThemeColors) => StyleSheet.create({
   previewLabel: { fontSize: 12, color: colors.primary, fontWeight: '600' },
   previewText: { fontSize: 13, color: colors.textSecondary, lineHeight: 18 },
   // Diary styles
-  summaryBox: {
-    backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20,
-  },
   summaryTitleInput: {
     backgroundColor: colors.inputBackground, borderWidth: 1, borderColor: colors.inputBorder,
     borderRadius: 10, padding: 12, fontSize: 15, fontWeight: '500', color: colors.text, marginBottom: 10,

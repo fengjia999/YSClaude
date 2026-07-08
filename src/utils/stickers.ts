@@ -12,7 +12,7 @@ export interface StickerDefinition {
 
 const STICKER_PATTERN = /\[Sticker:([^\]\r\n]+)\]/g;
 
-export type StickerContentChunk =
+type StickerContentChunk =
   | { type: 'text'; text: string }
   | { type: 'sticker'; sticker: StickerDefinition };
 
@@ -20,11 +20,11 @@ export function normalizeStickerName(name: string): string {
   return name.trim().replace(/\s+/g, ' ');
 }
 
-export function createStickerToken(name: string): string {
+function createStickerToken(name: string): string {
   return `[Sticker:${normalizeStickerName(name)}]`;
 }
 
-export function getStickerImageSource(sticker: CustomSticker): ImageSourcePropType | null {
+function getStickerImageSource(sticker: CustomSticker): ImageSourcePropType | null {
   if (sticker.uri) return { uri: sticker.uri };
   return null;
 }
@@ -55,7 +55,7 @@ export function getStickerByName(
   return stickers.find((sticker) => sticker.name === normalizedName);
 }
 
-export function splitStickerContent(
+function splitStickerContent(
   content: string,
   stickers: StickerDefinition[]
 ): StickerContentChunk[] {

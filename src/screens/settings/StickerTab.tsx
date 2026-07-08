@@ -2,11 +2,11 @@
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Directory, File, Paths } from 'expo-file-system';
-import { copyAsync } from 'expo-file-system/legacy';
 import { randomUUID } from 'expo-crypto';
 import { useSettingsPageColors } from '../../theme/colors';
 import { type CustomSticker, type StickerOwner, useSettingsStore } from '../../stores/settings';
 import { buildStickerDefinitions, normalizeStickerName } from '../../utils/stickers';
+import { copyFileFromUri } from '../../utils/fileSystem';
 import { createSettingsStyles } from './styles';
 
 type StickerTabProps = {
@@ -39,7 +39,7 @@ async function copyStickerImage(asset: ImagePicker.ImagePickerAsset, prefix: str
   dir.create({ intermediates: true, idempotent: true });
 
   const destination = new File(dir, `${prefix}-${randomUUID()}${stickerImageExtension(asset)}`);
-  await copyAsync({ from: asset.uri, to: destination.uri });
+  await copyFileFromUri(asset.uri, destination);
   return destination.uri;
 }
 

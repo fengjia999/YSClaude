@@ -3,7 +3,7 @@ import { randomUUID } from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 
-export interface ImageGenerationReferenceImage {
+interface ImageGenerationReferenceImage {
   uri: string;
 }
 

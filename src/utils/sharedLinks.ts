@@ -3,7 +3,7 @@ import type { ResolvedSharePayload, SharePayload } from 'expo-sharing';
 const URL_MATCH = /https?:\/\/[^\s<>"']+/i;
 const TRAILING_PUNCTUATION = /[),.;:!?，。；：！？、）】》"'`]+$/;
 
-export function extractFirstHttpUrl(text: string | null | undefined): string | null {
+function extractFirstHttpUrl(text: string | null | undefined): string | null {
   if (!text) return null;
   const match = text.match(URL_MATCH);
   if (!match) return null;

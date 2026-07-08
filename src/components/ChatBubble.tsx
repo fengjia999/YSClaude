@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useRef } from 'react';
+import React, { useCallback, useMemo, useState, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable, Image, Alert, TextInput, Modal, Dimensions, ScrollView, ActivityIndicator, type ImageStyle, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 import { NativeViewGestureHandler, ScrollView as GestureScrollView } from 'react-native-gesture-handler';
 import Markdown from '@ronradtke/react-native-markdown-display';
@@ -234,7 +234,7 @@ interface Props {
   showFloorNumber?: boolean;
   showAvatarHeader?: boolean;
   showBubbleTail?: boolean;
-  onBubblePress?: () => void;
+  onBubblePress?: (messageId: string) => void;
 }
 
 // 把一次工具调用格式化成「动作描述 + 参数」的单行文字。
@@ -870,6 +870,9 @@ export const ChatBubble = React.memo(function ChatBubble({
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
   const bubbleRef = useRef<View>(null);
   const markdownRules = createMarkdownRules({ messageId: message.id });
+  const handleBubbleTap = useCallback(() => {
+    onBubblePress?.(message.id);
+  }, [message.id, onBubblePress]);
   const floorText = floorNumber !== undefined ? `#${floorNumber}` : null;
   const canToggleFloorHidden = floorNumber !== undefined;
   const hiddenToggleText = isHidden ? '恢复' : '隐藏';
@@ -1159,7 +1162,7 @@ export const ChatBubble = React.memo(function ChatBubble({
           {message.content.length > 0 && (
             <Pressable
               ref={bubbleRef}
-              onPress={dailyPaperCard ? () => setDailyPaperVisible(true) : sharedLinkUrl ? openSharedLinkCard : onBubblePress}
+              onPress={dailyPaperCard ? () => setDailyPaperVisible(true) : sharedLinkUrl ? openSharedLinkCard : handleBubbleTap}
               onLongPress={handleUserLongPress}
               style={userContentPressableStyle}
             >
@@ -1193,7 +1196,7 @@ export const ChatBubble = React.memo(function ChatBubble({
           {message.content.length === 0 && !message.imageUri && !(message.imageGenerationReferenceUris?.length) && (
             <Pressable
               ref={bubbleRef}
-              onPress={onBubblePress}
+              onPress={handleBubbleTap}
               onLongPress={handleUserLongPress}
               style={userBubbleBaseStyle}
             >
@@ -1502,7 +1505,7 @@ export const ChatBubble = React.memo(function ChatBubble({
           <RemoteActivityCard
             message={message}
             assistantName={assistantDisplayName}
-            onPress={onBubblePress}
+            onPress={handleBubbleTap}
             onLongPress={handleAssistantBubbleLongPress}
           />
         )
@@ -1525,7 +1528,7 @@ export const ChatBubble = React.memo(function ChatBubble({
               <Pressable
                 key={sideAvatarsVisible ? undefined : part.key}
                 style={getAssistantBubbleStyle(part.content)}
-                onPress={onBubblePress}
+                onPress={handleBubbleTap}
                 onLongPress={handleAssistantBubbleLongPress}
               >
                 {assistantBubbleGlass.enabled && !stickerOnlyPart && (
@@ -1558,7 +1561,7 @@ export const ChatBubble = React.memo(function ChatBubble({
               'assistant-empty',
               <Pressable
                 style={getAssistantBubbleStyle(' ')}
-                onPress={onBubblePress}
+                onPress={handleBubbleTap}
                 onLongPress={handleAssistantBubbleLongPress}
               >
                 {assistantBubbleGlass.enabled && (
@@ -1593,7 +1596,7 @@ export const ChatBubble = React.memo(function ChatBubble({
           <Pressable
             ref={bubbleRef}
             style={assistantContentStyle}
-            onPress={onBubblePress}
+            onPress={handleBubbleTap}
             onLongPress={handleAssistantLongPress}
           >
             <View style={styles.assistantFlow}>
@@ -2532,6 +2535,12 @@ const createThinkingMarkdownStyles = (colors: ThemeColors) => StyleSheet.create(
   body: { width: '100%', fontSize: 14, color: colors.textSecondary, lineHeight: 21 },
   hr: createMarkdownDividerStyle(colors.textSecondary, true),
   ...createMarkdownListStyles(colors.textSecondary, 14, 21, true),
+  ...createMarkdownTableStyles(colors, colors.textSecondary, {
+    cellMinWidth: 112,
+    cellPaddingHorizontal: 9,
+    cellPaddingVertical: 7,
+    marginVertical: 8,
+  }),
   code_inline: {
     backgroundColor: colors.surface, color: colors.primary,
     paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, fontSize: 13, fontFamily: 'monospace',
@@ -2539,17 +2548,91 @@ const createThinkingMarkdownStyles = (colors: ThemeColors) => StyleSheet.create(
   fence: { backgroundColor: colors.codeBlock, borderRadius: 10, padding: 12, marginVertical: 8 },
   code_block: { color: colors.codeText, fontSize: 12, fontFamily: 'monospace' },
   link: { color: colors.primary },
-  markdownTableViewport: { alignSelf: 'stretch', width: '100%', maxWidth: '100%', minWidth: 0, overflow: 'hidden', marginVertical: 8, paddingVertical: 4 },
-  markdownTableScroll: { alignSelf: 'stretch', width: '100%', maxWidth: '100%', minWidth: 0, minHeight: 44, flexShrink: 1 },
-  markdownTableScrollContent: { flexGrow: 0, alignItems: 'center', paddingVertical: 2 },
-  markdownTable: { alignSelf: 'flex-start', flexShrink: 0 },
-  table: { alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.border, borderRadius: 8, overflow: 'hidden', flexShrink: 0 },
-  thead: { flexShrink: 0 },
-  tbody: { flexShrink: 0 },
-  tr: { flexDirection: 'row', alignSelf: 'flex-start', flexShrink: 0, borderBottomWidth: 1, borderColor: colors.border },
-  th: { width: 112, minWidth: 112, flexShrink: 0, paddingVertical: 7, paddingHorizontal: 9, backgroundColor: colors.surface },
-  td: { width: 112, minWidth: 112, flexShrink: 0, paddingVertical: 7, paddingHorizontal: 9 },
 });
+
+function createMarkdownTableStyles(
+  colors: ThemeColors,
+  textColor: string,
+  options: {
+    cellMinWidth?: number;
+    cellPaddingHorizontal?: number;
+    cellPaddingVertical?: number;
+    cellTextStyle?: TextStyle;
+    marginVertical?: number;
+  } = {}
+) {
+  const cellMinWidth = options.cellMinWidth ?? 128;
+  const cellPaddingHorizontal = options.cellPaddingHorizontal ?? 10;
+  const cellPaddingVertical = options.cellPaddingVertical ?? 8;
+  const marginVertical = options.marginVertical ?? 10;
+  const cellTextStyle = options.cellTextStyle ?? {};
+
+  return {
+    markdownTableViewport: {
+      alignSelf: 'stretch' as const,
+      width: '100%' as const,
+      maxWidth: '100%' as const,
+      minWidth: 0,
+      overflow: 'hidden' as const,
+      marginVertical,
+      paddingVertical: 4,
+    },
+    markdownTableScroll: {
+      alignSelf: 'stretch' as const,
+      width: '100%' as const,
+      maxWidth: '100%' as const,
+      minWidth: 0,
+      minHeight: 44,
+      flexShrink: 1,
+    },
+    markdownTableScrollContent: {
+      flexGrow: 0,
+      alignItems: 'flex-start' as const,
+      paddingVertical: 2,
+      paddingRight: 2,
+    },
+    markdownTable: {
+      alignSelf: 'flex-start' as const,
+      flexShrink: 0,
+    },
+    table: {
+      alignSelf: 'flex-start' as const,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      overflow: 'hidden' as const,
+      flexShrink: 0,
+    },
+    thead: { flexShrink: 0 },
+    tbody: { flexShrink: 0 },
+    tr: {
+      flexDirection: 'row' as const,
+      alignSelf: 'flex-start' as const,
+      flexShrink: 0,
+      borderBottomWidth: 1,
+      borderColor: colors.border,
+    },
+    th: {
+      minWidth: cellMinWidth,
+      flexShrink: 0,
+      paddingVertical: cellPaddingVertical,
+      paddingHorizontal: cellPaddingHorizontal,
+      backgroundColor: colors.surface,
+      color: textColor,
+      fontWeight: 'normal' as const,
+      ...cellTextStyle,
+    },
+    td: {
+      minWidth: cellMinWidth,
+      flexShrink: 0,
+      paddingVertical: cellPaddingVertical,
+      paddingHorizontal: cellPaddingHorizontal,
+      color: textColor,
+      fontWeight: 'normal' as const,
+      ...cellTextStyle,
+    },
+  };
+}
 
 function createMarkdownListStyles(
   textColor: string,
@@ -2664,6 +2747,11 @@ const createUserMarkdownStyles = (
     fontFamily: 'monospace',
   },
   ...createMarkdownListStyles(textColor, fontSize, Math.round(fontSize * 1.38), true),
+  ...createMarkdownTableStyles(colors, textColor, {
+    cellMinWidth: 128,
+    cellTextStyle: customTextStyleWithoutFontWeight,
+    marginVertical: 8,
+  }),
   link: {
     color: colors.primary,
   },
@@ -2730,16 +2818,7 @@ const createMarkdownStyles = (
     ...strokeStyle,
   },
   link: { color: colors.primary },
-  markdownTableViewport: { alignSelf: 'stretch', width: '100%', maxWidth: '100%', minWidth: 0, overflow: 'hidden', marginVertical: 10, paddingVertical: 4 },
-  markdownTableScroll: { alignSelf: 'stretch', width: '100%', maxWidth: '100%', minWidth: 0, minHeight: 44, flexShrink: 1 },
-  markdownTableScrollContent: { flexGrow: 0, alignItems: 'center', paddingVertical: 2 },
-  markdownTable: { alignSelf: 'flex-start', flexShrink: 0 },
-  table: { alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.border, borderRadius: 8, overflow: 'hidden', flexShrink: 0 },
-  thead: { flexShrink: 0 },
-  tbody: { flexShrink: 0 },
-  tr: { flexDirection: 'row', alignSelf: 'flex-start', flexShrink: 0, borderBottomWidth: 1, borderColor: colors.border },
-  th: { width: 128, minWidth: 128, flexShrink: 0, paddingVertical: 8, paddingHorizontal: 10, backgroundColor: colors.surface, color: textColor, fontWeight: 'normal', ...strokeStyle },
-  td: { width: 128, minWidth: 128, flexShrink: 0, paddingVertical: 8, paddingHorizontal: 10, color: textColor, fontWeight: 'normal', ...strokeStyle },
+  ...createMarkdownTableStyles(colors, textColor, { cellTextStyle: strokeStyle }),
   });
 };
 

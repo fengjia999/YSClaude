@@ -4,7 +4,7 @@ import { formatTimeMarker } from './time';
 export const FOCUS_EVENT_PREFIX = '专注：';
 export const APP_EVENT_PREFIX = '应用：';
 
-export function isAiVisibleFocusEvent(message: Pick<Message, 'role' | 'content'>): boolean {
+function isAiVisibleFocusEvent(message: Pick<Message, 'role' | 'content'>): boolean {
   const content = message.content.trim();
   return (
     message.role === 'system' &&

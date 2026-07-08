@@ -2,10 +2,10 @@
 import { Alert, Image, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Directory, File, Paths } from 'expo-file-system';
-import { copyAsync } from 'expo-file-system/legacy';
 import { randomUUID } from 'expo-crypto';
 import { useSettingsPageColors } from '../../theme/colors';
 import { useSettingsStore } from '../../stores/settings';
+import { copyFileFromUri } from '../../utils/fileSystem';
 import { createSettingsStyles } from './styles';
 
 type WelcomePageTabProps = {
@@ -38,7 +38,7 @@ async function copyWelcomeLogo(asset: ImagePicker.ImagePickerAsset): Promise<str
   dir.create({ intermediates: true, idempotent: true });
 
   const destination = new File(dir, `welcome-logo-${randomUUID()}${appearanceImageExtension(asset)}`);
-  await copyAsync({ from: asset.uri, to: destination.uri });
+  await copyFileFromUri(asset.uri, destination);
   return destination.uri;
 }
 

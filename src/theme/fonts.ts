@@ -1,8 +1,15 @@
-export const fonts = {
-  regular: 'Sohne',
-  bold: 'Sohne-Bold',
-  mono: 'SohneMono',
-  serif: 'TiemposText',
-  serifBold: 'TiemposText-Bold',
-  serifStrong: 'TiemposText-Strong',
+import type { TextStyle } from 'react-native';
+
+type FontFamily = TextStyle['fontFamily'];
+
+export const fonts: Record<
+  'regular' | 'bold' | 'mono' | 'serif' | 'serifBold' | 'serifStrong',
+  FontFamily
+> = {
+  regular: undefined,
+  bold: undefined,
+  mono: undefined,
+  serif: undefined,
+  serifBold: undefined,
+  serifStrong: undefined,
 };

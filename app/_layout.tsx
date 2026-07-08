@@ -1,10 +1,9 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect, useMemo } from 'react';
-import { View, ActivityIndicator, StyleSheet, AppState } from 'react-native';
-import { lightColors, useThemeColors, type ThemeColors } from '../src/theme/colors';
+import { useEffect } from 'react';
+import { AppState } from 'react-native';
+import { useThemeColors } from '../src/theme/colors';
 
 import {
   initNotifications,
@@ -26,22 +25,12 @@ import { startPromptCacheRemoteSnapshotFlushListener } from '../src/services/pro
 import { useChatStore } from '../src/stores/chat';
 
 
-let colors = lightColors;
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
-  colors = useThemeColors();
-  styles = useMemo(() => createStyles(colors), [colors]);
+  const colors = useThemeColors();
   const statusBarStyle = colors.background === '#12100D' ? 'light' : 'dark';
 
-  const [fontsLoaded] = useFonts({
-    'Sohne': require('../assets/Sohne-Buch.otf'),
-    'Sohne-Bold': require('../assets/Sohne-Halbfett.otf'),
-    'SohneMono': require('../assets/SohneMono-Buch.otf'),
-    'TiemposText': require('../assets/TiemposText.otf'),
-    'TiemposText-Bold': require('../assets/TiemposText-bold.otf'),
-    'TiemposText-Strong': require('../assets/TiemposText-bold2.otf'),
-  });
   const settingsHydrated = useSettingsStore((state) => state._hydrated);
   const floatingBallEnabled = useSettingsStore((state) => state.floatingBallConfig.enabled);
   const floatingBallNormalImageUrisKey = useSettingsStore((state) =>
@@ -54,10 +43,8 @@ export default function RootLayout() {
   const floatingBallAssetAutoSwitchIntervalSeconds = useSettingsStore((state) => state.floatingBallConfig.assetAutoSwitchIntervalSeconds || 8);
 
   useEffect(() => {
-    if (fontsLoaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [fontsLoaded]);
+    SplashScreen.hideAsync();
+  }, []);
 
   useEffect(() => {
     if (!settingsHydrated) return;
@@ -124,14 +111,6 @@ export default function RootLayout() {
     });
     return () => sub.remove();
   }, [settingsHydrated]);
-
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
-  }
 
   return (
     <>
@@ -200,14 +179,3 @@ export default function RootLayout() {
     </>
   );
 }
-
-const createStyles = (colors: ThemeColors) => StyleSheet.create({
-  loading: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.background,
-  },
-});
-
-let styles = createStyles(colors);

@@ -123,7 +123,7 @@ export async function stopTTS(): Promise<void> {
   }
 }
 
-export function sanitizeTTSInput(text: string): string {
+function sanitizeTTSInput(text: string): string {
   let next = text
     .replace(/<thinking>[\s\S]*?<\/thinking>/gi, ' ')
     .replace(/<[^<>]*>/g, ' ');

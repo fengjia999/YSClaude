@@ -6,11 +6,14 @@ import {
   useSettingsStore,
   type NamedAPIConfig,
   type PromptCacheCompatibility,
+  type PromptCacheTtl,
   type ThinkingCompatibility,
   type ThinkingEffort,
 } from '../../stores/settings';
+import { useChatStore } from '../../stores/chat';
 import { applyThinkingConfig } from '../../services/api';
 import { createAndShareBackup, pickBackupFile, restoreBackup, type PickedBackup } from '../../services/backup';
+import { disablePromptCacheRemoteKeepalive } from '../../services/promptCacheKeepalive';
 import { formatFullTime } from '../../utils/time';
 import { createSettingsStyles } from './styles';
 
@@ -25,6 +28,10 @@ const PROMPT_CACHE_COMPATIBILITY_OPTIONS: Array<{ value: PromptCacheCompatibilit
   { value: 'standard', label: '标准' },
   { value: 'openrouter', label: 'OpenRouter' },
   { value: 'nanogpt', label: 'NanoGPT' },
+];
+const PROMPT_CACHE_TTL_OPTIONS: Array<{ value: PromptCacheTtl; label: string }> = [
+  { value: '5m', label: '5min' },
+  { value: '1h', label: '1h' },
 ];
 const THINKING_COMPATIBILITY_OPTIONS: Array<{ value: ThinkingCompatibility; label: string }> = [
   { value: 'standard', label: '标准' },
@@ -48,11 +55,14 @@ export function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProp
     apiConfigs,
     activeConfigIndex,
     imageGenerationConfig,
+    promptCacheConfig,
     saveAPIConfig,
     removeAPIConfig,
     setActiveConfig,
     setImageGenerationConfig,
+    setPromptCacheConfig,
   } = useSettingsStore();
+  const conversationId = useChatStore((state) => state.conversationId);
 
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -78,6 +88,7 @@ export function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProp
   const [fetching, setFetching] = useState(false);
   const [creatingBackup, setCreatingBackup] = useState(false);
   const [restoringBackup, setRestoringBackup] = useState(false);
+  const promptCacheTtl: PromptCacheTtl = promptCacheConfig?.ttl === '1h' ? '1h' : '5m';
 
   useEffect(() => {
     if (_hydrated && apiConfigs.length > 0) {
@@ -524,6 +535,45 @@ export function APIConfigTab({ showToast, keyboardBottomInset }: SettingsTabProp
         ))}
       </View>
       <Text style={styles.hint}>OpenRouter 直接透传 inline cache_control；NanoGPT 会额外发送 promptCaching 与 1h beta header。</Text>
+      <View style={styles.switchRow}>
+        <View style={styles.switchText}>
+          <Text style={styles.label}>启用 cache_control</Text>
+          <Text style={styles.hint}>开启后，请求会透传 session_id，并在稳定的 system prompt 与历史对话末尾添加 cache_control。仅在你的 API 中转支持该字段时开启。</Text>
+        </View>
+        <Switch
+          value={!!promptCacheConfig?.enabled}
+          onValueChange={(value) => {
+            setPromptCacheConfig({ enabled: value });
+            if (!value && conversationId) {
+              disablePromptCacheRemoteKeepalive(conversationId).catch(() => undefined);
+            }
+            showToast(value ? 'Prompt 缓存已开启' : 'Prompt 缓存已关闭');
+          }}
+          trackColor={{ false: colors.inputBorder, true: colors.primary }}
+          thumbColor="#FFFFFF"
+        />
+      </View>
+      <Text style={styles.label}>缓存时间</Text>
+      <View style={styles.segmentedRow}>
+        {PROMPT_CACHE_TTL_OPTIONS.map((item) => (
+          <Pressable
+            key={item.value}
+            style={[styles.segmentedButton, promptCacheTtl === item.value && styles.segmentedButtonActive]}
+            onPress={() => {
+              setPromptCacheConfig({ ttl: item.value });
+              if (item.value !== '1h' && conversationId) {
+                disablePromptCacheRemoteKeepalive(conversationId).catch(() => undefined);
+              }
+              showToast(`Prompt 缓存时间已设为 ${item.label}`);
+            }}
+          >
+            <Text style={[styles.segmentedText, promptCacheTtl === item.value && styles.segmentedTextActive]}>
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.hint}>5min 使用 Claude 默认短缓存；1h 会在 cache_control 中附加 ttl，并可配合对话设置里的远程保活。</Text>
 
       <View style={styles.actions}>
         <Pressable style={styles.testButton} onPress={handleTest} disabled={testing}>

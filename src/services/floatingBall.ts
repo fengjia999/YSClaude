@@ -256,10 +256,6 @@ export async function openYSClaudeFromFloatingBall(): Promise<void> {
   await ensureFloatingBall().openApp();
 }
 
-export async function captureFloatingBallScreen(): Promise<string | null> {
-  return ensureFloatingBall().captureScreen();
-}
-
 export async function syncFloatingBallAssets(): Promise<void> {
   await configureFloatingBallAssets(ensureFloatingBall());
 }

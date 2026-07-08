@@ -13,7 +13,7 @@ import {
 } from '../types';
 import type { DailyPaperConfig, DailyPaperSourceConfig, NamedAPIConfig } from '../stores/settings';
 
-export interface RssSourceConfig {
+interface RssSourceConfig {
   name: string;
   url: string;
   category: string;
@@ -29,7 +29,7 @@ interface RssItem {
   category: string;
 }
 
-export const DAILY_PAPER_RSS_SOURCES: RssSourceConfig[] = [
+const DAILY_PAPER_RSS_SOURCES: RssSourceConfig[] = [
   {
     name: 'BBC World',
     url: 'https://feeds.bbci.co.uk/news/world/rss.xml',

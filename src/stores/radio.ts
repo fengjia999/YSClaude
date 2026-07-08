@@ -20,7 +20,7 @@ import { useMusicStore } from './music';
 import { useNeteaseStore } from './netease';
 import { useSettingsStore } from './settings';
 
-export type RadioPhase =
+type RadioPhase =
   | 'idle'
   | 'generating_opening'
   | 'playing_opening'

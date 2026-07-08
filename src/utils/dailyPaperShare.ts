@@ -35,7 +35,7 @@ function summarizeContent(content: DailyPaperContent): string {
   return firstItem || content.headline || '点击查看完整日报';
 }
 
-export function buildDailyPaperCardPayload(paper: DailyPaper): DailyPaperCardPayload | null {
+function buildDailyPaperCardPayload(paper: DailyPaper): DailyPaperCardPayload | null {
   if (!paper.content) return null;
   const body = formatDailyPaperContent(paper.content);
   return {

@@ -2,7 +2,6 @@
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Directory, File, Paths } from 'expo-file-system';
-import { copyAsync } from 'expo-file-system/legacy';
 import { randomUUID } from 'expo-crypto';
 import { useSettingsPageColors } from '../../theme/colors';
 import {
@@ -14,6 +13,7 @@ import {
 } from '../../stores/settings';
 import { TopBarIcon, TOP_BAR_ICON_ITEMS } from '../../components/TopBarIcon';
 import type { TopBarIconKey } from '../../utils/topBarIconTypes';
+import { copyFileFromUri } from '../../utils/fileSystem';
 import { ClampedNumberInput } from './ClampedNumberInput';
 import { createSettingsStyles } from './styles';
 
@@ -60,7 +60,7 @@ async function copyTopBarIcon(asset: ImagePicker.ImagePickerAsset, key: TopBarIc
   dir.create({ intermediates: true, idempotent: true });
 
   const destination = new File(dir, `${key}-${randomUUID()}${appearanceImageExtension(asset)}`);
-  await copyAsync({ from: asset.uri, to: destination.uri });
+  await copyFileFromUri(asset.uri, destination);
   return destination.uri;
 }
 
@@ -73,7 +73,7 @@ async function copyAppearanceImage(
   dir.create({ intermediates: true, idempotent: true });
 
   const destination = new File(dir, `${prefix}-${randomUUID()}${appearanceImageExtension(asset)}`);
-  await copyAsync({ from: asset.uri, to: destination.uri });
+  await copyFileFromUri(asset.uri, destination);
   return destination.uri;
 }
 

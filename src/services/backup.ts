@@ -30,7 +30,7 @@ const BACKUP_FILE_DIRS = [
 
 type ZipEntries = Record<string, Uint8Array>;
 
-export interface BackupManifest {
+interface BackupManifest {
   app: 'YSClaude';
   backupFormat: number;
   createdAt: string;

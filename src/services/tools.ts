@@ -28,7 +28,7 @@ const TOOL_MODULES: ToolModule[] = [
   nativeDeviceTool,
 ];
 
-export const TOOL_LABELS: Record<string, string> = TOOL_MODULES.reduce(
+const TOOL_LABELS: Record<string, string> = TOOL_MODULES.reduce(
   (labels, toolModule) => ({ ...labels, ...toolModule.labels }),
   {}
 );

@@ -13,7 +13,7 @@ import {
 } from '../db/operations';
 import { useChatStore } from '../stores/chat';
 
-export interface RadioSongSuggestion {
+interface RadioSongSuggestion {
   title: string;
   artist?: string;
   query?: string;
@@ -21,7 +21,7 @@ export interface RadioSongSuggestion {
   reason?: string;
 }
 
-export interface RadioPlan {
+interface RadioPlan {
   title: string;
   theme: string;
   thesis: string;

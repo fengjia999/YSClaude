@@ -2,7 +2,6 @@
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Directory, File, Paths } from 'expo-file-system';
-import { copyAsync } from 'expo-file-system/legacy';
 import { randomUUID } from 'expo-crypto';
 import { useSettingsPageColors } from '../../theme/colors';
 import { useSettingsStore } from '../../stores/settings';
@@ -13,6 +12,7 @@ import {
   showFloatingBall,
   syncFloatingBallAssets,
 } from '../../services/floatingBall';
+import { copyFileFromUri } from '../../utils/fileSystem';
 import { ClampedNumberInput } from './ClampedNumberInput';
 import { createSettingsStyles } from './styles';
 
@@ -75,7 +75,7 @@ async function copyFloatingBallImage(asset: ImagePicker.ImagePickerAsset, prefix
   dir.create({ intermediates: true, idempotent: true });
 
   const destination = new File(dir, `${prefix}-${randomUUID()}${floatingBallImageExtension(asset)}`);
-  await copyAsync({ from: asset.uri, to: destination.uri });
+  await copyFileFromUri(asset.uri, destination);
   return destination.uri;
 }
 

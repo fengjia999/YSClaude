@@ -3,12 +3,10 @@ import { ActivityIndicator, Alert, Image, Pressable, ScrollView, Switch, Text, T
 import * as ImagePicker from 'expo-image-picker';
 import { randomUUID } from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
-import { copyAsync } from 'expo-file-system/legacy';
 import { useSettingsPageColors } from '../../theme/colors';
 import {
   type ImageGenerationFaceReference,
   type PromptCacheConfig,
-  type PromptCacheTtl,
   type StablePromptRole,
   useSettingsStore,
 } from '../../stores/settings';
@@ -25,6 +23,7 @@ import {
   testRemoteWxPusherPush,
 } from '../../services/promptCacheKeepalive';
 import { mergeRanges } from '../../utils/ranges';
+import { copyFileFromUri } from '../../utils/fileSystem';
 import { createSettingsStyles } from './styles';
 
 type SettingsTabProps = {
@@ -36,10 +35,6 @@ const IMAGE_GENERATION_FACE_REFERENCE_MAX_BYTES = 8 * 1024 * 1024;
 const IMAGE_GENERATION_FACE_REFERENCE_MIN_SIDE = 64;
 const IMAGE_GENERATION_FACE_REFERENCE_MAX_SIDE = 4096;
 const IMAGE_GENERATION_FACE_REFERENCE_SELECTION_LIMIT = 16;
-const PROMPT_CACHE_TTL_OPTIONS: Array<{ value: PromptCacheTtl; label: string }> = [
-  { value: '5m', label: '5min' },
-  { value: '1h', label: '1h' },
-];
 const PROMPT_CACHE_PUSH_CHANNEL_OPTIONS: Array<{ value: PromptCacheConfig['pushChannel']; label: string }> = [
   { value: 'dingtalk', label: '钉钉' },
   { value: 'wxpusher', label: 'WxPusher' },
@@ -100,7 +95,7 @@ async function copyAppearanceImage(
   dir.create({ intermediates: true, idempotent: true });
 
   const destination = new File(dir, `${prefix}-${randomUUID()}${topBarIconExtension(asset)}`);
-  await copyAsync({ from: asset.uri, to: destination.uri });
+  await copyFileFromUri(asset.uri, destination);
   return destination.uri;
 }
 
@@ -194,7 +189,6 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
   const [promptText, setPromptText] = useState(systemPrompt);
   const [imagePromptText, setImagePromptText] = useState(imageGenerationPrompt || '');
   const [pickingFaceReferences, setPickingFaceReferences] = useState(false);
-  const promptCacheTtl: PromptCacheTtl = promptCacheConfig?.ttl === '1h' ? '1h' : '5m';
   const [quietStartText, setQuietStartText] = useState(formatClockMinutes(promptCacheConfig?.quietStartMinutes ?? 23 * 60));
   const [quietEndText, setQuietEndText] = useState(formatClockMinutes(promptCacheConfig?.quietEndMinutes ?? 7 * 60));
   const [remoteServerUrlText, setRemoteServerUrlText] = useState(promptCacheConfig?.remoteServerUrl || '');
@@ -916,44 +910,8 @@ export function ChatSettingsTab({ showToast, keyboardBottomInset }: SettingsTabP
         />
       </View>
 
-      <Text style={styles.sectionTitle}>Prompt 缓存</Text>
-      <Text style={styles.hint}>开启后，请求会透传 session_id，并在稳定的 system prompt 与历史对话末尾添加 cache_control。仅在你的 API 中转支持该字段时开启。</Text>
-      <View style={styles.switchRow}>
-        <Text style={styles.label}>启用 cache_control</Text>
-        <Switch
-          value={!!promptCacheConfig?.enabled}
-          onValueChange={(value) => {
-            setPromptCacheConfig({ enabled: value });
-            if (!value && conversationId) {
-              disablePromptCacheRemoteKeepalive(conversationId).catch(() => undefined);
-            }
-            showToast(value ? 'Prompt 缓存已开启' : 'Prompt 缓存已关闭');
-          }}
-          trackColor={{ false: colors.inputBorder, true: colors.primary }}
-        />
-      </View>
-      <Text style={styles.label}>缓存时间</Text>
-      <View style={styles.segmentedRow}>
-        {PROMPT_CACHE_TTL_OPTIONS.map((item) => (
-          <Pressable
-            key={item.value}
-            style={[styles.segmentedButton, promptCacheTtl === item.value && styles.segmentedButtonActive]}
-            onPress={() => {
-              setPromptCacheConfig({ ttl: item.value });
-              if (item.value !== '1h' && conversationId) {
-                disablePromptCacheRemoteKeepalive(conversationId).catch(() => undefined);
-              }
-              showToast(`Prompt 缓存时间已设为 ${item.label}`);
-            }}
-          >
-            <Text style={[styles.segmentedText, promptCacheTtl === item.value && styles.segmentedTextActive]}>
-              {item.label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-      <Text style={styles.hint}>5min 使用 Claude 默认短缓存；1h 会在 cache_control 中附加 ttl。</Text>
-
+      <Text style={styles.sectionTitle}>Prompt 缓存远程保活</Text>
+      <Text style={styles.hint}>基础开关、缓存时间和渠道已集中到 API 配置；这里仅配置 1h cache 的远程保活和主动推送。</Text>
       <View style={styles.remoteKeepalivePanel}>
         <View style={styles.switchRow}>
           <View style={styles.switchText}>

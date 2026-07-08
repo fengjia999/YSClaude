@@ -10,7 +10,7 @@ export const WEB_CRUISE_SYSTEM_PROMPT = [
   '如果 hotboard 或网页查看失败，请诚实说明当前巡游没有成功，不要编造看过的内容。',
 ].join('\n');
 
-export function isWebCruiseNotice(message: Pick<Message, 'role' | 'content'>): boolean {
+function isWebCruiseNotice(message: Pick<Message, 'role' | 'content'>): boolean {
   return message.role === 'system' && message.content.trim() === WEB_CRUISE_NOTICE_TEXT;
 }
 

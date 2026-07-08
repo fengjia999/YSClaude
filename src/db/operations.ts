@@ -173,7 +173,7 @@ export interface ChatDiagnosticsMessage {
   issues: string[];
 }
 
-export interface ChatDiagnosticsDuplicateGroup {
+interface ChatDiagnosticsDuplicateGroup {
   createdAt: number;
   count: number;
   ids: string[];
@@ -1232,7 +1232,7 @@ export async function getConversationMessageDates(conversationId: string): Promi
   return [...dates];
 }
 
-export async function getChatActiveDateKeys(limit = 3650): Promise<string[]> {
+async function getChatActiveDateKeys(limit = 3650): Promise<string[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<{ date_key: string }>(
     `SELECT date(created_at / 1000, 'unixepoch', 'localtime') as date_key
@@ -2199,7 +2199,7 @@ async function ensureReadingBookSnapshotTable() {
   return db;
 }
 
-export async function upsertReadingBookSnapshot(snapshot: ReadingBookSnapshot): Promise<void> {
+async function upsertReadingBookSnapshot(snapshot: ReadingBookSnapshot): Promise<void> {
   const db = await ensureReadingBookSnapshotTable();
   await db.runAsync(
     `INSERT OR REPLACE INTO reading_book_snapshots (book_id, title, author, updated_at)
@@ -2373,19 +2373,6 @@ export async function updateReadingNoteContent(id: string, content: string): Pro
 export async function deleteReadingNote(id: string): Promise<void> {
   const db = await ensureReadingAnnotationTables();
   await db.runAsync('DELETE FROM reading_notes WHERE id = ?', [id]);
-}
-
-export async function getReadingNotes(bookId: string): Promise<ReadingNote[]> {
-  const db = await ensureReadingAnnotationTables();
-  const rows = await db.getAllAsync<{
-    id: string;
-    book_id: string;
-    kind: string;
-    content: string;
-    created_at: number;
-    updated_at: number;
-  }>('SELECT * FROM reading_notes WHERE book_id = ? ORDER BY created_at ASC', [bookId]);
-  return rows.map(mapReadingNoteRow);
 }
 
 export async function getAllReadingNotes(): Promise<ReadingNote[]> {
@@ -2952,7 +2939,7 @@ export async function getApiUsageSummaryByFeature(): Promise<ApiUsageGroupSummar
   }));
 }
 
-export async function getApiUsageActiveDateKeysByFeature(feature?: string, limit = 3650): Promise<string[]> {
+async function getApiUsageActiveDateKeysByFeature(feature?: string, limit = 3650): Promise<string[]> {
   const db = await getDatabase();
   const featureFilter = feature && feature !== 'all';
   const rows = await db.getAllAsync<ApiUsageDateKeyRow>(

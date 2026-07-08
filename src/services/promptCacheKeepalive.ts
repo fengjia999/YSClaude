@@ -74,7 +74,7 @@ export interface PromptCacheRemoteSnapshotStatus {
   serverActivityCount: number;
 }
 
-export interface PromptCacheRemoteToolTranscriptEntry {
+interface PromptCacheRemoteToolTranscriptEntry {
   toolName: string;
   args: Record<string, any>;
   resultPreview: string;

@@ -45,11 +45,11 @@ export const mcpRemoteTool: ToolModule = {
   },
 };
 
-export function makeMcpToolName(serverId: string, toolName: string): string {
+function makeMcpToolName(serverId: string, toolName: string): string {
   return `${MCP_TOOL_PREFIX}${sanitizeToolNamePart(serverId)}__${sanitizeToolNamePart(toolName)}`;
 }
 
-export function makeMcpResourceReadToolName(serverId: string): string {
+function makeMcpResourceReadToolName(serverId: string): string {
   return `${MCP_RESOURCE_TOOL_PREFIX}${sanitizeToolNamePart(serverId)}__read_resource`;
 }
 

@@ -370,7 +370,7 @@ export async function isAccessibilityControlEnabled(): Promise<boolean> {
   return await module.isAccessibilityServiceEnabled();
 }
 
-export async function isInputMethodReady(): Promise<boolean> {
+async function isInputMethodReady(): Promise<boolean> {
   const module = ensureAccessibilityScreenContext();
   return await module.isInputMethodReady();
 }
@@ -564,13 +564,4 @@ export async function deleteCalendarEvent(args: Record<string, any>): Promise<st
   const event = await Calendar.ExpoCalendarEvent.get(id);
   await event.delete();
   return toJson({ id, deleted: true });
-}
-
-export async function readUnsupportedNativeCapability(capability: string): Promise<string> {
-  return toJson({
-    supported: false,
-    capability,
-    reason:
-      'Expo SDK 56 没有内置该系统能力的跨平台 API。需要后续添加自定义原生模块或接入第三方原生库，并在 development build 中运行。',
-  });
 }

@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ImageSourcePropType, StyleProp, TextStyle } from 'react-native';
 import Markdown from '@ronradtke/react-native-markdown-display';
+import { Edit3, Maximize2, Minus, RotateCw, Save, X } from 'lucide-react-native';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 
 import { fonts } from '../theme/fonts';
 import { useSettingsStore } from '../stores/settings';
 import { useChatStore } from '../stores/chat';
-import { readConversationArtifact } from '../services/conversationArtifacts';
+import { readConversationArtifact, replaceConversationArtifactContent } from '../services/conversationArtifacts';
 import { openHtmlArtifact } from '../services/webviewController';
 import type { ConversationArtifact, ConversationArtifactVersion, GeneratedPicture } from '../types';
 import { buildStickerDefinitions, getStickerByName, type StickerDefinition } from '../utils/stickers';
@@ -140,6 +141,11 @@ function ConversationFileCard({ artifactId }: { artifactId: string }) {
   const [version, setVersion] = useState<ConversationArtifactVersion | null>(null);
   const [loading, setLoading] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewMinimized, setPreviewMinimized] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftContent, setDraftContent] = useState('');
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadArtifact = useCallback(async () => {
@@ -176,7 +182,7 @@ function ConversationFileCard({ artifactId }: { artifactId: string }) {
     event?.stopPropagation?.();
     setLoading(true);
     try {
-      const result = version && artifact ? { artifact, version } : await loadArtifact();
+      const result = await loadArtifact();
       if (result.artifact.kind === 'html') {
         await openHtmlArtifact({
           artifactId: result.artifact.id,
@@ -185,6 +191,10 @@ function ConversationFileCard({ artifactId }: { artifactId: string }) {
           title: result.artifact.name,
         });
       } else {
+        setDraftContent(result.version.content);
+        setDirty(false);
+        setEditing(false);
+        setPreviewMinimized(false);
         setPreviewVisible(true);
       }
     } catch (err: any) {
@@ -192,12 +202,80 @@ function ConversationFileCard({ artifactId }: { artifactId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [artifact, loadArtifact, version]);
+  }, [loadArtifact]);
 
   const title = artifact?.name || `文件 ${artifactId.slice(0, 8)}`;
   const meta = artifact
     ? `${formatArtifactKind(artifact.kind)}${artifact.size !== undefined ? ` · ${formatFileSize(artifact.size)}` : ''}`
     : error || '当前对话文件';
+
+  const closePreview = useCallback(() => {
+    if (dirty) {
+      Alert.alert('关闭预览', '当前修改尚未保存，确定关闭吗？', [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '关闭',
+          style: 'destructive',
+          onPress: () => setPreviewVisible(false),
+        },
+      ]);
+      return;
+    }
+    setPreviewVisible(false);
+  }, [dirty]);
+
+  const refreshPreview = useCallback(async () => {
+    const reload = async () => {
+      setLoading(true);
+      try {
+        const result = await loadArtifact();
+        setDraftContent(result.version.content);
+        setDirty(false);
+      } catch (err: any) {
+        Alert.alert('刷新失败', err?.message || '无法读取最新文件内容');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (dirty) {
+      Alert.alert('刷新文件', '当前修改尚未保存，刷新会丢弃这些修改。', [
+        { text: '取消', style: 'cancel' },
+        { text: '刷新', style: 'destructive', onPress: () => void reload() },
+      ]);
+      return;
+    }
+
+    await reload();
+  }, [dirty, loadArtifact]);
+
+  const savePreview = useCallback(async () => {
+    if (!conversationId || !artifact) return;
+    setSaving(true);
+    try {
+      const nextVersion = await replaceConversationArtifactContent({
+        conversationId,
+        artifactId: artifact.id,
+        content: draftContent,
+        createdBy: 'user',
+      });
+      const refreshed = await readConversationArtifact(conversationId, artifact.id);
+      setArtifact(refreshed.artifact);
+      setVersion(nextVersion);
+      setDraftContent(nextVersion.content);
+      setDirty(false);
+      setEditing(false);
+    } catch (err: any) {
+      Alert.alert('保存失败', err?.message || '无法保存文件');
+    } finally {
+      setSaving(false);
+    }
+  }, [artifact, conversationId, draftContent]);
+
+  const updateDraftContent = useCallback((value: string) => {
+    setDraftContent(value);
+    setDirty(value !== (version?.content || ''));
+  }, [version?.content]);
 
   return (
     <>
@@ -219,19 +297,65 @@ function ConversationFileCard({ artifactId }: { artifactId: string }) {
         transparent
         visible={previewVisible}
         animationType="fade"
-        onRequestClose={() => setPreviewVisible(false)}
+        onRequestClose={closePreview}
       >
-        <Pressable style={styles.filePreviewOverlay} onPress={() => setPreviewVisible(false)}>
-          <View style={styles.filePreviewPanel} onStartShouldSetResponder={() => true}>
-            <Text style={styles.filePreviewTitle} numberOfLines={2}>{title}</Text>
-            <Text style={styles.filePreviewMeta}>{meta}</Text>
-            <ScrollView style={styles.filePreviewScroll}>
-              <Text selectable style={styles.filePreviewText}>{version?.content || ''}</Text>
-            </ScrollView>
-            <Pressable style={styles.filePreviewClose} onPress={() => setPreviewVisible(false)}>
-              <Text style={styles.filePreviewCloseText}>关闭</Text>
+        <Pressable style={styles.filePreviewOverlay} onPress={closePreview}>
+          {previewMinimized ? (
+            <Pressable
+              style={styles.filePreviewMinimized}
+              onPress={(event) => {
+                event.stopPropagation();
+                setPreviewMinimized(false);
+              }}
+            >
+              <Text style={styles.filePreviewMinimizedText} numberOfLines={1}>{title}</Text>
+              <Maximize2 size={16} color={colors.textSecondary} strokeWidth={2.2} />
             </Pressable>
-          </View>
+          ) : (
+            <View style={styles.filePreviewPanel} onStartShouldSetResponder={() => true}>
+              <View style={styles.filePreviewHeader}>
+                <View style={styles.filePreviewTitleBlock}>
+                  <Text style={styles.filePreviewTitle} numberOfLines={1}>{title}</Text>
+                  <Text style={styles.filePreviewMeta} numberOfLines={1}>{meta}{dirty ? ' · 未保存' : ''}</Text>
+                </View>
+                {loading || saving ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+                <Pressable style={styles.filePreviewIconButton} onPress={() => setEditing((current) => !current)}>
+                  <Edit3 size={16} color={editing ? colors.primary : colors.textSecondary} strokeWidth={2.2} />
+                </Pressable>
+                <Pressable
+                  style={[styles.filePreviewIconButton, (!dirty || saving) && styles.filePreviewIconButtonDisabled]}
+                  onPress={() => void savePreview()}
+                  disabled={!dirty || saving}
+                >
+                  <Save size={16} color={dirty && !saving ? colors.primary : colors.textTertiary} strokeWidth={2.2} />
+                </Pressable>
+                <Pressable style={styles.filePreviewIconButton} onPress={() => void refreshPreview()}>
+                  <RotateCw size={16} color={colors.textSecondary} strokeWidth={2.2} />
+                </Pressable>
+                <Pressable style={styles.filePreviewIconButton} onPress={() => setPreviewMinimized(true)}>
+                  <Minus size={17} color={colors.textSecondary} strokeWidth={2.4} />
+                </Pressable>
+                <Pressable style={styles.filePreviewIconButton} onPress={closePreview}>
+                  <X size={16} color={colors.textSecondary} strokeWidth={2.3} />
+                </Pressable>
+              </View>
+              {editing ? (
+                <TextInput
+                  style={[styles.filePreviewScroll, styles.filePreviewInput]}
+                  value={draftContent}
+                  onChangeText={updateDraftContent}
+                  multiline
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textAlignVertical="top"
+                />
+              ) : (
+                <ScrollView style={styles.filePreviewScroll}>
+                  <Text selectable style={styles.filePreviewText}>{draftContent}</Text>
+                </ScrollView>
+              )}
+            </View>
+          )}
         </Pressable>
       </Modal>
     </>
@@ -530,30 +654,54 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   filePreviewPanel: {
     width: '100%',
     maxWidth: 720,
+    minHeight: 360,
     maxHeight: '84%',
     borderRadius: 12,
-    padding: 16,
     backgroundColor: colors.background,
     borderWidth: 1,
     borderColor: colors.border,
+    overflow: 'hidden',
+  },
+  filePreviewHeader: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  filePreviewTitleBlock: {
+    flex: 1,
+    minWidth: 0,
   },
   filePreviewTitle: {
     color: colors.text,
-    fontSize: 17,
+    fontSize: 14,
     fontWeight: '800',
   },
   filePreviewMeta: {
-    marginTop: 4,
-    marginBottom: 10,
+    marginTop: 3,
     color: colors.textTertiary,
-    fontSize: 12,
+    fontSize: 11,
+  },
+  filePreviewIconButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+  },
+  filePreviewIconButtonDisabled: {
+    opacity: 0.45,
   },
   filePreviewScroll: {
+    flex: 1,
     maxHeight: 460,
-    borderRadius: 8,
     backgroundColor: colors.codeBlock,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
   },
   filePreviewText: {
     padding: 12,
@@ -561,6 +709,38 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     fontFamily: fonts.mono,
+  },
+  filePreviewInput: {
+    minHeight: 300,
+    maxHeight: 460,
+    padding: 12,
+    color: colors.codeText,
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: fonts.mono,
+  },
+  filePreviewMinimized: {
+    position: 'absolute',
+    right: 18,
+    bottom: 34,
+    width: 260,
+    maxWidth: '86%',
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  filePreviewMinimizedText: {
+    flex: 1,
+    minWidth: 0,
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '700',
   },
   filePreviewClose: {
     alignSelf: 'flex-end',
