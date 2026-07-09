@@ -6,11 +6,32 @@ let currentPlayer: ReturnType<typeof createAudioPlayer> | null = null;
 let currentSubscription: { remove: () => void } | null = null;
 let currentWaitResolve: (() => void) | null = null;
 
+export function isTTSConfigReady(config: TTSConfig): boolean {
+  if (config.provider === 'fish') {
+    return !!config.fishApiKey.trim() && !!config.fishReferenceId.trim();
+  }
+  return !!config.apiKey.trim() && !!config.groupId.trim() && !!config.voiceId.trim();
+}
+
+export function getTTSConfigMissingMessage(config: TTSConfig): string {
+  if (config.provider === 'fish') {
+    return '请先配置 Fish Audio API Key 和 Reference ID';
+  }
+  return '请先配置 MiniMax Group ID、API Key 和 Voice ID';
+}
+
 async function createTTSPlayer(text: string, config: TTSConfig): Promise<ReturnType<typeof createAudioPlayer>> {
   const speakableText = sanitizeTTSInput(text);
   if (!speakableText) {
     throw new Error('没有可朗读的内容');
   }
+  if (config.provider === 'fish') {
+    return createFishTTSPlayer(speakableText, config);
+  }
+  return createMiniMaxTTSPlayer(speakableText, config);
+}
+
+async function createMiniMaxTTSPlayer(speakableText: string, config: TTSConfig): Promise<ReturnType<typeof createAudioPlayer>> {
   if (!config.apiKey || !config.groupId) {
     throw new Error('请先配置 MiniMax Group ID 和 API Key');
   }
@@ -62,6 +83,58 @@ async function createTTSPlayer(text: string, config: TTSConfig): Promise<ReturnT
 
   const audioBytes = hexToBytes(audioHex);
   const file = new File(Paths.cache, 'tts_audio.mp3');
+  const writable = file.writableStream();
+  const writer = writable.getWriter();
+  await writer.write(audioBytes);
+  await writer.close();
+
+  return createAudioPlayer(file.uri);
+}
+
+async function createFishTTSPlayer(speakableText: string, config: TTSConfig): Promise<ReturnType<typeof createAudioPlayer>> {
+  const apiKey = config.fishApiKey.trim();
+  const referenceId = config.fishReferenceId.trim();
+  if (!apiKey) {
+    throw new Error('请先配置 Fish Audio API Key');
+  }
+  if (!referenceId) {
+    throw new Error('请先配置 Fish Audio Reference ID');
+  }
+
+  const format = config.fishFormat || 'mp3';
+  const endpoint = `${(config.fishBaseUrl || 'https://api.fish.audio').trim().replace(/\/$/, '')}/v1/tts`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+      model: config.fishModel.trim() || 's2-pro',
+    },
+    body: JSON.stringify({
+      text: speakableText,
+      reference_id: referenceId,
+      format,
+      normalize: true,
+      latency: 'normal',
+      prosody: {
+        speed: config.fishSpeed || 1,
+        volume: config.fishVolume || 0,
+        normalize_loudness: true,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Fish Audio TTS Error ${response.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const audioBytes = new Uint8Array(await response.arrayBuffer());
+  if (audioBytes.length === 0) {
+    throw new Error('Fish Audio 未返回音频数据');
+  }
+
+  const file = new File(Paths.cache, `tts_audio.${format}`);
   const writable = file.writableStream();
   const writer = writable.getWriter();
   await writer.write(audioBytes);

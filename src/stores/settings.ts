@@ -74,7 +74,10 @@ export type { PromptCacheCompatibility, PromptCacheTtl, ThinkingCompatibility, T
 // HiddenRange 已迁移到 src/types，这里 re-export 保持旧的 import 路径兼容。
 export type { HiddenRange } from '../types';
 
+export type TTSProvider = 'minimax' | 'fish';
+
 export interface TTSConfig {
+  provider: TTSProvider;
   groupId: string;
   apiKey: string;
   model: string;
@@ -82,6 +85,26 @@ export interface TTSConfig {
   speed: number;
   vol: number;
   pitch: number;
+  fishBaseUrl: string;
+  fishApiKey: string;
+  fishReferenceId: string;
+  fishModel: string;
+  fishFormat: 'mp3' | 'wav' | 'pcm';
+  fishSpeed: number;
+  fishVolume: number;
+}
+
+export type STTProvider = 'openai' | 'fish';
+
+export interface STTConfig {
+  provider: STTProvider;
+  openAiBaseUrl: string;
+  openAiApiKey: string;
+  openAiModel: string;
+  fishBaseUrl: string;
+  fishApiKey: string;
+  fishLanguage: string;
+  fishIgnoreTimestamps: boolean;
 }
 
 export interface MemoryVaultConfig {
@@ -469,6 +492,42 @@ function normalizeImageGenerationConfig(config?: Partial<ImageGenerationConfig>)
   };
 }
 
+function normalizeSTTConfig(config?: Partial<STTConfig>): STTConfig {
+  return {
+    provider: config?.provider === 'fish' ? 'fish' : 'openai',
+    openAiBaseUrl: config?.openAiBaseUrl || '',
+    openAiApiKey: config?.openAiApiKey || '',
+    openAiModel: config?.openAiModel || 'whisper-1',
+    fishBaseUrl: config?.fishBaseUrl || 'https://api.fish.audio',
+    fishApiKey: config?.fishApiKey || '',
+    fishLanguage: config?.fishLanguage || 'zh',
+    fishIgnoreTimestamps: config?.fishIgnoreTimestamps ?? true,
+  };
+}
+
+function normalizeTTSConfig(config?: Partial<TTSConfig>): TTSConfig {
+  return {
+    provider: config?.provider === 'fish' ? 'fish' : 'minimax',
+    groupId: config?.groupId || '',
+    apiKey: config?.apiKey || '',
+    model: config?.model || 'speech-02-hd',
+    voiceId: config?.voiceId || '',
+    speed: config?.speed ?? 1,
+    vol: config?.vol ?? 1,
+    pitch: config?.pitch ?? 0,
+    fishBaseUrl: config?.fishBaseUrl || 'https://api.fish.audio',
+    fishApiKey: config?.fishApiKey || '',
+    fishReferenceId: config?.fishReferenceId || '',
+    fishModel: config?.fishModel || 's2-pro',
+    fishFormat:
+      config?.fishFormat === 'wav' || config?.fishFormat === 'pcm'
+        ? config.fishFormat
+        : 'mp3',
+    fishSpeed: config?.fishSpeed ?? 1,
+    fishVolume: config?.fishVolume ?? 0,
+  };
+}
+
 function normalizeIncomingLetterConfig(config?: Partial<IncomingLetterConfig>): IncomingLetterConfig {
   return {
     enabled: config?.enabled ?? false,
@@ -629,6 +688,7 @@ interface SettingsState {
   tokenWarningThreshold: number | null;
   stripThinking: boolean;
   ttsConfig: TTSConfig;
+  sttConfig: STTConfig;
   memoryVaultConfig: MemoryVaultConfig;
   webSearchConfig: WebSearchConfig;
   webInteractionConfig: WebInteractionConfig;
@@ -661,6 +721,7 @@ interface SettingsState {
   setTokenWarningThreshold: (tokens: number | null) => void;
   setStripThinking: (value: boolean) => void;
   setTTSConfig: (config: Partial<TTSConfig>) => void;
+  setSTTConfig: (config: Partial<STTConfig>) => void;
   setMemoryVaultConfig: (config: Partial<MemoryVaultConfig>) => void;
   setWebSearchConfig: (config: Partial<WebSearchConfig>) => void;
   setWebInteractionConfig: (config: Partial<WebInteractionConfig>) => void;
@@ -715,15 +776,8 @@ export const useSettingsStore = create<SettingsState>()(
       maxOutputTokens: null,
       tokenWarningThreshold: null,
       stripThinking: false,
-      ttsConfig: {
-        groupId: '',
-        apiKey: '',
-        model: 'speech-02-hd',
-        voiceId: '',
-        speed: 1,
-        vol: 1,
-        pitch: 0,
-      },
+      ttsConfig: normalizeTTSConfig(),
+      sttConfig: normalizeSTTConfig(),
       memoryVaultConfig: {
         enabled: false,
         baseUrl: '',
@@ -931,7 +985,9 @@ export const useSettingsStore = create<SettingsState>()(
       setTokenWarningThreshold: (tokens) => set({ tokenWarningThreshold: tokens }),
       setStripThinking: (value) => set({ stripThinking: value }),
       setTTSConfig: (config) =>
-        set((state) => ({ ttsConfig: { ...state.ttsConfig, ...config } })),
+        set((state) => ({ ttsConfig: normalizeTTSConfig({ ...state.ttsConfig, ...config }) })),
+      setSTTConfig: (config) =>
+        set((state) => ({ sttConfig: normalizeSTTConfig({ ...state.sttConfig, ...config }) })),
       setMemoryVaultConfig: (config) =>
         set((state) => ({ memoryVaultConfig: { ...state.memoryVaultConfig, ...config } })),
       setWebSearchConfig: (config) =>
@@ -1269,6 +1325,7 @@ export const useSettingsStore = create<SettingsState>()(
         tokenWarningThreshold: state.tokenWarningThreshold,
         stripThinking: state.stripThinking,
         ttsConfig: state.ttsConfig,
+        sttConfig: state.sttConfig,
         memoryVaultConfig: state.memoryVaultConfig,
         webSearchConfig: state.webSearchConfig,
         webInteractionConfig: state.webInteractionConfig,
@@ -1303,6 +1360,8 @@ export const useSettingsStore = create<SettingsState>()(
           stickerConfig: normalizeStickerConfig(state?.stickerConfig),
           floatingBallConfig: normalizeFloatingBallConfig(state?.floatingBallConfig),
           promptCacheConfig: normalizePromptCacheConfig(state?.promptCacheConfig),
+          ttsConfig: normalizeTTSConfig(state?.ttsConfig),
+          sttConfig: normalizeSTTConfig(state?.sttConfig),
           imageGenerationConfig: normalizeImageGenerationConfig(state?.imageGenerationConfig),
           incomingLetterConfig: normalizeIncomingLetterConfig(state?.incomingLetterConfig),
           dailyPaperConfig: normalizeDailyPaperConfig(state?.dailyPaperConfig),

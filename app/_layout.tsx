@@ -2,7 +2,8 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
-import { AppState } from 'react-native';
+import { AppState, StyleSheet } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useThemeColors } from '../src/theme/colors';
 
 import {
@@ -113,7 +114,7 @@ export default function RootLayout() {
   }, [settingsHydrated]);
 
   return (
-    <>
+    <GestureHandlerRootView style={styles.gestureRoot}>
       <StatusBar style={statusBarStyle} />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
@@ -176,6 +177,12 @@ export default function RootLayout() {
       </Stack>
       <WebViewPanel />
       <IncomingShareHandler />
-    </>
+    </GestureHandlerRootView>
   );
 }
+
+const styles = StyleSheet.create({
+  gestureRoot: {
+    flex: 1,
+  },
+});

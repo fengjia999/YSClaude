@@ -1,15 +1,16 @@
-import React, { useCallback, useMemo, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable, Image, Alert, TextInput, Modal, Dimensions, ScrollView, ActivityIndicator, type ImageStyle, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 import { NativeViewGestureHandler, ScrollView as GestureScrollView } from 'react-native-gesture-handler';
 import Markdown from '@ronradtke/react-native-markdown-display';
 import { BlurView } from 'expo-blur';
+import { createAudioPlayer, type AudioStatus } from 'expo-audio';
 import Svg, { Path } from 'react-native-svg';
 import { Message, type GeneratedPicture, type ToolInvocation } from '../types';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
-import { fonts } from '../theme/fonts';
+import { fonts, fontWeights } from '../theme/fonts';
 import { useChatStore } from '../stores/chat';
 import { useSettingsStore } from '../stores/settings';
-import { playTTS, stopTTS } from '../services/tts';
+import { getTTSConfigMissingMessage, isTTSConfigReady, playTTS, stopTTS } from '../services/tts';
 import { saveGeneratedImageToLibrary } from '../services/imageGeneration';
 import { openWebView } from '../services/webviewController';
 import { getToolLabel } from '../services/tools';
@@ -153,6 +154,7 @@ function MarkdownTable({
           horizontal
           nestedScrollEnabled
           showsHorizontalScrollIndicator
+          persistentScrollbar
           directionalLockEnabled
           disallowInterruption
           keyboardShouldPersistTaps="handled"
@@ -188,6 +190,22 @@ function createMarkdownRules(options?: { messageId?: string }) {
   }
 
   return {
+    strong: (node: any, children: React.ReactNode, parent: any[] = [], styles: any) => {
+      const shouldKeepItalic = parent.some((parentNode) => parentNode?.type === 'em');
+
+      return (
+        <Text
+          key={node.key}
+          style={[
+            styles.text,
+            styles.strong,
+            !shouldKeepItalic && styles.markdownStrongText,
+          ]}
+        >
+          {children}
+        </Text>
+      );
+    },
     table: (node: any, children: React.ReactNode, _parent: any, styles: any) => (
       <MarkdownTable key={node.key} markdownStyles={styles}>{children}</MarkdownTable>
     ),
@@ -262,6 +280,13 @@ function formatDebugJson(raw: string): string {
   } catch {
     return raw;
   }
+}
+
+function formatVoiceDuration(durationMs: number): string {
+  const totalSeconds = Math.max(1, Math.round((durationMs || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}:${String(seconds).padStart(2, '0')}` : `${seconds}s`;
 }
 
 // 思维链胶囊：白底灰边圆角，左侧 clock 图标 + "Thought process"，点击展开/收起内容。
@@ -865,14 +890,50 @@ export const ChatBubble = React.memo(function ChatBubble({
   const [pictureActionBusy, setPictureActionBusy] = useState(false);
   const [previewImage, setPreviewImage] = useState<{ uri: string; title?: string } | null>(null);
   const [dailyPaperVisible, setDailyPaperVisible] = useState(false);
+  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   // 长按时测量得到的气泡屏幕坐标，用于把菜单锚定到气泡上方
   const [menuAnchor, setMenuAnchor] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>({});
   const bubbleRef = useRef<View>(null);
+  const voicePlayerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  const voicePlayerSubscriptionRef = useRef<{ remove: () => void } | null>(null);
   const markdownRules = createMarkdownRules({ messageId: message.id });
   const handleBubbleTap = useCallback(() => {
     onBubblePress?.(message.id);
   }, [message.id, onBubblePress]);
+  const stopVoicePlayback = useCallback(() => {
+    voicePlayerSubscriptionRef.current?.remove();
+    voicePlayerSubscriptionRef.current = null;
+    if (voicePlayerRef.current) {
+      voicePlayerRef.current.pause();
+      voicePlayerRef.current.remove();
+      voicePlayerRef.current = null;
+    }
+    setPlayingVoiceId(null);
+  }, []);
+  useEffect(() => stopVoicePlayback, [stopVoicePlayback]);
+  const handleVoicePress = useCallback(() => {
+    const voice = message.voiceAttachment;
+    if (!voice) return;
+    if (playingVoiceId === voice.id) {
+      stopVoicePlayback();
+      return;
+    }
+    stopVoicePlayback();
+    try {
+      const player = createAudioPlayer(voice.uri);
+      voicePlayerRef.current = player;
+      voicePlayerSubscriptionRef.current = player.addListener('playbackStatusUpdate', (status: AudioStatus) => {
+        if (status.didJustFinish || status.error) {
+          stopVoicePlayback();
+        }
+      });
+      setPlayingVoiceId(voice.id);
+      player.play();
+    } catch (error: any) {
+      Alert.alert('播放失败', error?.message || '无法播放这条语音');
+    }
+  }, [message.voiceAttachment, playingVoiceId, stopVoicePlayback]);
   const floorText = floorNumber !== undefined ? `#${floorNumber}` : null;
   const canToggleFloorHidden = floorNumber !== undefined;
   const hiddenToggleText = isHidden ? '恢复' : '隐藏';
@@ -1088,6 +1149,9 @@ export const ChatBubble = React.memo(function ChatBubble({
     const menuTop = Math.max(8, menuAnchor.y - MENU_HEIGHT - 8);
     const userBubbleMaxWidth = Math.round(messageAvailableWidth * (userBubbleWidthPercent / 100));
     const expandUserMarkdownBlockBubble = shouldExpandMarkdownBlockBubble(message.content);
+    const voiceAttachment = message.voiceAttachment;
+    const voiceToken = voiceAttachment ? `[Voice:${voiceAttachment.id}]` : '';
+    const isVoiceOnlyMessage = !!voiceAttachment && message.content.trim() === voiceToken;
     const userStickerOnlyMessage = messageIsStickerOnly && !dailyPaperCard && !sharedLinkUrl;
     const userBubbleBaseStyle = [
       styles.userBubble,
@@ -1159,7 +1223,53 @@ export const ChatBubble = React.memo(function ChatBubble({
               </View>
             </View>
           )}
-          {message.content.length > 0 && (
+          {voiceAttachment && (
+            <>
+              <Pressable
+                ref={isVoiceOnlyMessage ? bubbleRef : undefined}
+                onPress={handleVoicePress}
+                onLongPress={handleUserLongPress}
+                style={[userBubbleBaseStyle, styles.voiceBubble]}
+              >
+                {userBubbleGlass.enabled && (
+                  <BlurView
+                    pointerEvents="none"
+                    intensity={userBubbleGlass.intensity}
+                    tint={userBubbleGlass.tint}
+                    style={StyleSheet.absoluteFill}
+                  />
+                )}
+                <View pointerEvents="none" style={userBubbleTailStyle} />
+                {showBubbleTail && (
+                  <BubbleTailSvg side="user" style={userBubbleTailSvgStyle} fallbackColor={userBubbleTransparent ? 'transparent' : userBubbleColor} />
+                )}
+                <View style={styles.voiceIconCircle}>
+                  <Text style={styles.voiceIconText}>{playingVoiceId === voiceAttachment.id ? 'II' : '>'}</Text>
+                </View>
+                <View style={styles.voiceWave}>
+                  <View style={[styles.voiceWaveBar, styles.voiceWaveBarShort]} />
+                  <View style={styles.voiceWaveBar} />
+                  <View style={[styles.voiceWaveBar, styles.voiceWaveBarTall]} />
+                  <View style={styles.voiceWaveBar} />
+                  <View style={[styles.voiceWaveBar, styles.voiceWaveBarShort]} />
+                </View>
+                <Text style={[userTextStyle, styles.voiceDuration]}>{formatVoiceDuration(voiceAttachment.durationMs)}</Text>
+              </Pressable>
+              <Text
+                style={[
+                  styles.voiceTranscript,
+                  voiceAttachment.transcriptStatus === 'failed' && styles.voiceTranscriptFailed,
+                ]}
+              >
+                {voiceAttachment.transcriptStatus === 'completed'
+                  ? voiceAttachment.transcript || ''
+                  : voiceAttachment.transcriptStatus === 'failed'
+                    ? `转写失败：${voiceAttachment.errorMessage || '点击重新录制'}`
+                    : '正在转文字...'}
+              </Text>
+            </>
+          )}
+          {message.content.length > 0 && !isVoiceOnlyMessage && (
             <Pressable
               ref={bubbleRef}
               onPress={dailyPaperCard ? () => setDailyPaperVisible(true) : sharedLinkUrl ? openSharedLinkCard : handleBubbleTap}
@@ -1193,7 +1303,7 @@ export const ChatBubble = React.memo(function ChatBubble({
               )}
             </Pressable>
           )}
-          {message.content.length === 0 && !message.imageUri && !(message.imageGenerationReferenceUris?.length) && (
+          {message.content.length === 0 && !message.imageUri && !message.voiceAttachment && !(message.imageGenerationReferenceUris?.length) && (
             <Pressable
               ref={bubbleRef}
               onPress={handleBubbleTap}
@@ -1289,8 +1399,8 @@ export const ChatBubble = React.memo(function ChatBubble({
         break;
       case 2: // TTS 播放
         const ttsConfig = useSettingsStore.getState().ttsConfig;
-        if (!ttsConfig.apiKey || !ttsConfig.groupId) {
-          Alert.alert('提示', '请先在设置 > TTS 配置中填写 Group ID 和 API Key');
+        if (!isTTSConfigReady(ttsConfig)) {
+          Alert.alert('提示', getTTSConfigMissingMessage(ttsConfig));
         } else {
           playTTS(message.content, ttsConfig).catch((e) =>
             Alert.alert('TTS 失败', e.message)
@@ -2253,6 +2363,66 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: 22,
     fontFamily: fonts.serifBold,
   },
+  voiceBubble: {
+    minWidth: 164,
+    maxWidth: 240,
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  voiceIconCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.38)',
+  },
+  voiceIconText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  voiceWave: {
+    flex: 1,
+    minWidth: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  voiceWaveBar: {
+    width: 3,
+    height: 18,
+    borderRadius: 2,
+    backgroundColor: colors.textSecondary,
+    opacity: 0.72,
+  },
+  voiceWaveBarShort: {
+    height: 10,
+  },
+  voiceWaveBarTall: {
+    height: 24,
+  },
+  voiceDuration: {
+    flexShrink: 0,
+    fontSize: 13,
+    lineHeight: 17,
+    fontFamily: fonts.mono,
+  },
+  voiceTranscript: {
+    alignSelf: 'flex-end',
+    maxWidth: '100%',
+    marginTop: 5,
+    marginRight: 4,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textSecondary,
+    textAlign: 'right',
+  },
+  voiceTranscriptFailed: {
+    color: colors.danger,
+  },
   systemRow: {
     alignItems: 'center',
     paddingHorizontal: 16,
@@ -2534,6 +2704,8 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
 const createThinkingMarkdownStyles = (colors: ThemeColors) => StyleSheet.create({
   body: { width: '100%', fontSize: 14, color: colors.textSecondary, lineHeight: 21 },
   hr: createMarkdownDividerStyle(colors.textSecondary, true),
+  strong: { fontFamily: fonts.serifStrong, fontWeight: fontWeights.serifStrong, color: colors.textSecondary },
+  markdownStrongText: { fontStyle: 'normal' },
   ...createMarkdownListStyles(colors.textSecondary, 14, 21, true),
   ...createMarkdownTableStyles(colors, colors.textSecondary, {
     cellMinWidth: 112,
@@ -2588,6 +2760,7 @@ function createMarkdownTableStyles(
     markdownTableScrollContent: {
       flexGrow: 0,
       alignItems: 'flex-start' as const,
+      minWidth: '100%' as const,
       paddingVertical: 2,
       paddingRight: 2,
     },
@@ -2731,8 +2904,11 @@ const createUserMarkdownStyles = (
   hr: createMarkdownDividerStyle(textColor, true),
   strong: {
     fontFamily: fonts.serifStrong,
-    fontWeight: 'normal',
+    fontWeight: fontWeights.serifStrong,
     color: textColor,
+  },
+  markdownStrongText: {
+    fontStyle: 'normal',
   },
   em: {
     color: textColor,
@@ -2800,7 +2976,8 @@ const createMarkdownStyles = (
   heading1: { fontSize: 22, fontFamily: fonts.serifBold, fontWeight: 'normal', marginVertical: 8, color: textColor, ...strokeStyle },
   heading2: { fontSize: 18, fontFamily: fonts.serifBold, fontWeight: 'normal', marginVertical: 6, color: textColor, ...strokeStyle },
   heading3: { fontSize: 16, fontFamily: fonts.serifBold, fontWeight: 'normal', marginVertical: 4, color: textColor, ...strokeStyle },
-  strong: { fontFamily: fonts.serifStrong, fontWeight: 'normal', color: textColor, ...strokeStyle },
+  strong: { fontFamily: fonts.serifStrong, fontWeight: fontWeights.serifStrong, color: textColor, ...strokeStyle },
+  markdownStrongText: { fontStyle: 'normal' },
   blockquote: {
     borderLeftWidth: 3, borderLeftColor: colors.primary, paddingLeft: 12, marginVertical: 8, opacity: 0.8,
   },

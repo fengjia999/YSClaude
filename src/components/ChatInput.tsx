@@ -10,6 +10,7 @@ import {
   ScrollView,
   Dimensions,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
@@ -17,6 +18,14 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import {
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  setIsAudioActiveAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from 'expo-audio';
 import { randomUUID } from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
@@ -125,6 +134,7 @@ async function copyImageGenerationReference(asset: ImagePicker.ImagePickerAsset)
 
 interface Props {
   onSend: (text: string, imageUri?: string, imageGenerationReferenceUris?: string[]) => void | Promise<void>;
+  onSendVoice?: (recording: { uri: string; durationMs: number; mimeType?: string }) => void | Promise<void>;
   onTriggerResponse: () => void | Promise<void>;
   onEnableWebCruise?: () => void | Promise<void>;
   onAttachFile?: () => void | Promise<unknown>;
@@ -136,6 +146,7 @@ interface Props {
 
 export function ChatInput({
   onSend,
+  onSendVoice,
   onTriggerResponse,
   onEnableWebCruise,
   onAttachFile,
@@ -174,9 +185,16 @@ export function ChatInput({
   const [mcpTab, setMcpTab] = useState<McpPanelTab>('resources');
   const [mcpPromptArgs, setMcpPromptArgs] = useState<Record<string, string>>({});
   const [mcpBusyKey, setMcpBusyKey] = useState<string | null>(null);
+  const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const shouldInvertResponseIcon = isDarkTheme && (isStreaming || !isInputFocused);
   const responseTouchStartedRef = useRef(false);
   const sendInFlightRef = useRef(false);
+  const inputRef = useRef<TextInput>(null);
+  const voiceRecordingStartedAtRef = useRef(0);
+  const voiceLongPressActiveRef = useRef(false);
+  const suppressStickerPressAfterVoiceRef = useRef(false);
+  const voiceRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const voiceRecorderState = useAudioRecorderState(voiceRecorder, 150);
   const insets = useSafeAreaInsets();
   const conversationId = useChatStore((state) => state.conversationId);
   const {
@@ -559,6 +577,93 @@ export function ChatInput({
     }
   };
 
+  const canRecordVoice =
+    !!onSendVoice &&
+    !disabled &&
+    !isStreaming &&
+    text.trim().length === 0 &&
+    !pendingImage &&
+    pendingImageRefs.length === 0 &&
+    !sendInFlightRef.current;
+
+  const startVoiceRecording = async () => {
+    if (!canRecordVoice || isVoiceRecording) return;
+    try {
+      setStickerPickerVisible(false);
+      setOptionsMenuVisible(false);
+      const permission = await requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('无法录音', '请先允许麦克风权限');
+        return;
+      }
+      await setIsAudioActiveAsync(true);
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+      });
+      inputRef.current?.blur();
+      Keyboard.dismiss();
+      await voiceRecorder.prepareToRecordAsync({
+        ...RecordingPresets.HIGH_QUALITY,
+        directory: 'document',
+      });
+      voiceRecordingStartedAtRef.current = Date.now();
+      voiceLongPressActiveRef.current = true;
+      suppressStickerPressAfterVoiceRef.current = true;
+      setIsVoiceRecording(true);
+      voiceRecorder.record();
+    } catch (error: any) {
+      voiceLongPressActiveRef.current = false;
+      suppressStickerPressAfterVoiceRef.current = false;
+      setIsVoiceRecording(false);
+      Alert.alert('录音失败', error?.message || '无法开始录音');
+    }
+  };
+
+  const stopVoiceRecording = async () => {
+    if (!voiceLongPressActiveRef.current && !isVoiceRecording) return;
+    voiceLongPressActiveRef.current = false;
+    const startedAt = voiceRecordingStartedAtRef.current || Date.now();
+    try {
+      const statusBeforeStop = voiceRecorder.getStatus();
+      if (statusBeforeStop.isRecording) {
+        await voiceRecorder.stop();
+      }
+      const statusAfterStop = voiceRecorder.getStatus();
+      const uri = voiceRecorder.uri || statusAfterStop.url;
+      const durationMs = Math.max(
+        statusAfterStop.durationMillis || voiceRecorderState.durationMillis || 0,
+        Date.now() - startedAt
+      );
+      setIsVoiceRecording(false);
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => undefined);
+      if (!uri) {
+        Alert.alert('录音失败', '没有生成可用的语音文件');
+        return;
+      }
+      if (durationMs < 500) {
+        Alert.alert('录音太短', '请按住稍微说久一点');
+        return;
+      }
+      await onSendVoice?.({ uri, durationMs });
+    } catch (error: any) {
+      setIsVoiceRecording(false);
+      Alert.alert('发送语音失败', error?.message || '无法发送语音');
+    } finally {
+      setTimeout(() => {
+        suppressStickerPressAfterVoiceRef.current = false;
+      }, 600);
+    }
+  };
+
+  const handleStickerButtonPress = () => {
+    if (suppressStickerPressAfterVoiceRef.current || isVoiceRecording) {
+      suppressStickerPressAfterVoiceRef.current = false;
+      return;
+    }
+    setStickerPickerVisible(true);
+  };
+
   const handleChangeText = (next: string) => {
     if (
       next.length === text.length + 1 &&
@@ -672,6 +777,14 @@ export function ChatInput({
         {hasCustomInputSurface && (
           <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: inputOverlayBackground }]} />
         )}
+        {isVoiceRecording && (
+          <View style={styles.voiceRecordingBar}>
+            <Text style={styles.voiceRecordingText}>正在录音，松手发送</Text>
+            <Text style={styles.voiceRecordingTime}>
+              {Math.max(1, Math.ceil((voiceRecorderState.durationMillis || 0) / 1000))}s
+            </Text>
+          </View>
+        )}
         {pendingImage && !isCompactInput && (
           <View style={[styles.previewRow, cssStyle('.input-preview-row')]}>
             <View style={[styles.previewWrap, cssStyle('.input-preview')]}>
@@ -725,24 +838,37 @@ export function ChatInput({
                 </Pressable>
               </View>
             )}
-            <TextInput
-              style={[styles.input, styles.compactInput, customCssStyles.inputText, cssStyle('.input-text')]}
-              value={text}
-              onChangeText={handleChangeText}
-              onSubmitEditing={() => void handleSend(text)}
-              placeholder="Reply to Claude..."
-              placeholderTextColor={inputPlaceholderTextColor}
-              multiline={false}
-              submitBehavior="submit"
-              returnKeyType="send"
-              maxLength={10000}
-              scrollEnabled={false}
-              editable={!disabled}
-              onFocus={() => setIsInputFocused(true)}
-              onBlur={() => setIsInputFocused(false)}
-            />
+            <Pressable
+              style={styles.compactInputPressZone}
+              onPress={() => inputRef.current?.focus()}
+            >
+              <TextInput
+                ref={inputRef}
+                style={[styles.input, styles.compactInput, customCssStyles.inputText, cssStyle('.input-text')]}
+                value={text}
+                onChangeText={handleChangeText}
+                onSubmitEditing={() => void handleSend(text)}
+                placeholder="Reply to Claude..."
+                placeholderTextColor={inputPlaceholderTextColor}
+                multiline={false}
+                submitBehavior="submit"
+                returnKeyType="send"
+                maxLength={10000}
+                scrollEnabled={false}
+                editable={!disabled && !isVoiceRecording}
+                onFocus={() => setIsInputFocused(true)}
+                onBlur={() => setIsInputFocused(false)}
+              />
+            </Pressable>
             <View style={[styles.rightButtons, cssStyle('.input-actions')]}>
-              <Pressable style={[styles.stickerButton, cssStyle('.sticker-button')]} onPress={() => setStickerPickerVisible(true)}>
+              <Pressable
+                style={[styles.stickerButton, cssStyle('.sticker-button')]}
+                delayLongPress={320}
+                disabled={disabled || isStreaming}
+                onPress={handleStickerButtonPress}
+                onLongPress={() => void startVoiceRecording()}
+                onPressOut={() => void stopVoiceRecording()}
+              >
                 <Image
                   source={inputIconUris.sticker ? { uri: inputIconUris.sticker } : require('../../assets/sticker.png')}
                   style={styles.stickerButtonImage}
@@ -764,22 +890,28 @@ export function ChatInput({
           </View>
         ) : (
           <>
-            <TextInput
-              style={[styles.input, customCssStyles.inputText, cssStyle('.input-text')]}
-              value={text}
-              onChangeText={handleChangeText}
-              onSubmitEditing={() => void handleSend(text)}
-              placeholder="Reply to Claude..."
-              placeholderTextColor={inputPlaceholderTextColor}
-              multiline
-              submitBehavior="submit"
-              returnKeyType="send"
-              maxLength={10000}
-              scrollEnabled
-              editable={!disabled}
-              onFocus={() => setIsInputFocused(true)}
-              onBlur={() => setIsInputFocused(false)}
-            />
+            <Pressable
+              style={styles.inputPressZone}
+              onPress={() => inputRef.current?.focus()}
+            >
+              <TextInput
+                ref={inputRef}
+                style={[styles.input, customCssStyles.inputText, cssStyle('.input-text')]}
+                value={text}
+                onChangeText={handleChangeText}
+                onSubmitEditing={() => void handleSend(text)}
+                placeholder="Reply to Claude..."
+                placeholderTextColor={inputPlaceholderTextColor}
+                multiline
+                submitBehavior="submit"
+                returnKeyType="send"
+                maxLength={10000}
+                scrollEnabled
+                editable={!disabled && !isVoiceRecording}
+                onFocus={() => setIsInputFocused(true)}
+                onBlur={() => setIsInputFocused(false)}
+              />
+            </Pressable>
             <View style={[styles.toolbar, cssStyle('.input-toolbar')]}>
           <Pressable style={[styles.optionsButton, cssStyle('.options-button')]} onPress={() => setOptionsMenuVisible(true)}>
             <Image
@@ -794,7 +926,14 @@ export function ChatInput({
           </Pressable>
 
           <View style={[styles.rightButtons, cssStyle('.input-actions')]}>
-            <Pressable style={[styles.stickerButton, cssStyle('.sticker-button')]} onPress={() => setStickerPickerVisible(true)}>
+            <Pressable
+              style={[styles.stickerButton, cssStyle('.sticker-button')]}
+              delayLongPress={320}
+              disabled={disabled || isStreaming}
+              onPress={handleStickerButtonPress}
+              onLongPress={() => void startVoiceRecording()}
+              onPressOut={() => void stopVoiceRecording()}
+            >
               <Image
                 source={inputIconUris.sticker ? { uri: inputIconUris.sticker } : require('../../assets/sticker.png')}
                 style={styles.stickerButtonImage}
@@ -1331,6 +1470,9 @@ const createStyles = (
     minHeight: 28,
     paddingVertical: 0,
   },
+  inputPressZone: {
+    width: '100%',
+  },
   compactInput: {
     flex: 1,
     minWidth: 0,
@@ -1339,6 +1481,35 @@ const createStyles = (
     paddingHorizontal: 6,
     paddingVertical: 0,
     textAlignVertical: 'center',
+  },
+  compactInputPressZone: {
+    flex: 1,
+    minWidth: 0,
+  },
+  voiceRecordingBar: {
+    minHeight: 34,
+    marginBottom: 8,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: colors.primaryLight,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  voiceRecordingText: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  voiceRecordingTime: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: colors.primary,
+    fontFamily: fonts.mono,
   },
   toolbar: {
     flexDirection: 'row',

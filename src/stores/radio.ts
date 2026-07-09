@@ -8,7 +8,7 @@ import {
   type RadioProgram,
   type RadioScriptSegment,
 } from '../services/aiRadio';
-import { playTTSAndWait, stopTTS } from '../services/tts';
+import { isTTSConfigReady, playTTSAndWait, stopTTS } from '../services/tts';
 import {
   RADIO_CALL_IN_MARKER,
   RADIO_CONTINUE_MARKER,
@@ -203,7 +203,7 @@ export const useRadioStore = create<RadioState>((set, get) => ({
       return;
     }
 
-    if (!settings.ttsConfig.apiKey || !settings.ttsConfig.groupId || !settings.ttsConfig.voiceId) {
+    if (!isTTSConfigReady(settings.ttsConfig)) {
       set({ status: '请先在设置中配置 TTS，电台主持需要语音。' });
       return;
     }

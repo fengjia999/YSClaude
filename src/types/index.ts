@@ -11,9 +11,24 @@ export interface Message {
   // 真实图片仅用于客户端展示，不会自动作为 image_url 发回给 AI。
   generatedPics?: GeneratedPicture[];
   imageUri?: string;
+  voiceAttachment?: VoiceAttachment;
   // 生图参考图，仅用于后续 [Pic:...] 的 img2img/edit 调用。
   imageGenerationReferenceUris?: string[];
   createdAt: number;
+}
+
+export type VoiceTranscriptStatus = 'pending' | 'completed' | 'failed';
+
+export interface VoiceAttachment {
+  id: string;
+  uri: string;
+  durationMs: number;
+  mimeType?: string;
+  transcript?: string;
+  transcriptStatus: VoiceTranscriptStatus;
+  errorMessage?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 type GeneratedPictureStatus = 'pending' | 'done' | 'failed' | 'deleted';

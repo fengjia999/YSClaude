@@ -1,7 +1,7 @@
 ﻿import { create } from 'zustand';
-import { Message, Conversation, HiddenRange, ToolInvocation, GeneratedPicture, DailyPaper, ConversationArtifact } from '../types';
+import { Message, Conversation, HiddenRange, ToolInvocation, GeneratedPicture, DailyPaper, ConversationArtifact, VoiceAttachment } from '../types';
 import { randomUUID } from 'expo-crypto';
-import { File } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import { Alert } from 'react-native';
 import { ChatMessage, streamChat, streamChatCompletion } from '../services/api';
 import { deleteGeneratedImageFile, generateOpenAIImage } from '../services/imageGeneration';
@@ -62,6 +62,7 @@ import {
   updateMessageContent,
   updateMessageToolInvocations,
   updateMessageGeneratedPics,
+  updateMessageVoiceAttachment,
   deleteConversation,
   deleteMessage,
   getMessagesByConversation,
@@ -81,6 +82,7 @@ import {
   getAllPeriodRecords,
   getAllConversations,
 } from '../db/operations';
+import { extensionFromUri, mimeTypeFromUri, transcribeVoice } from '../services/voiceTranscription';
 
 const MESSAGE_PAGE_SIZE = 20;
 const FLOATING_STREAM_MAX_CHARS = 180;
@@ -451,6 +453,132 @@ async function deleteMessageGeneratedPictureFiles(message: Message | undefined):
   );
 }
 
+async function deleteMessageVoiceFile(message: Message | undefined): Promise<void> {
+  if (!message?.voiceAttachment?.uri) return;
+  try {
+    const file = new File(message.voiceAttachment.uri);
+    if (file.exists) {
+      file.delete();
+    }
+  } catch (error) {
+    console.warn('[Voice] 删除语音文件失败:', error);
+  }
+}
+
+function buildVoiceToken(voiceId: string): string {
+  return `[Voice:${voiceId}]`;
+}
+
+function formatVoiceMessageForAi(content: string, voice?: VoiceAttachment): string {
+  if (!voice) return content;
+  const lines = [content || buildVoiceToken(voice.id)];
+  if (voice.transcriptStatus === 'completed' && voice.transcript?.trim()) {
+    lines.push(`转写文字：${voice.transcript.trim()}`);
+  } else if (voice.transcriptStatus === 'failed') {
+    lines.push(`转写文字：[转写失败：${voice.errorMessage || '未知错误'}]`);
+  } else {
+    lines.push('转写文字：[正在转文字，尚未完成]');
+  }
+  return lines.join('\n');
+}
+
+async function persistVoiceRecording(recording: VoiceRecordingInput, voiceId: string): Promise<VoiceAttachment> {
+  const extension = extensionFromUri(recording.uri);
+  const dir = new Directory(Paths.document, 'voice-messages');
+  dir.create({ intermediates: true, idempotent: true });
+  const destination = new File(dir, `${voiceId}${extension}`);
+  await new File(recording.uri).copy(destination, { overwrite: true });
+  const now = Date.now();
+  return {
+    id: voiceId,
+    uri: destination.uri,
+    durationMs: Math.max(0, Math.round(recording.durationMs || 0)),
+    mimeType: recording.mimeType || mimeTypeFromUri(destination.uri),
+    transcriptStatus: 'pending',
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function transcribeMessageVoice(
+  get: () => ChatState,
+  set: (partial: Partial<ChatState> | ((s: ChatState) => Partial<ChatState>)) => void,
+  messageId: string
+): Promise<void> {
+  const message = get().messages.find((item) => item.id === messageId);
+  const voice = message?.voiceAttachment;
+  if (!message || !voice || voice.transcriptStatus !== 'pending') return;
+
+  const settings = useSettingsStore.getState();
+  const chatConfig = settings.apiConfigs[settings.activeConfigIndex];
+  const sttConfig = settings.sttConfig;
+  const provider = sttConfig.provider;
+  const baseUrl =
+    provider === 'fish'
+      ? sttConfig.fishBaseUrl
+      : sttConfig.openAiBaseUrl.trim() || chatConfig?.baseUrl || '';
+  const apiKey =
+    provider === 'fish'
+      ? sttConfig.fishApiKey
+      : sttConfig.openAiApiKey.trim() || chatConfig?.apiKey || '';
+
+  if (!baseUrl || !apiKey) {
+    const failed = {
+      ...voice,
+      transcriptStatus: 'failed' as const,
+      errorMessage: provider === 'fish' ? '请先在设置中配置 Fish Audio STT API Key' : '请先在设置中配置 STT 或主聊天 API',
+      updatedAt: Date.now(),
+    };
+    set((state) => ({
+      messages: state.messages.map((item) =>
+        item.id === messageId ? { ...item, voiceAttachment: failed } : item
+      ),
+    }));
+    await updateMessageVoiceAttachment(messageId, failed);
+    return;
+  }
+
+  try {
+    const transcript = await transcribeVoice({
+      provider,
+      baseUrl,
+      apiKey,
+      uri: voice.uri,
+      mimeType: voice.mimeType,
+      fileName: `${voice.id}${extensionFromUri(voice.uri)}`,
+      model: sttConfig.openAiModel || 'whisper-1',
+      language: sttConfig.fishLanguage,
+      ignoreTimestamps: sttConfig.fishIgnoreTimestamps,
+    });
+    const completed = {
+      ...voice,
+      transcript,
+      transcriptStatus: 'completed' as const,
+      errorMessage: undefined,
+      updatedAt: Date.now(),
+    };
+    set((state) => ({
+      messages: state.messages.map((item) =>
+        item.id === messageId ? { ...item, voiceAttachment: completed } : item
+      ),
+    }));
+    await updateMessageVoiceAttachment(messageId, completed);
+  } catch (error: any) {
+    const failed = {
+      ...voice,
+      transcriptStatus: 'failed' as const,
+      errorMessage: error?.message || '语音转文字失败',
+      updatedAt: Date.now(),
+    };
+    set((state) => ({
+      messages: state.messages.map((item) =>
+        item.id === messageId ? { ...item, voiceAttachment: failed } : item
+      ),
+    }));
+    await updateMessageVoiceAttachment(messageId, failed);
+  }
+}
+
 interface ChatState {
   conversationId: string | null;
   messages: Message[];
@@ -470,6 +598,7 @@ interface ChatState {
 
   sendMessage: (content: string, imageUri?: string, imageGenerationReferenceUris?: string[]) => Promise<void>;
   addUserMessage: (content: string, imageUri?: string, imageGenerationReferenceUris?: string[]) => Promise<Message | null>;
+  addVoiceMessage: (recording: VoiceRecordingInput) => Promise<Message | null>;
   attachConversationFile: () => Promise<ConversationArtifact | null>;
   addSharedLinkToLatestConversation: (url: string) => Promise<string>;
   addDailyPaperToLatestConversation: (paper: DailyPaper) => Promise<string>;
@@ -501,6 +630,12 @@ interface ChatState {
   removeHiddenRange: (index: number) => Promise<void>;
   setHiddenRanges: (ranges: HiddenRange[]) => Promise<void>;
   setMessageHidden: (id: string, hidden: boolean) => Promise<void>;
+}
+
+interface VoiceRecordingInput {
+  uri: string;
+  durationMs: number;
+  mimeType?: string;
 }
 
 let abortController: AbortController | null = null;
@@ -1383,7 +1518,7 @@ async function buildPromptCacheKeepaliveRequest(
     }
     const prev = index > 0 ? filtered[index - 1] : null;
     const needMarker = !prev || m.createdAt - prev.createdAt >= TIME_GAP_THRESHOLD_MS;
-    let msgContent = formatDailyPaperCardForAi(m.content);
+    let msgContent = formatVoiceMessageForAi(formatDailyPaperCardForAi(m.content), m.voiceAttachment);
     if (settings.stripThinking) {
       msgContent = msgContent.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
     }
@@ -1740,7 +1875,7 @@ async function streamAssistantResponse(
     }
     const prev = index > 0 ? filtered[index - 1] : null;
     const needMarker = !prev || m.createdAt - prev.createdAt >= TIME_GAP_THRESHOLD_MS;
-    let msgContent = formatDailyPaperCardForAi(m.content);
+    let msgContent = formatVoiceMessageForAi(formatDailyPaperCardForAi(m.content), m.voiceAttachment);
     if (settings.stripThinking) {
       msgContent = msgContent.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
     }
@@ -1978,6 +2113,7 @@ async function streamAssistantResponse(
 
     for (const message of messagesToDelete) {
       await deleteMessageGeneratedPictureFiles(message);
+      await deleteMessageVoiceFile(message);
       await deleteMessage(message.id);
     }
 
@@ -2222,6 +2358,77 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     await insertMessage(conversationId, userMessage);
     await updateConversation(conversationId, { updatedAt: Date.now() });
+    return userMessage;
+  },
+
+  addVoiceMessage: async (recording: VoiceRecordingInput) => {
+    const { isStreaming } = get();
+    if (isStreaming) return null;
+
+    let { conversationId } = get();
+    const settings = useSettingsStore.getState();
+    if (!settings._hydrated) return null;
+    const config = settings.apiConfigs[settings.activeConfigIndex];
+
+    if (!config || !config.baseUrl || !config.apiKey) {
+      set({ error: '请先在设置中配置 API' });
+      return null;
+    }
+
+    const voiceId = `voice_${randomUUID()}`;
+    const voiceAttachment = await persistVoiceRecording(recording, voiceId);
+    const content = buildVoiceToken(voiceId);
+
+    if (!conversationId) {
+      conversationId = randomUUID();
+      const now = Date.now();
+      const conv: Conversation = {
+        id: conversationId,
+        title: '[语音]',
+        systemPrompt: settings.systemPrompt,
+        model: config.model,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await createConversation(conv);
+      set({
+        conversationId,
+        hasOlderMessages: false,
+        hasNewerMessages: false,
+        isLoadingNewerMessages: false,
+        messageFloorOffset: 0,
+      });
+    }
+
+    if ((await getPendingResponseBoundaryMessageId(conversationId)) === undefined) {
+      const inMemoryBoundaryMessage = [...get().messages]
+        .reverse()
+        .find((message) => message.role === 'user' || message.role === 'assistant');
+      const boundaryMessage = inMemoryBoundaryMessage ?? [...await getMessagesByConversation(conversationId)]
+        .reverse()
+        .find((message) => message.role === 'user' || message.role === 'assistant');
+      await setPendingResponseBoundaryMessageId(conversationId, boundaryMessage?.id ?? null);
+    }
+
+    const userMessage: Message = {
+      id: randomUUID(),
+      role: 'user',
+      content,
+      voiceAttachment,
+      createdAt: Date.now(),
+    };
+
+    set((state) => ({
+      messages: [...state.messages, userMessage],
+      error: null,
+      openToBottomRequestId: state.openToBottomRequestId + 1,
+    }));
+
+    await insertMessage(conversationId, userMessage);
+    await updateConversation(conversationId, { updatedAt: Date.now() });
+    transcribeMessageVoice(get, set, userMessage.id).catch((error) => {
+      console.warn('[Voice] 语音转文字任务失败:', error);
+    });
     return userMessage;
   },
 
@@ -2588,6 +2795,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const messagesToRemove = currentMessages.filter((message) => !beforeMessageIds.has(message.id));
     for (const message of messagesToRemove) {
       await deleteMessageGeneratedPictureFiles(message);
+      await deleteMessageVoiceFile(message);
       await deleteMessage(message.id);
     }
 
@@ -2804,6 +3012,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     const targetMessage = messages.find((m) => m.id === id);
     await deleteMessageGeneratedPictureFiles(targetMessage);
+    await deleteMessageVoiceFile(targetMessage);
     await deleteMessage(id);
     if (conversationId && deletedFloor !== null) {
       await updateHiddenRanges(conversationId, nextHiddenRanges);
@@ -2930,6 +3139,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const lastAssistant = messages[messages.length - 1];
     if (lastAssistant && lastAssistant.role === 'assistant') {
       await deleteMessageGeneratedPictureFiles(lastAssistant);
+      await deleteMessageVoiceFile(lastAssistant);
       await deleteMessage(lastAssistant.id);
       set((state) => ({
         messages: state.messages.filter((m) => m.id !== lastAssistant.id),

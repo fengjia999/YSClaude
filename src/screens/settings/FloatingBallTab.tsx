@@ -12,6 +12,7 @@ import {
   showFloatingBall,
   syncFloatingBallAssets,
 } from '../../services/floatingBall';
+import { getTTSConfigMissingMessage, isTTSConfigReady } from '../../services/tts';
 import { copyFileFromUri } from '../../utils/fileSystem';
 import { ClampedNumberInput } from './ClampedNumberInput';
 import { createSettingsStyles } from './styles';
@@ -206,9 +207,9 @@ export function FloatingBallTab({ showToast, keyboardBottomInset }: FloatingBall
   }
 
   function handleTTSToggle(value: boolean) {
-    if (value && (!ttsConfig.groupId.trim() || !ttsConfig.apiKey.trim() || !ttsConfig.voiceId.trim())) {
+    if (value && !isTTSConfigReady(ttsConfig)) {
       setFloatingBallConfig({ ttsEnabled: false });
-      Alert.alert('需要 TTS 配置', '请先在 TTS 配置中填写 Group ID、API Key 和 Voice ID。');
+      Alert.alert('需要 TTS 配置', getTTSConfigMissingMessage(ttsConfig));
       return;
     }
     setFloatingBallConfig({ ttsEnabled: value });

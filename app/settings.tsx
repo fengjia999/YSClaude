@@ -19,7 +19,7 @@ import { useKeyboardHeight } from '../src/hooks/useKeyboardHeight';
 
 
 let colors = settingsPageColors;
-const TABS = ['API 配置', '对话设置', 'TTS 配置', '工具设置', '日记', '来信', '悬浮球', '表情包', '欢迎页', '美化'] as const;
+const TABS = ['API 配置', '对话设置', '语音配置', '工具设置', '日记', '来信', '悬浮球', '表情包', '欢迎页', '美化'] as const;
 
 
 export default function SettingsScreen() {

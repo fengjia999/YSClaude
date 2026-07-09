@@ -20,6 +20,8 @@ import { openHtmlArtifact } from '../services/webviewController';
 const COLLAPSED_LINE_COUNT = 14;
 const LONG_CODE_LINE_COUNT = 18;
 const LONG_CODE_LENGTH = 1200;
+const CODE_FONT_SIZE = 13;
+const CODE_HORIZONTAL_PADDING = 24;
 
 function trimTrailingFenceNewline(content: string): string {
   return content.endsWith('\n') ? content.slice(0, -1) : content;
@@ -47,6 +49,20 @@ function withAlpha(hex: string, alpha: number): string {
 function lineCountOf(content: string): number {
   if (!content) return 0;
   return content.split(/\r\n|\r|\n/).length;
+}
+
+function estimateCodeLineWidth(line: string): number {
+  let width = 0;
+  for (const char of line) {
+    width += /[^\u0000-\u00ff]/.test(char) ? CODE_FONT_SIZE : CODE_FONT_SIZE * 0.62;
+  }
+  return Math.ceil(width);
+}
+
+function estimateCodeContentWidth(content: string): number {
+  const lines = content.split(/\r\n|\r|\n/);
+  const longestLineWidth = lines.reduce((max, line) => Math.max(max, estimateCodeLineWidth(line)), 0);
+  return Math.max(1, longestLineWidth + CODE_HORIZONTAL_PADDING);
 }
 
 function buildPreviewHtml(rawHtml: string): string {
@@ -129,6 +145,7 @@ export function MarkdownCodeBlock({
   const htmlBlock = isHtmlLanguage(language);
   const lineCount = lineCountOf(code);
   const longCode = lineCount > LONG_CODE_LINE_COUNT || code.length > LONG_CODE_LENGTH;
+  const estimatedContentWidth = useMemo(() => estimateCodeContentWidth(code), [code]);
   const previewHtml = useMemo(() => buildPreviewHtml(code), [code]);
   const modalFrameStyle = [
     styles.previewFrame,
@@ -172,7 +189,7 @@ export function MarkdownCodeBlock({
   };
 
   return (
-    <View style={[styles.container, containerStyle]}>
+    <View style={[styles.container, containerStyle]} onTouchStart={(event) => event.stopPropagation()}>
       <View style={styles.header}>
         <Text style={styles.language} numberOfLines={1}>
           {languageLabel}
@@ -211,18 +228,22 @@ export function MarkdownCodeBlock({
           horizontal
           nestedScrollEnabled
           showsHorizontalScrollIndicator
+          persistentScrollbar
           directionalLockEnabled
           disallowInterruption
           keyboardShouldPersistTaps="handled"
           scrollEventThrottle={16}
           style={styles.codeScroll}
-          contentContainerStyle={styles.codeScrollContent}
+          contentContainerStyle={[
+            styles.codeScrollContent,
+            { minWidth: estimatedContentWidth },
+          ]}
           onTouchStart={(event) => event.stopPropagation()}
         >
           <Text
-            selectable
+            selectable={false}
             numberOfLines={!expanded && longCode ? COLLAPSED_LINE_COUNT : undefined}
-            style={[inheritedTextStyle, styles.codeText, codeStyle]}
+            style={[inheritedTextStyle, styles.codeText, codeStyle, { minWidth: Math.max(1, estimatedContentWidth - CODE_HORIZONTAL_PADDING) }]}
           >
             {code}
           </Text>
@@ -335,17 +356,19 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   codeScroll: {
     alignSelf: 'stretch',
+    width: '100%',
     maxWidth: '100%',
   },
   codeScrollContent: {
-    minWidth: '100%',
-    paddingHorizontal: 12,
+    flexGrow: 0,
+    alignItems: 'flex-start',
+    paddingHorizontal: CODE_HORIZONTAL_PADDING / 2,
     paddingVertical: 12,
   },
   codeText: {
     flexShrink: 0,
     color: colors.codeText,
-    fontSize: 13,
+    fontSize: CODE_FONT_SIZE,
     lineHeight: 19,
     fontFamily: fonts.mono,
   },

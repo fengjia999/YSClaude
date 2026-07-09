@@ -32,6 +32,7 @@ import {
   ConversationArtifact,
   ConversationArtifactKind,
   ConversationArtifactVersion,
+  VoiceAttachment,
 } from '../types';
 import {
   ANDROID_ACCESSIBILITY_CAPTURE_NOTICE_PREFIX,
@@ -57,6 +58,7 @@ interface MessageRow {
   tool_call_id: string | null;
   tool_invocations: string | null;
   generated_pics: string | null;
+  voice_attachment: string | null;
   image_uri: string | null;
   image_generation_reference_uris: string | null;
   created_at: number;
@@ -382,8 +384,8 @@ export async function clearPendingResponseBoundaryMessageId(
 export async function insertMessage(conversationId: string, msg: Message): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    `INSERT OR REPLACE INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_invocations, generated_pics, image_uri, image_generation_reference_uris, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_invocations, generated_pics, voice_attachment, image_uri, image_generation_reference_uris, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       msg.id,
       conversationId,
@@ -393,6 +395,7 @@ export async function insertMessage(conversationId: string, msg: Message): Promi
       msg.toolCallId || null,
       msg.toolInvocations && msg.toolInvocations.length > 0 ? JSON.stringify(msg.toolInvocations) : null,
       msg.generatedPics && msg.generatedPics.length > 0 ? JSON.stringify(msg.generatedPics) : null,
+      msg.voiceAttachment ? JSON.stringify(msg.voiceAttachment) : null,
       msg.imageUri || null,
       msg.imageGenerationReferenceUris && msg.imageGenerationReferenceUris.length > 0
         ? JSON.stringify(msg.imageGenerationReferenceUris)
@@ -442,6 +445,17 @@ export async function updateMessageGeneratedPics(
   const db = await getDatabase();
   await db.runAsync('UPDATE messages SET generated_pics = ? WHERE id = ?', [
     generatedPics && generatedPics.length > 0 ? JSON.stringify(generatedPics) : null,
+    id,
+  ]);
+}
+
+export async function updateMessageVoiceAttachment(
+  id: string,
+  voiceAttachment: VoiceAttachment | undefined
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE messages SET voice_attachment = ? WHERE id = ?', [
+    voiceAttachment ? JSON.stringify(voiceAttachment) : null,
     id,
   ]);
 }
@@ -934,6 +948,16 @@ function parseJsonArray<T>(raw: string | null | undefined): T[] | undefined {
   }
 }
 
+function parseJsonObject<T>(raw: string | null | undefined): T | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as T : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeIncomingLetterStatus(value: string): IncomingLetterStatus {
   if (value === 'ready' || value === 'failed') return value;
   return 'generating';
@@ -966,6 +990,7 @@ function mapMessageRow(row: MessageRow): Message {
     toolCallId: row.tool_call_id || undefined,
     toolInvocations: parseJsonArray<ToolInvocation>(row.tool_invocations),
     generatedPics: parseJsonArray<GeneratedPicture>(row.generated_pics),
+    voiceAttachment: parseJsonObject<VoiceAttachment>(row.voice_attachment),
     imageUri: row.image_uri || undefined,
     imageGenerationReferenceUris: parseStringArray(row.image_generation_reference_uris),
     createdAt: row.created_at,
