@@ -74,7 +74,7 @@ function createMarkdownDividerStyle(textColor: string, compact = false) {
 function withoutFontWeight(style?: TextStyle): TextStyle | undefined {
   const flatStyle = StyleSheet.flatten(style);
   if (!flatStyle) return undefined;
-  const { fontWeight: _fontWeight, ...rest } = flatStyle;
+  const { fontFamily: _fontFamily, fontWeight: _fontWeight, ...rest } = flatStyle;
   return rest;
 }
 
@@ -190,6 +190,24 @@ function createMarkdownRules(options?: { messageId?: string }) {
   }
 
   return {
+    text: (node: any, _children: React.ReactNode, parent: any[] = [], styles: any, inheritedStyles: any = {}) => {
+      const inStrong = parent.some((parentNode) => parentNode?.type === 'strong');
+      const inEm = parent.some((parentNode) => parentNode?.type === 'em');
+
+      return (
+        <Text
+          key={node.key}
+          style={[
+            inheritedStyles,
+            styles.text,
+            inStrong && styles.strong,
+            inStrong && !inEm && styles.markdownStrongText,
+          ]}
+        >
+          {node.content}
+        </Text>
+      );
+    },
     strong: (node: any, children: React.ReactNode, parent: any[] = [], styles: any) => {
       const shouldKeepItalic = parent.some((parentNode) => parentNode?.type === 'em');
 
@@ -915,6 +933,10 @@ export const ChatBubble = React.memo(function ChatBubble({
   const handleVoicePress = useCallback(() => {
     const voice = message.voiceAttachment;
     if (!voice) return;
+    if (!voice.uri) {
+      Alert.alert('语音已清理', '这条语音文件已超过 7 天保留期，仅保留转写文字。');
+      return;
+    }
     if (playingVoiceId === voice.id) {
       stopVoicePlayback();
       return;
@@ -2362,6 +2384,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.text,
     lineHeight: 22,
     fontFamily: fonts.serifBold,
+    fontWeight: fontWeights.serifBold,
   },
   voiceBubble: {
     minWidth: 164,
@@ -2702,7 +2725,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
 });
 
 const createThinkingMarkdownStyles = (colors: ThemeColors) => StyleSheet.create({
-  body: { width: '100%', fontSize: 14, color: colors.textSecondary, lineHeight: 21 },
+  body: { width: '100%', fontSize: 14, color: colors.textSecondary, lineHeight: 21, fontFamily: fonts.serifBold, fontWeight: fontWeights.serifBold },
   hr: createMarkdownDividerStyle(colors.textSecondary, true),
   strong: { fontFamily: fonts.serifStrong, fontWeight: fontWeights.serifStrong, color: colors.textSecondary },
   markdownStrongText: { fontStyle: 'normal' },
@@ -2715,10 +2738,10 @@ const createThinkingMarkdownStyles = (colors: ThemeColors) => StyleSheet.create(
   }),
   code_inline: {
     backgroundColor: colors.surface, color: colors.primary,
-    paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, fontSize: 13, fontFamily: 'monospace',
+    paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, fontSize: 13, fontFamily: fonts.mono,
   },
   fence: { backgroundColor: colors.codeBlock, borderRadius: 10, padding: 12, marginVertical: 8 },
-  code_block: { color: colors.codeText, fontSize: 12, fontFamily: 'monospace' },
+  code_block: { color: colors.codeText, fontSize: 12, fontFamily: fonts.mono },
   link: { color: colors.primary },
 });
 
@@ -2894,7 +2917,7 @@ const createUserMarkdownStyles = (
     color: textColor,
     lineHeight: Math.round(fontSize * 1.38),
     fontFamily: fonts.serifBold,
-    fontWeight: 'normal',
+    fontWeight: fontWeights.serifBold,
     ...customTextStyleWithoutFontWeight,
   },
   paragraph: {
@@ -2920,7 +2943,7 @@ const createUserMarkdownStyles = (
     paddingVertical: 2,
     borderRadius: 4,
     fontSize: Math.max(12, fontSize - 1),
-    fontFamily: 'monospace',
+    fontFamily: fonts.mono,
   },
   ...createMarkdownListStyles(textColor, fontSize, Math.round(fontSize * 1.38), true),
   ...createMarkdownTableStyles(colors, textColor, {
@@ -2961,7 +2984,7 @@ const createMarkdownStyles = (
     color: textColor,
     lineHeight,
     fontFamily: fonts.serifBold,
-    fontWeight: 'normal',
+    fontWeight: fontWeights.serifBold,
     ...strokeStyle,
     ...customTextStyleWithoutFontWeight,
   },
@@ -2969,13 +2992,13 @@ const createMarkdownStyles = (
   hr: createMarkdownDividerStyle(textColor, compactBubble),
   code_inline: {
     backgroundColor: colors.surface, color: colors.primary,
-    paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, fontSize: 14, fontFamily: 'monospace',
+    paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, fontSize: 14, fontFamily: fonts.mono,
   },
   fence: { backgroundColor: colors.codeBlock, borderRadius: 10, padding: 14, marginVertical: 10 },
-  code_block: { color: colors.codeText, fontSize: 13, fontFamily: 'monospace' },
-  heading1: { fontSize: 22, fontFamily: fonts.serifBold, fontWeight: 'normal', marginVertical: 8, color: textColor, ...strokeStyle },
-  heading2: { fontSize: 18, fontFamily: fonts.serifBold, fontWeight: 'normal', marginVertical: 6, color: textColor, ...strokeStyle },
-  heading3: { fontSize: 16, fontFamily: fonts.serifBold, fontWeight: 'normal', marginVertical: 4, color: textColor, ...strokeStyle },
+  code_block: { color: colors.codeText, fontSize: 13, fontFamily: fonts.mono },
+  heading1: { fontSize: 22, fontFamily: fonts.serifBold, fontWeight: fontWeights.serifBold, marginVertical: 8, color: textColor, ...strokeStyle },
+  heading2: { fontSize: 18, fontFamily: fonts.serifBold, fontWeight: fontWeights.serifBold, marginVertical: 6, color: textColor, ...strokeStyle },
+  heading3: { fontSize: 16, fontFamily: fonts.serifBold, fontWeight: fontWeights.serifBold, marginVertical: 4, color: textColor, ...strokeStyle },
   strong: { fontFamily: fonts.serifStrong, fontWeight: fontWeights.serifStrong, color: textColor, ...strokeStyle },
   markdownStrongText: { fontStyle: 'normal' },
   blockquote: {

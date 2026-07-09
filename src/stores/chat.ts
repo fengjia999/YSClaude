@@ -5,6 +5,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { Alert } from 'react-native';
 import { ChatMessage, streamChat, streamChatCompletion } from '../services/api';
 import { deleteGeneratedImageFile, generateOpenAIImage } from '../services/imageGeneration';
+import { deleteMessageVoiceFile } from '../services/voiceFiles';
 import { notifyReplyReady } from '../services/notifications';
 import {
   ackPromptCacheRemoteActivity,
@@ -451,18 +452,6 @@ async function deleteMessageGeneratedPictureFiles(message: Message | undefined):
       .filter((imageUri): imageUri is string => !!imageUri)
       .map((imageUri) => deleteGeneratedImageFile(imageUri))
   );
-}
-
-async function deleteMessageVoiceFile(message: Message | undefined): Promise<void> {
-  if (!message?.voiceAttachment?.uri) return;
-  try {
-    const file = new File(message.voiceAttachment.uri);
-    if (file.exists) {
-      file.delete();
-    }
-  } catch (error) {
-    console.warn('[Voice] 删除语音文件失败:', error);
-  }
 }
 
 function buildVoiceToken(voiceId: string): string {

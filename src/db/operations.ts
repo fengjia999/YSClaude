@@ -94,6 +94,13 @@ export interface GeneratedPictureGalleryItem {
   referenceImageUris?: string[];
 }
 
+export interface VoiceAttachmentMessageRecord {
+  conversationId: string;
+  messageId: string;
+  voiceAttachment: VoiceAttachment;
+  createdAt: number;
+}
+
 interface IncomingLetterRow {
   id: string;
   occasion_id: string;
@@ -458,6 +465,34 @@ export async function updateMessageVoiceAttachment(
     voiceAttachment ? JSON.stringify(voiceAttachment) : null,
     id,
   ]);
+}
+
+export async function getVoiceAttachmentMessages(): Promise<VoiceAttachmentMessageRecord[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{
+    id: string;
+    conversation_id: string;
+    voice_attachment: string | null;
+    created_at: number;
+  }>(
+    `SELECT id, conversation_id, voice_attachment, created_at
+       FROM messages
+      WHERE voice_attachment IS NOT NULL
+      ORDER BY created_at ASC`
+  );
+
+  return rows
+    .map((row) => {
+      const voiceAttachment = parseJsonObject<VoiceAttachment>(row.voice_attachment);
+      if (!voiceAttachment) return null;
+      return {
+        conversationId: row.conversation_id,
+        messageId: row.id,
+        voiceAttachment,
+        createdAt: row.created_at,
+      };
+    })
+    .filter((item): item is VoiceAttachmentMessageRecord => !!item);
 }
 
 export async function insertIncomingLetter(letter: IncomingLetter): Promise<void> {

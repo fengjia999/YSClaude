@@ -5,7 +5,7 @@ import Markdown from '@ronradtke/react-native-markdown-display';
 import { Edit3, Maximize2, Minus, RotateCw, Save, X } from 'lucide-react-native';
 import { lightColors, useThemeColors, type ThemeColors } from '../theme/colors';
 
-import { fonts } from '../theme/fonts';
+import { fonts, fontWeights } from '../theme/fonts';
 import { useSettingsStore } from '../stores/settings';
 import { useChatStore } from '../stores/chat';
 import { readConversationArtifact, replaceConversationArtifactContent } from '../services/conversationArtifacts';
@@ -537,6 +537,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.text,
     lineHeight: 22,
     fontFamily: fonts.serifBold,
+    fontWeight: fontWeights.serifBold,
   },
   sticker: {
     width: STICKER_RENDER_SIZE,
@@ -591,6 +592,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     color: '#111827',
     textAlign: 'center',
     fontFamily: fonts.serifBold,
+    fontWeight: fontWeights.serifBold,
   },
   pictureStatusText: {
     fontSize: 12,

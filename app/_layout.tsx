@@ -24,6 +24,7 @@ import { startDesktopLyricSync, stopDesktopLyricSync } from '../src/services/des
 import { startFocusAppStateListener } from '../src/services/focusAppState';
 import { startPromptCacheRemoteSnapshotFlushListener } from '../src/services/promptCacheKeepalive';
 import { useChatStore } from '../src/stores/chat';
+import { cleanupExpiredVoiceFiles } from '../src/services/voiceFiles';
 
 
 SplashScreen.preventAutoHideAsync();
@@ -103,6 +104,7 @@ export default function RootLayout() {
 
     const syncRemoteInbox = () => {
       useChatStore.getState().syncPromptCacheRemoteInbox().catch(() => undefined);
+      cleanupExpiredVoiceFiles().catch(() => undefined);
     };
     syncRemoteInbox();
     const sub = AppState.addEventListener('change', (nextState) => {

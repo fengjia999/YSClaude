@@ -243,7 +243,12 @@ export function MarkdownCodeBlock({
           <Text
             selectable={false}
             numberOfLines={!expanded && longCode ? COLLAPSED_LINE_COUNT : undefined}
-            style={[inheritedTextStyle, styles.codeText, codeStyle, { minWidth: Math.max(1, estimatedContentWidth - CODE_HORIZONTAL_PADDING) }]}
+            style={[
+              inheritedTextStyle,
+              codeStyle,
+              styles.codeText,
+              { minWidth: Math.max(1, estimatedContentWidth - CODE_HORIZONTAL_PADDING) },
+            ]}
           >
             {code}
           </Text>

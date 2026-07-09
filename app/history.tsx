@@ -19,6 +19,7 @@ import {
 } from '../src/db/operations';
 import { useChatStore } from '../src/stores/chat';
 import { deleteGeneratedImageFile } from '../src/services/imageGeneration';
+import { deleteConversationVoiceFiles } from '../src/services/voiceFiles';
 
 
 let colors = lightColors;
@@ -232,7 +233,11 @@ export default function HistoryScreen() {
         text: '删除',
         style: 'destructive',
         onPress: async () => {
+          await deleteConversationVoiceFiles(conv.id);
           await deleteConversation(conv.id);
+          if (conv.id === conversationId) {
+            newConversation();
+          }
           loadList();
           loadGallery();
         },
