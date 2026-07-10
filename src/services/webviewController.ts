@@ -39,6 +39,13 @@ export interface WebViewScreenshot {
   capturedAt: number;
 }
 
+export interface WebViewEvalJsResult {
+  title: string;
+  url: string;
+  result: unknown;
+  resultType: string;
+}
+
 export interface WebViewOpenOptions {
   userAgent?: 'mobile' | 'desktop';
 }
@@ -79,6 +86,7 @@ export interface WebViewHostActions {
   clickElement: (index: number) => Promise<WebViewTapResult>;
   clickSelector: (selector: string) => Promise<WebViewTapResult>;
   wait: (ms: number) => Promise<WebViewObservation>;
+  evalJs: (script: string) => Promise<WebViewEvalJsResult>;
   screenshot: () => Promise<WebViewScreenshot>;
   getHtmlArtifactSource: () => Promise<{ html: string; info: HtmlArtifactInfo }>;
   replaceHtmlArtifactSource: (html: string) => Promise<WebViewObservation>;
@@ -141,6 +149,10 @@ export async function clickWebViewSelector(selector: string): Promise<WebViewTap
 
 export async function waitWebView(ms: number): Promise<WebViewObservation> {
   return getHostActions().wait(ms);
+}
+
+export async function evalWebViewJs(script: string): Promise<WebViewEvalJsResult> {
+  return getHostActions().evalJs(script);
 }
 
 export async function screenshotWebView(): Promise<WebViewScreenshot> {

@@ -28,6 +28,7 @@ import {
   WebViewOpenOptions,
   WebViewScreenshot,
   WebViewTapResult,
+  WebViewEvalJsResult,
 } from '../services/webviewController';
 import { useChatStore } from '../stores/chat';
 import { replaceConversationArtifactContent } from '../services/conversationArtifacts';
@@ -1079,6 +1080,86 @@ export function WebViewPanel() {
     [observe]
   );
 
+  const evalJs = useCallback(
+    async (script: string): Promise<WebViewEvalJsResult> => {
+      if (!script.trim()) {
+        throw new Error('缺少 JavaScript 代码');
+      }
+      setStatus('执行网页脚本');
+      const scriptJson = JSON.stringify(script);
+      return await runScriptRequest<WebViewEvalJsResult>(`
+        (function () {
+          var id = __REQUEST_ID__;
+          var source = ${scriptJson};
+          function describeType(value) {
+            if (value === null) return 'null';
+            if (Array.isArray(value)) return 'array';
+            return typeof value;
+          }
+          function cloneForBridge(value) {
+            var seen = [];
+            try {
+              return JSON.parse(JSON.stringify(value, function (key, item) {
+                if (typeof item === 'bigint') return item.toString();
+                if (typeof item === 'function') return '[Function]';
+                if (item instanceof Error) {
+                  return {
+                    name: item.name,
+                    message: item.message,
+                    stack: item.stack
+                  };
+                }
+                if (item && typeof item === 'object') {
+                  if (seen.indexOf(item) >= 0) return '[Circular]';
+                  seen.push(item);
+                }
+                return item;
+              }));
+            } catch (error) {
+              try {
+                return String(value);
+              } catch (stringError) {
+                return '[Unserializable]';
+              }
+            }
+          }
+          Promise.resolve()
+            .then(function () {
+              var AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+              try {
+                return AsyncFunction('return (\\n' + source + '\\n);').call(window);
+              } catch (expressionError) {
+                return AsyncFunction(source).call(window);
+              }
+            })
+            .then(function (result) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                source: 'ysclaude-webview',
+                id: id,
+                ok: true,
+                data: {
+                  title: document.title || '',
+                  url: ${sourceModeRef.current === 'html-artifact' ? JSON.stringify(HTML_ARTIFACT_URL) : 'location.href'},
+                  result: cloneForBridge(result),
+                  resultType: describeType(result)
+                }
+              }));
+            })
+            .catch(function (error) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                source: 'ysclaude-webview',
+                id: id,
+                ok: false,
+                error: (error && (error.stack || error.message)) || String(error)
+              }));
+            });
+        })();
+        true;
+      `);
+    },
+    [runScriptRequest]
+  );
+
   const screenshot = useCallback(async (): Promise<WebViewScreenshot> => {
     if (!visible || !urlRef.current) {
       throw new Error('尚未打开网页');
@@ -1363,6 +1444,7 @@ export function WebViewPanel() {
       clickElement,
       clickSelector,
       wait,
+      evalJs,
       screenshot,
       getHtmlArtifactSource,
       replaceHtmlArtifactSource,
@@ -1372,6 +1454,7 @@ export function WebViewPanel() {
   }, [
     clickElement,
     clickSelector,
+    evalJs,
     getHtmlArtifactSource,
     isOpen,
     observe,

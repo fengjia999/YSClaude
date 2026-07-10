@@ -3,6 +3,7 @@ import { readConversationArtifact } from '../conversationArtifacts';
 import {
   clickWebViewElement,
   clickWebViewSelector,
+  evalWebViewJs,
   getHtmlArtifactSource,
   patchHtmlArtifactElement,
   observeWebView,
@@ -22,7 +23,7 @@ const WEBVIEW_OPEN_TOOL: ToolDefinition = {
   function: {
     name: 'webview_open',
     description:
-      '在用户端打开一个可见网页面板，并返回打开后的页面观察结果。用于查看网页或进行简单前端小游戏交互。可根据对话需要自主打开 http/https 网页；如果页面已经打开，优先继续观察而不是重复打开。',
+      '在用户端打开一个可见 WebView 网页面板，并返回打开后的页面观察结果。',
     parameters: {
       type: 'object',
       properties: {
@@ -42,96 +43,20 @@ const WEBVIEW_OPEN_TOOL: ToolDefinition = {
   },
 };
 
-const WEBVIEW_OBSERVE_TOOL: ToolDefinition = {
+const WEBVIEW_EVAL_JS_TOOL: ToolDefinition = {
   type: 'function',
   function: {
-    name: 'webview_observe',
-    description:
-      '观察当前用户端网页面板，返回页面标题、URL、可见文本、视口尺寸和可交互元素坐标。每次点击或等待后可再次调用。',
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  },
-};
-
-const WEBVIEW_TAP_TOOL: ToolDefinition = {
-  type: 'function',
-  function: {
-    name: 'webview_tap',
-    description:
-      '在当前用户端网页面板中点击指定坐标。坐标来自 webview_observe 返回的视口坐标，单位为网页 CSS 像素。',
+    name: 'webview_eval_js',
+    description: '在当前 WebView 网页中执行 JavaScript，并返回执行结果。',
     parameters: {
       type: 'object',
       properties: {
-        x: {
-          type: 'number',
-          description: '点击位置的 x 坐标',
-        },
-        y: {
-          type: 'number',
-          description: '点击位置的 y 坐标',
-        },
-      },
-      required: ['x', 'y'],
-    },
-  },
-};
-
-const WEBVIEW_CLICK_ELEMENT_TOOL: ToolDefinition = {
-  type: 'function',
-  function: {
-    name: 'webview_click_element',
-    description:
-      '点击 webview_observe 返回的可交互元素编号。普通按钮、链接、输入控件优先使用此工具，比坐标点击更稳定。',
-    parameters: {
-      type: 'object',
-      properties: {
-        index: {
-          type: 'number',
-          description: 'webview_observe 返回的元素 index',
-        },
-      },
-      required: ['index'],
-    },
-  },
-};
-
-const WEBVIEW_CLICK_SELECTOR_TOOL: ToolDefinition = {
-  type: 'function',
-  function: {
-    name: 'webview_click_selector',
-    description:
-      '通过 CSS selector 查找元素并点击。仅在 webview_click_element 不适用或你明确知道 selector 时使用。',
-    parameters: {
-      type: 'object',
-      properties: {
-        selector: {
+        script: {
           type: 'string',
-          description: 'CSS selector，例如 #start 或 button:nth-of-type(1)',
+          description: '要执行的 JavaScript 代码',
         },
       },
-      required: ['selector'],
-    },
-  },
-};
-
-const WEBVIEW_WAIT_TOOL: ToolDefinition = {
-  type: 'function',
-  function: {
-    name: 'webview_wait',
-    description:
-      '等待网页发生加载、动画或游戏状态变化，然后返回新的网页观察结果。',
-    parameters: {
-      type: 'object',
-      properties: {
-        ms: {
-          type: 'number',
-          description: '等待毫秒数，范围 200 到 10000',
-        },
-      },
-      required: ['ms'],
+      required: ['script'],
     },
   },
 };
@@ -141,7 +66,7 @@ const WEBVIEW_SCREENSHOT_TOOL: ToolDefinition = {
   function: {
     name: 'webview_screenshot',
     description:
-      '截取当前用户端 WebView 可见区域，并把截图作为图片返回给 AI 查看。仅在 webview_observe 的文本和元素坐标不足以判断时调用，例如页面主要是图片、canvas、图表、复杂布局、验证码/弹窗位置、小游戏画面或视觉状态变化。',
+      '截取当前用户端 WebView 可见区域，并把截图作为图片返回给 AI 查看。',
     parameters: {
       type: 'object',
       properties: {},
@@ -339,11 +264,7 @@ const HTML_ARTIFACT_SAVE_TOOL: ToolDefinition = {
 
 const WEBVIEW_TOOLS = [
   WEBVIEW_OPEN_TOOL,
-  WEBVIEW_OBSERVE_TOOL,
-  WEBVIEW_CLICK_ELEMENT_TOOL,
-  WEBVIEW_CLICK_SELECTOR_TOOL,
-  WEBVIEW_TAP_TOOL,
-  WEBVIEW_WAIT_TOOL,
+  WEBVIEW_EVAL_JS_TOOL,
   WEBVIEW_SCREENSHOT_TOOL,
 ];
 
@@ -365,11 +286,7 @@ export const webViewTool: ToolModule = {
   id: 'web-view',
   labels: {
     webview_open: '打开网页',
-    webview_observe: '观察网页',
-    webview_tap: '点击网页',
-    webview_click_element: '点击元素',
-    webview_click_selector: '点击选择器',
-    webview_wait: '等待网页',
+    webview_eval_js: '执行网页 JS',
     webview_screenshot: '网页截图',
     html_artifact_get_source: '读取 HTML',
     html_artifact_open: '打开 HTML',
@@ -396,16 +313,8 @@ export const webViewTool: ToolModule = {
           context.webInteractionConfig,
           !!context.webCruiseEnabled
         );
-      case 'webview_observe':
-        return await executeWebViewObserve(context.webInteractionConfig);
-      case 'webview_tap':
-        return await executeWebViewTap(args.x, args.y, context.webInteractionConfig);
-      case 'webview_click_element':
-        return await executeWebViewClickElement(args.index, context.webInteractionConfig);
-      case 'webview_click_selector':
-        return await executeWebViewClickSelector(args.selector, context.webInteractionConfig);
-      case 'webview_wait':
-        return await executeWebViewWait(args.ms, context.webInteractionConfig);
+      case 'webview_eval_js':
+        return await executeWebViewEvalJs(args.script, context.webInteractionConfig);
       case 'webview_screenshot':
         return await executeWebViewScreenshot(context.webInteractionConfig);
       case 'html_artifact_get_source':
@@ -455,63 +364,29 @@ async function executeWebViewOpen(
     '',
     formatWebViewObservation(observation),
     '',
-    '如果用户要求继续操作，请根据可交互元素坐标继续调用 webview_tap 或 webview_wait，不要把打开网页本身当作任务完成。',
+    '如果用户要求继续操作，请继续调用 webview_eval_js 操作或读取页面。',
   ].join('\n');
 }
 
-async function executeWebViewObserve(config: WebInteractionConfig): Promise<string> {
-  ensureWebInteractionEnabled(config);
-  const observation = await observeWebView();
-  return formatWebViewObservation(observation);
-}
-
-async function executeWebViewTap(
-  rawX: unknown,
-  rawY: unknown,
+async function executeWebViewEvalJs(
+  rawScript: unknown,
   config: WebInteractionConfig
 ): Promise<string> {
   ensureWebInteractionEnabled(config);
-  const x = normalizeCoordinate(rawX, 'x');
-  const y = normalizeCoordinate(rawY, 'y');
-  const result = await tapWebView(x, y);
-  return [
-    `已点击网页坐标 (${Math.round(result.x)}, ${Math.round(result.y)})`,
-    `目标: ${result.target || '未知元素'}`,
-    result.text ? `文本: ${result.text}` : '',
-    '请调用 webview_observe 或 webview_wait 查看页面变化。',
-  ].filter(Boolean).join('\n');
-}
-
-async function executeWebViewClickElement(
-  rawIndex: unknown,
-  config: WebInteractionConfig
-): Promise<string> {
-  ensureWebInteractionEnabled(config);
-  const index = normalizeElementIndex(rawIndex);
-  const result = await clickWebViewElement(index);
-  return formatWebViewClickResult(result, `已点击网页元素 ${index}`);
-}
-
-async function executeWebViewClickSelector(
-  rawSelector: unknown,
-  config: WebInteractionConfig
-): Promise<string> {
-  ensureWebInteractionEnabled(config);
-  if (typeof rawSelector !== 'string' || !rawSelector.trim()) {
-    throw new Error('缺少有效的 CSS selector');
+  if (typeof rawScript !== 'string' || !rawScript.trim()) {
+    throw new Error('缺少有效的 JavaScript 代码');
   }
-  const result = await clickWebViewSelector(rawSelector.trim());
-  return formatWebViewClickResult(result, `已点击选择器 ${rawSelector.trim()}`);
-}
-
-async function executeWebViewWait(
-  rawMs: unknown,
-  config: WebInteractionConfig
-): Promise<string> {
-  ensureWebInteractionEnabled(config);
-  const ms = normalizeWaitMs(rawMs);
-  const observation = await waitWebView(ms);
-  return formatWebViewObservation(observation);
+  const result = await evalWebViewJs(rawScript);
+  const lines = [
+    '已执行 WebView JavaScript。',
+    `网页标题: ${result.title || '无标题'}`,
+    `URL: ${result.url}`,
+    `结果类型: ${result.resultType}`,
+    '',
+    '执行结果:',
+    formatEvalJsResult(result.result),
+  ];
+  return lines.join('\n');
 }
 
 async function executeWebViewScreenshot(config: WebInteractionConfig): Promise<ToolExecutionResult> {
@@ -522,7 +397,6 @@ async function executeWebViewScreenshot(config: WebInteractionConfig): Promise<T
     `网页标题: ${screenshot.title || '无标题'}`,
     `URL: ${screenshot.url}`,
     `截图区域: ${screenshot.viewport.width} x ${screenshot.viewport.height}`,
-    '请结合截图中的视觉信息与 webview_observe 的 DOM 文本继续判断；如果需要操作页面，优先使用已有元素 index/selector，必要时再用坐标点击。',
   ].join('\n');
 
   return {
@@ -761,6 +635,20 @@ function isPlainObject(value: unknown): value is Record<string, any> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function formatEvalJsResult(result: unknown): string {
+  if (typeof result === 'string') {
+    return truncateText(result, 8000);
+  }
+  if (result === undefined) {
+    return 'undefined';
+  }
+  try {
+    return truncateText(JSON.stringify(result, null, 2), 8000);
+  } catch {
+    return truncateText(String(result), 8000);
+  }
+}
+
 function formatWebViewClickResult(result: Awaited<ReturnType<typeof clickWebViewElement>>, title: string): string {
   return [
     title,
@@ -768,7 +656,7 @@ function formatWebViewClickResult(result: Awaited<ReturnType<typeof clickWebView
     `目标: ${result.target || '未知元素'}`,
     result.selector ? `Selector: ${result.selector}` : '',
     result.text ? `文本: ${result.text}` : '',
-    '请调用 webview_observe 或 webview_wait 查看页面变化。',
+    '请继续观察或等待页面变化。',
   ].filter(Boolean).join('\n');
 }
 
@@ -794,6 +682,6 @@ export function formatWebViewObservation(observation: Awaited<ReturnType<typeof 
     }
   }
 
-  lines.push('\n如需点击普通 DOM 元素，请优先调用 webview_click_element；只有 canvas 或没有合适元素时再使用 webview_tap。');
+  lines.push('\n如需继续操作页面，请调用对应的 WebView 或 HTML 工具。');
   return lines.join('\n');
 }
