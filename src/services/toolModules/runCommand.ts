@@ -10,6 +10,9 @@ const MAX_COMMAND_CHARS = 8000;
 const MAX_FILE_PATH_CHARS = 2000;
 const MAX_FILE_CONTENT_CHARS = 500000;
 const FILE_WRITE_BASE64_CHUNK_CHARS = 6000;
+// 必须是 3 的倍数：保证每个分块单独 base64 编码时中间分块不产生 '=' 填充，可以安全拼接。
+const FILE_READ_RAW_CHUNK_BYTES = 96000;
+const FILE_READ_CHUNK_MAX_OUTPUT_CHARS = 200000;
 
 const RemoteSshCommand = NativeModules.RemoteSshCommand as
   | {
@@ -252,11 +255,42 @@ async function executeSshReadFile(args: Record<string, any>, config: RunCommandC
 }
 
 async function executeSshWriteFile(args: Record<string, any>, config: RunCommandConfig): Promise<string> {
-  ensureSshConfig(config);
   const path = normalizeRemotePath(args?.path);
   const content = normalizeFileContent(args?.content);
   const mode = String(args?.mode || 'overwrite') === 'append' ? 'append' : 'overwrite';
-  const timeoutMs = normalizeTimeoutMs(args?.timeout_ms, config.timeoutMs);
+  const maxOutputChars = normalizeMaxOutputChars(config.maxOutputChars);
+
+  const result = await sshUploadTextFileResult(config, path, content, mode, args?.timeout_ms);
+  if (!result.ok) return result.message;
+
+  const lines = [
+    'SSH 文件写入结果：',
+    `path: ${redactRemotePath(path)}`,
+    `mode: ${mode}`,
+    `content_chars: ${String(result.contentChars)}`,
+    `base64_chars: ${String(result.base64Chars)}`,
+    `chunks: ${String(result.chunks)}`,
+    'remote: configured_ssh_server',
+    'status: ok',
+  ];
+  return truncateOutput(lines.join('\n'), maxOutputChars);
+}
+
+export type SshTransferResult<T> = ({ ok: true } & T) | { ok: false; message: string };
+
+/**
+ * 把文本内容分块 base64 上传写入远程文件。供 ssh_write_file 和文件互传工具复用。
+ */
+export async function sshUploadTextFileResult(
+  config: RunCommandConfig,
+  rawPath: string,
+  content: string,
+  mode: 'overwrite' | 'append',
+  timeoutMsArg?: unknown
+): Promise<SshTransferResult<{ contentChars: number; base64Chars: number; chunks: number }>> {
+  ensureSshConfig(config);
+  const path = normalizeRemotePath(rawPath);
+  const timeoutMs = normalizeTimeoutMs(timeoutMsArg, config.timeoutMs);
   const maxOutputChars = normalizeMaxOutputChars(config.maxOutputChars);
   const base64 = encodeUtf8Base64(content);
 
@@ -269,7 +303,10 @@ async function executeSshWriteFile(args: Record<string, any>, config: RunCommand
   ].join('\n');
   const initResult = await runSshCommandRaw(initScript, config, timeoutMs, 4000);
   if ((initResult?.exit_code ?? initResult?.exitCode ?? 1) !== 0) {
-    return formatSshResponse(`SSH 文件写入准备失败：${redactRemotePath(path)}`, initResult, maxOutputChars);
+    return {
+      ok: false,
+      message: formatSshResponse(`SSH 文件写入准备失败：${redactRemotePath(path)}`, initResult, maxOutputChars),
+    };
   }
 
   const tmpPath = normalizeOutput(initResult?.stdout ?? initResult?.output)
@@ -289,7 +326,10 @@ async function executeSshWriteFile(args: Record<string, any>, config: RunCommand
       const appendResult = await runSshCommandRaw(appendScript, config, timeoutMs, 4000);
       if ((appendResult?.exit_code ?? appendResult?.exitCode ?? 1) !== 0) {
         await runSshCommandRaw(`rm -f -- ${shellQuote(tmpPath)}`, config, 5000, 1000).catch(() => undefined);
-        return formatSshResponse(`SSH 文件写入失败：${redactRemotePath(path)}`, appendResult, maxOutputChars);
+        return {
+          ok: false,
+          message: formatSshResponse(`SSH 文件写入失败：${redactRemotePath(path)}`, appendResult, maxOutputChars),
+        };
       }
       writtenBase64Chars += chunk.length;
     }
@@ -300,24 +340,89 @@ async function executeSshWriteFile(args: Record<string, any>, config: RunCommand
     const finalizeResult = await runSshCommandRaw(finalizeScript, config, timeoutMs, maxOutputChars);
     if ((finalizeResult?.exit_code ?? finalizeResult?.exitCode ?? 1) !== 0) {
       await runSshCommandRaw(`rm -f -- ${shellQuote(tmpPath)}`, config, 5000, 1000).catch(() => undefined);
-      return formatSshResponse(`SSH 文件写入完成步骤失败：${redactRemotePath(path)}`, finalizeResult, maxOutputChars);
+      return {
+        ok: false,
+        message: formatSshResponse(`SSH 文件写入完成步骤失败：${redactRemotePath(path)}`, finalizeResult, maxOutputChars),
+      };
     }
 
-    const lines = [
-      'SSH 文件写入结果：',
-      `path: ${redactRemotePath(path)}`,
-      `mode: ${mode}`,
-      `content_chars: ${String(content.length)}`,
-      `base64_chars: ${String(writtenBase64Chars)}`,
-      `chunks: ${String(Math.ceil(base64.length / FILE_WRITE_BASE64_CHUNK_CHARS))}`,
-      'remote: configured_ssh_server',
-      'status: ok',
-    ];
-    return truncateOutput(lines.join('\n'), maxOutputChars);
+    return {
+      ok: true,
+      contentChars: content.length,
+      base64Chars: writtenBase64Chars,
+      chunks: Math.ceil(base64.length / FILE_WRITE_BASE64_CHUNK_CHARS),
+    };
   } catch (error) {
     await runSshCommandRaw(`rm -f -- ${shellQuote(tmpPath)}`, config, 5000, 1000).catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * 从远程服务器分块 base64 拉取文本文件内容。供文件互传工具使用。
+ * maxBytes 用于在传输前拒绝过大的文件。
+ */
+export async function sshDownloadTextFileResult(
+  config: RunCommandConfig,
+  rawPath: string,
+  maxBytes: number,
+  timeoutMsArg?: unknown
+): Promise<SshTransferResult<{ content: string; sizeBytes: number }>> {
+  ensureSshConfig(config);
+  const path = normalizeRemotePath(rawPath);
+  const timeoutMs = normalizeTimeoutMs(timeoutMsArg, config.timeoutMs);
+  const maxOutputChars = normalizeMaxOutputChars(config.maxOutputChars);
+
+  const sizeResult = await runSshCommandRaw(
+    `wc -c < ${shellQuote(path)}`,
+    config,
+    timeoutMs,
+    4000
+  );
+  if ((sizeResult?.exit_code ?? sizeResult?.exitCode ?? 1) !== 0) {
+    return {
+      ok: false,
+      message: formatSshResponse(`读取远程文件大小失败：${redactRemotePath(path)}`, sizeResult, maxOutputChars),
+    };
+  }
+  const sizeBytes = Number.parseInt(normalizeOutput(sizeResult?.stdout ?? sizeResult?.output).trim(), 10);
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) {
+    return { ok: false, message: `无法解析远程文件大小：${redactRemotePath(path)}` };
+  }
+  if (sizeBytes > maxBytes) {
+    return {
+      ok: false,
+      message: `远程文件过大：${sizeBytes} 字节，超过 ${maxBytes} 字节上限，无法拉取到对话文件。`,
+    };
+  }
+  if (sizeBytes === 0) {
+    return { ok: true, content: '', sizeBytes: 0 };
+  }
+
+  let base64 = '';
+  for (let offset = 0; offset < sizeBytes; offset += FILE_READ_RAW_CHUNK_BYTES) {
+    const chunkScript =
+      `tail -c +${offset + 1} ${shellQuote(path)} | head -c ${FILE_READ_RAW_CHUNK_BYTES} | base64 | tr -d '\\n'`;
+    const chunkResult = await runSshCommandRaw(chunkScript, config, timeoutMs, FILE_READ_CHUNK_MAX_OUTPUT_CHARS);
+    if ((chunkResult?.exit_code ?? chunkResult?.exitCode ?? 1) !== 0) {
+      return {
+        ok: false,
+        message: formatSshResponse(`SSH 文件读取失败：${redactRemotePath(path)}`, chunkResult, maxOutputChars),
+      };
+    }
+    base64 += normalizeOutput(chunkResult?.stdout ?? chunkResult?.output).replace(/\s+/g, '');
+  }
+
+  let content: string;
+  try {
+    content = decodeUtf8Base64(base64);
+  } catch {
+    return { ok: false, message: `远程文件内容解码失败，可能不是文本文件：${redactRemotePath(path)}` };
+  }
+  if (content.includes('\0')) {
+    return { ok: false, message: `远程文件包含二进制内容，暂不支持拉取到对话文件：${redactRemotePath(path)}` };
+  }
+  return { ok: true, content, sizeBytes };
 }
 
 async function executeSshClose(args: Record<string, any>, config: RunCommandConfig): Promise<string> {
@@ -444,6 +549,18 @@ function encodeUtf8Base64(value: string): string {
     binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
   }
   return btoa(binary);
+}
+
+function decodeUtf8Base64(value: string): string {
+  if (typeof atob !== 'function') {
+    throw new Error('当前运行环境不支持 base64 解码');
+  }
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
 function redactRemotePath(path: string): string {
