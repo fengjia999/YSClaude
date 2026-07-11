@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import {
   clickAccessibilityNode,
   commitInputMethodText,
@@ -384,6 +385,8 @@ export const nativeDeviceTool: ToolModule = {
     ime_delete_android_text: 'IME 删除文本',
   },
   getDefinitions: (config) => {
+    if (Platform.OS !== 'android') return [];
+
     const tools: ToolDefinition[] = [];
     if (config.nativeTools?.deviceInfoEnabled) {
       tools.push(DEVICE_INFO_TOOL);

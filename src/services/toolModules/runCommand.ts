@@ -160,7 +160,7 @@ export const runCommandTool: ToolModule = {
     run_command: '远程命令',
   },
   getDefinitions: (config) =>
-    config.runCommand?.enabled
+    Platform.OS === 'android' && config.runCommand?.enabled
       ? [
           SSH_CONNECT_TOOL_BASE,
           SSH_STATUS_TOOL_BASE,

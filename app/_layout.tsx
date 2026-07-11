@@ -2,7 +2,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
-import { AppState, StyleSheet } from 'react-native';
+import { AppState, Platform, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useThemeColors } from '../src/theme/colors';
 
@@ -49,6 +49,7 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
+    if (Platform.OS !== 'android') return;
     if (!settingsHydrated) return;
 
     if (floatingBallEnabled) {
@@ -66,6 +67,7 @@ export default function RootLayout() {
   ]);
 
   useEffect(() => {
+    if (Platform.OS !== 'android') return;
     const sub = addFloatingBallToolActionListener((action) => {
       handleFloatingBallToolAction(action).catch(() => undefined);
     });
@@ -73,11 +75,13 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
+    if (Platform.OS !== 'android') return;
     startDesktopLyricSync();
     return () => stopDesktopLyricSync();
   }, []);
 
   useEffect(() => {
+    if (Platform.OS === 'web') return;
     // 设置通知 handler 和 Android 通知渠道
     initNotifications();
     // 开始追踪前后台状态

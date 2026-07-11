@@ -98,8 +98,12 @@ export type DesktopLyricAction =
 
 const nativeModule = NativeModules.FloatingBall as FloatingBallModule | undefined;
 
+function isAndroidRuntime(): boolean {
+  return Platform.OS === 'android';
+}
+
 function ensureFloatingBall(): FloatingBallModule {
-  if (Platform.OS !== 'android') {
+  if (!isAndroidRuntime()) {
     throw new Error('悬浮球仅支持 Android');
   }
   if (!nativeModule) {
@@ -109,25 +113,30 @@ function ensureFloatingBall(): FloatingBallModule {
 }
 
 export async function canDrawFloatingBall(): Promise<boolean> {
+  if (!isAndroidRuntime()) return false;
   return ensureFloatingBall().canDrawOverlays();
 }
 
 export async function openFloatingBallPermissionSettings(): Promise<void> {
+  if (!isAndroidRuntime()) return;
   await ensureFloatingBall().openOverlaySettings();
 }
 
 export async function showFloatingBall(): Promise<void> {
+  if (!isAndroidRuntime()) return;
   const floatingBall = ensureFloatingBall();
   await configureFloatingBallAssets(floatingBall);
   await floatingBall.show();
 }
 
 export async function hideFloatingBall(): Promise<void> {
+  if (!isAndroidRuntime()) return;
   await ensureFloatingBall().hide();
   stopTTS().catch(() => {});
 }
 
 export async function isFloatingBallShowing(): Promise<boolean> {
+  if (!isAndroidRuntime()) return false;
   return ensureFloatingBall().isShowing();
 }
 
@@ -135,6 +144,7 @@ export async function showFloatingBallMessage(
   text: string,
   options: FloatingBallMessageOptions = {}
 ): Promise<void> {
+  if (!isAndroidRuntime()) return;
   if (shouldShowFloatingBallMessage(options)) {
     await ensureFloatingBall().showMessage(text);
   }
@@ -148,6 +158,7 @@ export async function enqueueFloatingBallMessageSequence(
   intervalMs: number,
   reset = false
 ): Promise<void> {
+  if (!isAndroidRuntime()) return;
   if (!shouldShowFloatingBallMessage()) {
     if (reset && messages.length === 0) {
       const floatingBall = ensureFloatingBall();
@@ -168,6 +179,7 @@ export async function enqueueFloatingBallMessageSequence(
 }
 
 export async function hideFloatingBallMessage(): Promise<void> {
+  if (!isAndroidRuntime()) return;
   await ensureFloatingBall().hideMessage();
   stopTTS().catch(() => {});
 }
@@ -191,6 +203,7 @@ export async function showDesktopLyric(
   currentTimeMs = 0,
   durationMs = 0
 ): Promise<void> {
+  if (!isAndroidRuntime()) return;
   const floatingBall = ensureFloatingBall();
   const showTimeline = floatingBall.showDesktopLyricTimeline;
   if (showTimeline) {
@@ -249,26 +262,31 @@ export async function showDesktopLyric(
 }
 
 export async function hideDesktopLyric(): Promise<void> {
+  if (!isAndroidRuntime()) return;
   await ensureFloatingBall().hideDesktopLyric();
 }
 
 export async function openYSClaudeFromFloatingBall(): Promise<void> {
+  if (!isAndroidRuntime()) return;
   await ensureFloatingBall().openApp();
 }
 
 export async function syncFloatingBallAssets(): Promise<void> {
+  if (!isAndroidRuntime()) return;
   await configureFloatingBallAssets(ensureFloatingBall());
 }
 
 export function addFloatingBallToolActionListener(
   listener: (action: FloatingBallToolAction) => void
 ): { remove: () => void } {
+  if (!isAndroidRuntime()) return { remove: () => undefined };
   return DeviceEventEmitter.addListener('FloatingBallToolAction', listener);
 }
 
 export function addDesktopLyricActionListener(
   listener: (action: DesktopLyricAction) => void
 ): { remove: () => void } {
+  if (!isAndroidRuntime()) return { remove: () => undefined };
   return DeviceEventEmitter.addListener('DesktopLyricAction', listener);
 }
 

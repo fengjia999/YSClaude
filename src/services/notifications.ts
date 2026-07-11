@@ -33,6 +33,7 @@ let initialized = false;
  * 幂等。设置通知 handler 并创建 Android 通知渠道。多次调用只生效一次。
  */
 export async function initNotifications(): Promise<void> {
+  if (Platform.OS === 'web') return;
   if (initialized) return;
   initialized = true;
 
@@ -63,6 +64,7 @@ export async function initNotifications(): Promise<void> {
 let permissionGranted: boolean | null = null; // null = 尚未询问
 
 export async function ensurePermission(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
   if (permissionGranted !== null) return permissionGranted;
 
   try {
@@ -106,6 +108,7 @@ export async function notifyReplyReady(
   options: NotifyReplyReadyOptions = {}
 ): Promise<void> {
   try {
+    if (Platform.OS === 'web') return;
     if (!isAppBackgrounded()) return; // 用户正在看应用
     if (await shouldSkipNotificationForFloatingBall()) return;
     if (!(await ensurePermission())) return; // 无权限

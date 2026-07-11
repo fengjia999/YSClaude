@@ -54,6 +54,7 @@ type DesktopLyricNativeState = {
 };
 
 export function startDesktopLyricSync(): () => void {
+  if (Platform.OS !== 'android') return () => undefined;
   if (storeUnsubscribe) return stopDesktopLyricSync;
 
   actionSubscription = addDesktopLyricActionListener(handleDesktopLyricAction);
@@ -82,7 +83,9 @@ export function stopDesktopLyricSync(): void {
   inFlightSignature = '';
   lastPlaybackAnchor = null;
   clearQueuedDesktopLyricUpdate();
-  hideDesktopLyric().catch(() => undefined);
+  if (Platform.OS === 'android') {
+    hideDesktopLyric().catch(() => undefined);
+  }
 }
 
 export function refreshDesktopLyric(): void {
