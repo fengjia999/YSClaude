@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { Platform } from 'react-native';
 import { StateStorage } from 'zustand/middleware';
 
 export const KV_DATABASE_NAME = 'ysclaude_kv.db';
@@ -49,6 +50,9 @@ export async function closeKVDatabaseConnection(): Promise<string | null> {
 
 export const sqliteStorage: StateStorage = {
   getItem: async (name: string): Promise<string | null> => {
+    if (Platform.OS === 'web') {
+      return globalThis.localStorage?.getItem(name) ?? null;
+    }
     const db = await getKVDb();
     const row = await db.getFirstAsync<{ value: string }>(
       'SELECT value FROM kv WHERE key = ?',
@@ -57,6 +61,10 @@ export const sqliteStorage: StateStorage = {
     return row?.value ?? null;
   },
   setItem: async (name: string, value: string): Promise<void> => {
+    if (Platform.OS === 'web') {
+      globalThis.localStorage?.setItem(name, value);
+      return;
+    }
     const db = await getKVDb();
     await db.runAsync(
       'INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)',
@@ -64,6 +72,10 @@ export const sqliteStorage: StateStorage = {
     );
   },
   removeItem: async (name: string): Promise<void> => {
+    if (Platform.OS === 'web') {
+      globalThis.localStorage?.removeItem(name);
+      return;
+    }
     const db = await getKVDb();
     await db.runAsync('DELETE FROM kv WHERE key = ?', [name]);
   },
