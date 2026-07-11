@@ -1,7 +1,7 @@
 ﻿import { create } from 'zustand';
 import { Message, Conversation, HiddenRange, ToolInvocation, GeneratedPicture, DailyPaper, ConversationArtifact, VoiceAttachment } from '../types';
 import { randomUUID } from 'expo-crypto';
-import { Directory, File, Paths } from 'expo-file-system';
+import { Directory, File, Paths } from '../utils/FileSystemCompat';
 import { Alert } from 'react-native';
 import { ChatMessage, streamChat, streamChatCompletion } from '../services/api';
 import { deleteGeneratedImageFile, generateOpenAIImage } from '../services/imageGeneration';
